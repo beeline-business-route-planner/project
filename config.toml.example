@@ -1,0 +1,12 @@
+[database]
+postgres_username = "app"
+postgres_password = "change-me"
+postgres_db = "app"
+postgres_host = "localhost"
+postgres_port = 5432
+
+[logging]
+level = "INFO"
+
+[cors]
+origins = ["http://localhost:3000"]

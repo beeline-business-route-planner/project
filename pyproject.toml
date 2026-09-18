@@ -1,0 +1,43 @@
+[project]
+name = "__PROJECT_PACKAGE__"
+version = "0.1.0"
+description = "__PROJECT_TITLE__ backend service"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "alembic>=1.18.5",
+    "asyncpg>=0.31.0",
+    "dishka>=1.10.1",
+    "fastapi>=0.139.0",
+    "prometheus-client>=0.25.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.2",
+    "sqlalchemy>=2.0.51",
+    "uvicorn>=0.51.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.2.0",
+    "ruff>=0.15.21",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src"]
+include = ["src/**/*.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "C4", "UP", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.14"
+files = ["src"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
