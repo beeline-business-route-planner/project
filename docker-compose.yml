@@ -1,4 +1,4 @@
-name: __PROJECT_SLUG__
+name: project
 
 services:
   postgres:
@@ -21,7 +21,7 @@ services:
 
   migrate:
     build: .
-    image: __PROJECT_SLUG___backend:latest
+    image: project_backend:latest
     container_name: migrate
     restart: "no"
     entrypoint: ["python", "-m", "alembic", "upgrade", "head"]
@@ -37,7 +37,7 @@ services:
 
   backend:
     build: .
-    image: __PROJECT_SLUG___backend:latest
+    image: project_backend:latest
     container_name: backend
     restart: unless-stopped
     depends_on:

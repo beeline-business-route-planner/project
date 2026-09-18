@@ -1,4 +1,4 @@
-# __PROJECT_TITLE__
+# Project
 
 Готовый шаблон backend-приложения на FastAPI: DI на dishka, SQLAlchemy + Alembic,
 структурные логи, метрики Prometheus и полный docker-compose стек с мониторингом
@@ -71,4 +71,4 @@ alembic/          миграции
 Это GitHub template repository — можно создать новый репозиторий кнопкой
 **Use this template** вместо `git clone`. При первом пуше в новом репозитории
 автоматически отработает workflow, который подставит имя проекта вместо плейсхолдеров
-(`__PROJECT_TITLE__`, `__PROJECT_PACKAGE__`, `__PROJECT_SLUG__`) и удалит сам себя.
+(`Project`, `project`, `project`) и удалит сам себя.
