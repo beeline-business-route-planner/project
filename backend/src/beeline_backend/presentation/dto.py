@@ -22,6 +22,14 @@ class PlanningRequest(BaseModel):
     base_plan_id: UUID | None = None
     as_of: datetime | None = None
 
+    @model_validator(mode="after")
+    def aware_as_of(self) -> PlanningRequest:
+        if self.as_of is not None and (
+            self.as_of.tzinfo is None or self.as_of.utcoffset() is None
+        ):
+            raise ValueError("as_of must contain a timezone offset")
+        return self
+
 
 class ApprovalRequest(BaseModel):
     expected_base_plan_id: UUID | None = None
@@ -38,6 +46,10 @@ class FactRequest(BaseModel):
 
     @model_validator(mode="after")
     def valid_actual_times(self) -> FactRequest:
+        for field_name in ("effective_at", "actual_start", "actual_finish"):
+            value = getattr(self, field_name)
+            if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+                raise ValueError(f"{field_name} must contain a timezone offset")
         if self.actual_start and self.actual_finish and self.actual_finish < self.actual_start:
             raise ValueError("actual_finish cannot precede actual_start")
         return self
@@ -51,6 +63,12 @@ class DayEventRequest(BaseModel):
     payload: dict[str, object] = Field(default_factory=dict)
     idempotency_key: str = Field(min_length=1, max_length=255)
     actor: str = Field(min_length=1, max_length=160)
+
+    @model_validator(mode="after")
+    def aware_effective_at(self) -> DayEventRequest:
+        if self.effective_at.tzinfo is None or self.effective_at.utcoffset() is None:
+            raise ValueError("effective_at must contain a timezone offset")
+        return self
 
 
 class NewRequest(BaseModel):
@@ -70,6 +88,11 @@ class NewRequest(BaseModel):
 
     @model_validator(mode="after")
     def valid_window(self) -> NewRequest:
+        if any(
+            value.tzinfo is None or value.utcoffset() is None
+            for value in (self.window_start, self.window_end)
+        ):
+            raise ValueError("window timestamps must contain a timezone offset")
         if self.window_end <= self.window_start:
             raise ValueError("window_end must be after window_start")
         return self
@@ -82,6 +105,14 @@ class ManualChangeRequest(BaseModel):
     start_at: datetime | None = None
     reason: str = Field(min_length=1, max_length=1000)
     actor: str = Field(min_length=1, max_length=160)
+
+    @model_validator(mode="after")
+    def aware_start_at(self) -> ManualChangeRequest:
+        if self.start_at is not None and (
+            self.start_at.tzinfo is None or self.start_at.utcoffset() is None
+        ):
+            raise ValueError("start_at must contain a timezone offset")
+        return self
 
 
 class StatusResponse(BaseModel):

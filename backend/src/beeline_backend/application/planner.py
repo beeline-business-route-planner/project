@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from beeline_backend.application.contracts import EngineerData, PlanningSnapshot
-from beeline_backend.domain.errors import DomainError
+from beeline_backend.domain.errors import ConflictError, DomainError
 from beeline_backend.domain.model import (
     Assignment,
     PlanCandidate,
@@ -35,7 +35,16 @@ class DeterministicPlanningAlgorithm:
 
         for locked in sorted(snapshot.locked_assignments, key=lambda item: (item.engineer_id, item.position)):
             request = next(item for item in snapshot.requests if item.id == locked.request_id)
-            engineer = engineers[locked.engineer_id]
+            engineer = engineers.get(locked.engineer_id)
+            if engineer is None:
+                raise ConflictError(
+                    "locked_engineer_unavailable",
+                    "An engineer with work in progress cannot be removed from the planning snapshot",
+                    {
+                        "engineer_id": str(locked.engineer_id),
+                        "request_id": str(locked.request_id),
+                    },
+                )
             from_location = available_location[engineer.id]
             cell = travel.cells[index[from_location]][index[request.location_id]]
             assignment = Assignment(
@@ -62,8 +71,9 @@ class DeterministicPlanningAlgorithm:
             key=lambda item: (item.priority != "urgent", item.window_start, item.external_id),
         )
         for request in requests:
-            if request.status == "CANCELLED":
-                unassigned.append(Unassigned(request.id, "cancelled", "Request is cancelled"))
+            if request.status in {"CANCELLED", "COMPLETED"}:
+                reason = request.status.lower()
+                unassigned.append(Unassigned(request.id, reason, f"Request is {reason}"))
                 continue
             if request.mapping_state == "needs_mapping" or request.service_minutes is None:
                 unassigned.append(
@@ -199,8 +209,8 @@ def validate_candidate(snapshot: PlanningSnapshot, candidate: PlanCandidate) -> 
             errors.append({"code": "skill_violation", "request_id": str(request.id)})
         if request.required_transport and request.required_transport != engineer.transport:
             errors.append({"code": "transport_violation", "request_id": str(request.id)})
-        if request.status == "CANCELLED":
-            errors.append({"code": "cancelled_request_assigned", "request_id": str(request.id)})
+        if request.status in {"CANCELLED", "COMPLETED"}:
+            errors.append({"code": "closed_request_assigned", "request_id": str(request.id)})
         expected_service_seconds = (request.service_minutes or 0) * 60
         if int((assignment.finish_at - assignment.start_at).total_seconds()) != expected_service_seconds:
             errors.append({"code": "service_duration_mismatch", "request_id": str(request.id)})

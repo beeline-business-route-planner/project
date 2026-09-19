@@ -70,6 +70,46 @@ def test_invalid_date_and_window_return_validation_errors(client: TestClient) ->
     assert reversed_window.status_code == 422, reversed_window.text
     assert reversed_window.json()["code"] == "validation_error"
 
+    mixed_timezones = client.post(
+        "/api/v1/requests",
+        json={
+            "scenario_id": str(uuid4()),
+            "planning_date": "2026-08-17",
+            "external_id": "mixed-timezones",
+            "address": "Москва, тестовый адрес",
+            "district": "Тестовый",
+            "window_start": "2026-08-17T10:00:00",
+            "window_end": "2026-08-17T12:00:00+03:00",
+            "service_minutes": 30,
+            "required_skill": "connection",
+            "priority": "normal",
+            "idempotency_key": "mixed-timezones",
+            "actor": "test",
+        },
+    )
+    assert mixed_timezones.status_code == 422, mixed_timezones.text
+    assert mixed_timezones.json()["code"] == "validation_error"
+
+
+def test_event_rejects_malformed_target_uuid(
+    client: TestClient, synthetic_xlsx: bytes
+) -> None:
+    _, scenario_id = _import(client, synthetic_xlsx)
+    response = client.post(
+        "/api/v1/events",
+        json={
+            "scenario_id": scenario_id,
+            "planning_date": "2026-08-17",
+            "event_type": "urgent_request",
+            "effective_at": "2026-08-17T10:00:00+03:00",
+            "payload": {"request_id": "not-a-uuid"},
+            "idempotency_key": "malformed-event-target",
+            "actor": "dispatcher",
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "invalid_event_target"
+
 
 def test_import_plan_approve_replan_diff_and_reports(
     client: TestClient, synthetic_xlsx: bytes
@@ -585,3 +625,105 @@ def test_cancellation_event_removes_request_from_active_routes(
     assert duplicate.status_code == 200, duplicate.text
     assert duplicate.json()["duplicate"] is True
     assert duplicate.json()["replanning"] == event.json()["replanning"]
+
+
+def test_completed_request_is_not_assigned_by_replanning(
+    client: TestClient, synthetic_xlsx: bytes
+) -> None:
+    _, scenario_id = _import(client, synthetic_xlsx)
+    first_plan_id = client.post(
+        "/api/v1/plans/run",
+        json={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
+    ).json()["plan_id"]
+    assert client.post(
+        f"/api/v1/plans/{first_plan_id}/approve",
+        json={"expected_base_plan_id": None, "actor": "dispatcher"},
+    ).status_code == 200
+    request_id = client.get(f"/api/v1/plans/{first_plan_id}").json()["assignments"][0][
+        "request_id"
+    ]
+    for status, effective_at, actual in (
+        ("SENT", "2026-08-17T08:05:00+03:00", {}),
+        ("EN_ROUTE", "2026-08-17T08:10:00+03:00", {}),
+        (
+            "IN_PROGRESS",
+            "2026-08-17T09:00:00+03:00",
+            {"actual_start": "2026-08-17T09:00:00+03:00"},
+        ),
+        (
+            "COMPLETED",
+            "2026-08-17T09:30:00+03:00",
+            {"actual_finish": "2026-08-17T09:30:00+03:00"},
+        ),
+    ):
+        response = client.post(
+            f"/api/v1/requests/{request_id}/facts",
+            json={
+                "status": status,
+                "effective_at": effective_at,
+                "actor": "dispatcher",
+                "reason": "completed request regression",
+                **actual,
+            },
+        )
+        assert response.status_code == 200, response.text
+
+    replanned = client.post(
+        "/api/v1/plans/run",
+        json={
+            "scenario_id": scenario_id,
+            "planning_date": "2026-08-17",
+            "base_plan_id": first_plan_id,
+            "as_of": "2026-08-17T10:00:00+03:00",
+        },
+    )
+    assert replanned.status_code == 200, replanned.text
+    plan = client.get(f"/api/v1/plans/{replanned.json()['plan_id']}").json()
+    assert request_id not in {item["request_id"] for item in plan["assignments"]}
+    assert any(
+        item["request_id"] == request_id and item["reason_code"] == "completed"
+        for item in plan["unassigned"]
+    )
+
+
+def test_unavailable_engineer_with_locked_work_returns_conflict(
+    client: TestClient, synthetic_xlsx: bytes
+) -> None:
+    _, scenario_id = _import(client, synthetic_xlsx)
+    plan_id = client.post(
+        "/api/v1/plans/run",
+        json={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
+    ).json()["plan_id"]
+    assert client.post(
+        f"/api/v1/plans/{plan_id}/approve",
+        json={"expected_base_plan_id": None, "actor": "dispatcher"},
+    ).status_code == 200
+    assignment = client.get(f"/api/v1/plans/{plan_id}").json()["assignments"][0]
+    for status, effective_at in (
+        ("SENT", "2026-08-17T08:05:00+03:00"),
+        ("EN_ROUTE", "2026-08-17T08:10:00+03:00"),
+    ):
+        assert client.post(
+            f"/api/v1/requests/{assignment['request_id']}/facts",
+            json={
+                "status": status,
+                "effective_at": effective_at,
+                "actor": "dispatcher",
+                "reason": "locked engineer regression",
+            },
+        ).status_code == 200
+
+    response = client.post(
+        "/api/v1/events",
+        json={
+            "scenario_id": scenario_id,
+            "planning_date": "2026-08-17",
+            "event_type": "engineer_unavailable",
+            "effective_at": "2026-08-17T08:15:00+03:00",
+            "payload": {"engineer_id": assignment["engineer_id"]},
+            "idempotency_key": "locked-engineer-unavailable",
+            "actor": "dispatcher",
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "locked_engineer_unavailable"

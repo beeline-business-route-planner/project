@@ -646,7 +646,25 @@ class SqlGateway:
             )
         ).all()
         statuses = await self._latest_statuses([item.id for item in requests])
-        location_ids = list(dict.fromkeys([scenario.office_location_id, *[item.location_id for item in requests]]))
+        engineers = (
+            await self._session.scalars(
+                select(EngineerRow)
+                .where(
+                    EngineerRow.scenario_id == scenario_id,
+                    EngineerRow.active.is_(True),
+                )
+                .order_by(EngineerRow.external_code)
+            )
+        ).all()
+        location_ids = list(
+            dict.fromkeys(
+                [
+                    scenario.office_location_id,
+                    *[item.location_id for item in requests],
+                    *[item.home_location_id for item in engineers],
+                ]
+            )
+        )
         locations = (
             await self._session.scalars(select(LocationRow).where(LocationRow.id.in_(location_ids)))
         ).all()
@@ -656,13 +674,6 @@ class SqlGateway:
             for item in location_ids
         ):
             raise DomainError("geocoding_required", "One or more locations have no coordinates")
-        engineers = (
-            await self._session.scalars(
-                select(EngineerRow).where(
-                    EngineerRow.scenario_id == scenario_id, EngineerRow.active.is_(True)
-                ).order_by(EngineerRow.external_code)
-            )
-        ).all()
         engineer_data: list[EngineerData] = []
         for engineer in engineers:
             shift = await self._session.scalar(
@@ -1282,7 +1293,12 @@ class SqlGateway:
                 raise DomainError(
                     "missing_event_target", "request_cancelled requires payload.request_id"
                 )
-            request_id = UUID(raw_request_id)
+            try:
+                request_id = UUID(raw_request_id)
+            except ValueError as exc:
+                raise DomainError(
+                    "invalid_event_target", "payload.request_id must be a UUID"
+                ) from exc
             request = await self._session.get(RequestRow, request_id)
             if request is None or request.scenario_id != scenario_id:
                 raise NotFoundError("request_not_found", "Event request was not found")
@@ -1317,7 +1333,12 @@ class SqlGateway:
                 raise DomainError(
                     "missing_event_target", "engineer_unavailable requires payload.engineer_id"
                 )
-            engineer_id = UUID(raw_engineer_id)
+            try:
+                engineer_id = UUID(raw_engineer_id)
+            except ValueError as exc:
+                raise DomainError(
+                    "invalid_event_target", "payload.engineer_id must be a UUID"
+                ) from exc
             engineer = await self._session.get(EngineerRow, engineer_id)
             if engineer is None or engineer.scenario_id != scenario_id:
                 raise NotFoundError("engineer_not_found", "Event engineer was not found")
@@ -1338,7 +1359,12 @@ class SqlGateway:
                     "missing_event_target",
                     "urgent_request requires an existing payload.request_id; create new work via POST /requests",
                 )
-            request_id = UUID(raw_request_id)
+            try:
+                request_id = UUID(raw_request_id)
+            except ValueError as exc:
+                raise DomainError(
+                    "invalid_event_target", "payload.request_id must be a UUID"
+                ) from exc
             request = await self._session.get(RequestRow, request_id)
             if request is None or request.scenario_id != scenario_id:
                 raise NotFoundError("request_not_found", "Urgent request was not found")
