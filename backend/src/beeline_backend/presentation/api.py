@@ -5,6 +5,7 @@ import logging
 import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import cast
 from uuid import UUID, uuid4
@@ -202,12 +203,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def validation_error_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        errors = [
+            {key: error[key] for key in ("type", "loc", "msg") if key in error}
+            for error in exc.errors()
+        ]
         return JSONResponse(
             status_code=422,
             content={
                 "code": "validation_error",
                 "message": "Request validation failed",
-                "details": {"errors": exc.errors()},
+                "details": {"errors": errors},
                 "correlation_id": correlation_id_var.get(),
             },
         )
@@ -283,15 +288,13 @@ def _router() -> APIRouter:
     @router.get("/requests", response_model=list[RequestListItemResponse], tags=["requests"])
     async def requests(
         scenario_id: UUID,
-        planning_date: str,
+        planning_date: date,
         limit: int = Query(default=100, ge=1, le=500),
         offset: int = Query(default=0, ge=0),
         service: BackendService = Depends(_service),
     ) -> list[dict[str, object]]:
-        from datetime import date
-
         return await service.gateway.list_requests(
-            scenario_id, date.fromisoformat(planning_date), limit, offset
+            scenario_id, planning_date, limit, offset
         )
 
     @router.get(
@@ -368,12 +371,10 @@ def _router() -> APIRouter:
     @router.get("/plans", response_model=list[PlanSummaryResponse], tags=["plans"])
     async def plans(
         scenario_id: UUID,
-        planning_date: str,
+        planning_date: date,
         service: BackendService = Depends(_service),
     ) -> list[dict[str, object]]:
-        from datetime import date
-
-        return await service.gateway.list_plans(scenario_id, date.fromisoformat(planning_date))
+        return await service.gateway.list_plans(scenario_id, planning_date)
 
     @router.get("/plans/diff", response_model=PlanDiffResponse, tags=["plans"])
     async def plan_diff(
@@ -439,19 +440,16 @@ def _router() -> APIRouter:
     @router.get("/dashboard", response_model=DashboardResponse, tags=["frontend"])
     async def dashboard(
         scenario_id: UUID,
-        planning_date: str,
+        planning_date: date,
         service: BackendService = Depends(_service),
     ) -> dict[str, object]:
-        from datetime import date
-
-        parsed_date = date.fromisoformat(planning_date)
-        plans = await service.gateway.list_plans(scenario_id, parsed_date)
+        plans = await service.gateway.list_plans(scenario_id, planning_date)
         active = next((item for item in plans if item["status"] == "approved"), None)
         return {
             "scenario_id": scenario_id,
-            "planning_date": parsed_date,
+            "planning_date": planning_date,
             "active_plan": await service.gateway.get_plan(active["id"]) if active else None,  # type: ignore[arg-type]
-            "requests": await service.gateway.list_requests(scenario_id, parsed_date, 500, 0),
+            "requests": await service.gateway.list_requests(scenario_id, planning_date, 500, 0),
             "engineers": await service.gateway.list_engineers(scenario_id),
         }
 

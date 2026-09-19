@@ -26,7 +26,7 @@
 | P1-02 | UUID события до outbox/audit | Даниил | DONE | Валидные ссылки, GET audit 200, regression test |
 | P1-03 | Retry после неудачного event/run | Даниил; Олег orchestration | OPEN | Тот же idempotency key восстанавливает/возвращает результат, не duplicate-without-result; job/run state согласован |
 | P1-04 | Actual timestamps / полный report | Даниил | OPEN | IN_PROGRESS(start)→COMPLETED(finish) сохраняет оба; unassigned/cancelled отражены отдельно; report freshness учитывает facts |
-| P1-05 | Invalid input→422 | Даниил | OPEN | Invalid planning_date/reversed window не дают 500; validation ctx безопасно сериализуется |
+| P1-05 | Invalid input→422 | Даниил | DONE | Invalid planning_date/reversed window не дают 500; validation ctx безопасно сериализуется |
 | P1-06 | Manual-change draft approval | Даниил | OPEN | Child initial draft имеет корректную base semantics; future edits не меняют completed/current |
 | P1-07 | Combined work-type mapping | TEAM_DECISION_REQUIRED; Даниил реализует | NEEDS_DECISION | Утверждён норматив/skill для combined dataset rows; mapping tests |
 | P1-08 | Реальный planner и transport profiles | Юрий + Даниил | OPEN | Adapter подключён; coverage→day-active objective; travel соответствует профилю; limitations явны |
@@ -38,6 +38,8 @@
 | P1-14 | Demo regression suite | Олег + Юрий + Даниил по слоям | OPEN | 12 event cases + anchors/time/partition/retry проходят; PostgreSQL flow подтверждён |
 
 P1-02 завершён 2026-09-19: `DayEventRow` явно flush-ится до формирования outbox payload и audit row как для общего события, так и при создании новой заявки. HTTP regression подтверждает `GET /audit` 200 и совпадение audit object_id с event_id. Полный suite — 27 passed; Ruff/mypy(src) прошли.
+
+P1-05 завершён 2026-09-19: query-параметры `planning_date` типизированы как date на FastAPI boundary; validation handler возвращает только сериализуемые type/loc/msg. Invalid date и reversed request window возвращают 422 с code=validation_error. Полный suite — 28 passed; Ruff/mypy(src) прошли.
 
 ## P2 — хорошо иметь
 

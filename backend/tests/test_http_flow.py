@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
 
@@ -18,6 +20,35 @@ def _import(client: TestClient, content: bytes) -> tuple[str, str]:
     assert response.status_code == 200, response.text
     body = response.json()
     return body["dataset_id"], body["scenario_id"]
+
+
+def test_invalid_date_and_window_return_validation_errors(client: TestClient) -> None:
+    invalid_date = client.get(
+        "/api/v1/requests",
+        params={"scenario_id": str(uuid4()), "planning_date": "not-a-date"},
+    )
+    assert invalid_date.status_code == 422, invalid_date.text
+    assert invalid_date.json()["code"] == "validation_error"
+
+    reversed_window = client.post(
+        "/api/v1/requests",
+        json={
+            "scenario_id": str(uuid4()),
+            "planning_date": "2026-08-17",
+            "external_id": "invalid-window",
+            "address": "Москва, тестовый адрес",
+            "district": "Тестовый",
+            "window_start": "2026-08-17T12:00:00+03:00",
+            "window_end": "2026-08-17T10:00:00+03:00",
+            "service_minutes": 30,
+            "required_skill": "connection",
+            "priority": "normal",
+            "idempotency_key": "invalid-window",
+            "actor": "test",
+        },
+    )
+    assert reversed_window.status_code == 422, reversed_window.text
+    assert reversed_window.json()["code"] == "validation_error"
 
 
 def test_import_plan_approve_replan_diff_and_reports(

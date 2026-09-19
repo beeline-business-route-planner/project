@@ -79,6 +79,8 @@ PostgreSQL: после запуска Docker пользователем испо
 
 Первая попытка pytest после `uv sync --no-install-project` не собрала tests: пакет не был установлен и PYTHONPATH не был задан. После обычного `uv sync --frozen`, соответствующего README, suite прошёл. Отдельный запуск mypy для test-файла без `MYPYPATH=src` видел установленный editable package как untyped; повтор с исходным деревом прошёл. Эти две ошибки относятся к командам проверки, не к runtime-поведению приложения. После реорганизации test-файла editable marker среды перестал добавлять пакет в import path; `uv pip install -e .` восстановил локальную установку, после чего полный suite из 27 tests прошёл.
 
+2026-09-19, P1-05: `PYTHONPATH=src .venv/bin/python -m pytest -p no:cacheprovider` — 28 passed; Ruff — passed; mypy(src) — passed. Regression covers invalid query date and reversed request window returning HTTP 422.
+
 ## Контрольные суммы
 
 Контрольные суммы обновлены при переносе проверенного backend в командный monorepo. Они фиксируют содержимое первого импортирующего коммита; локальные environment/cache/data файлы не входят.
