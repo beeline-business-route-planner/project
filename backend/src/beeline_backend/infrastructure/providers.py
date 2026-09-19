@@ -223,7 +223,14 @@ class NominatimGeocoder:
                 "Nominatim request failed",
                 {"provider": self.name},
             ) from exc
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise DependencyUnavailableError(
+                "invalid_geocoding_response",
+                "Nominatim returned malformed JSON",
+                {"provider": self.name},
+            ) from exc
         if not isinstance(payload, list) or not payload:
             raise DomainError(
                 "geocoding_not_found",
@@ -383,13 +390,19 @@ class DgisRoutingProvider:
                     )
                 response.raise_for_status()
                 try:
-                    result: dict[str, object] = response.json()
+                    result = response.json()
                 except ValueError as exc:
                     raise DependencyUnavailableError(
                         "invalid_routing_response",
                         "2GIS Routing API returned malformed JSON",
                         {"provider": self.name},
                     ) from exc
+                if not isinstance(result, dict):
+                    raise DependencyUnavailableError(
+                        "invalid_routing_response",
+                        "2GIS Routing API returned an invalid response shape",
+                        {"provider": self.name},
+                    )
                 return result
             except (DependencyUnavailableError, DomainError):
                 raise
@@ -440,30 +453,75 @@ class DgisRoutingProvider:
                         "2GIS distance matrix response has no routes",
                         {"provider": self.name},
                     )
+                expected_route_count = len(source_indices) * len(target_indices)
+                if len(routes) != expected_route_count:
+                    raise DependencyUnavailableError(
+                        "invalid_routing_response",
+                        "2GIS distance matrix response has an invalid shape",
+                        {"provider": self.name},
+                    )
+                seen_pairs: set[tuple[int, int]] = set()
                 for route in routes:
                     if not isinstance(route, dict):
-                        continue
+                        raise DependencyUnavailableError(
+                            "invalid_routing_response",
+                            "2GIS distance matrix contains an invalid route",
+                            {"provider": self.name},
+                        )
                     source_id = route.get("source_id")
                     target_id = route.get("target_id")
-                    if not isinstance(source_id, int) or not isinstance(target_id, int):
-                        continue
-                    if source_id >= len(source_indices):
-                        continue
+                    if (
+                        not isinstance(source_id, int)
+                        or isinstance(source_id, bool)
+                        or not isinstance(target_id, int)
+                        or isinstance(target_id, bool)
+                        or source_id < 0
+                        or source_id >= len(source_indices)
+                    ):
+                        raise DependencyUnavailableError(
+                            "invalid_routing_response",
+                            "2GIS distance matrix contains invalid route indices",
+                            {"provider": self.name},
+                        )
                     local_target = target_id - len(source_indices)
                     if local_target < 0 or local_target >= len(target_indices):
-                        continue
+                        raise DependencyUnavailableError(
+                            "invalid_routing_response",
+                            "2GIS distance matrix contains invalid route indices",
+                            {"provider": self.name},
+                        )
+                    pair = (source_id, local_target)
+                    if pair in seen_pairs:
+                        raise DependencyUnavailableError(
+                            "invalid_routing_response",
+                            "2GIS distance matrix contains duplicate routes",
+                            {"provider": self.name},
+                        )
+                    seen_pairs.add(pair)
                     source_index = source_indices[source_id]
                     target_index = target_indices[local_target]
                     if route.get("status") == "OK":
                         duration = route.get("duration")
                         distance = route.get("distance")
-                        if isinstance(duration, (int, float)) and isinstance(
-                            distance, (int, float)
+                        if (
+                            not isinstance(duration, (int, float))
+                            or isinstance(duration, bool)
+                            or not math.isfinite(duration)
+                            or duration < 0
+                            or not isinstance(distance, (int, float))
+                            or isinstance(distance, bool)
+                            or not math.isfinite(distance)
+                            or distance < 0
                         ):
-                            cells[source_index][target_index] = TravelCell(
-                                duration_seconds=int(duration),
-                                distance_meters=int(distance),
+                            raise DependencyUnavailableError(
+                                "invalid_routing_response",
+                                "2GIS distance matrix contains invalid route metrics",
+                                {"provider": self.name},
                             )
+                        cells[source_index][target_index] = TravelCell(
+                            duration_seconds=int(duration),
+                            distance_meters=int(distance),
+                        )
         return RouteMatrix(
             provider=self.name,
             provider_version="distance-matrix-2.0",
@@ -500,7 +558,14 @@ class DgisRoutingProvider:
                 "2GIS did not return a route",
                 {"provider": self.name, "provider_status": response.get("status")},
             )
-        points = _dgis_geometry_points(response)
+        try:
+            points = _dgis_geometry_points(response)
+        except (OverflowError, ValueError) as exc:
+            raise DependencyUnavailableError(
+                "invalid_route_response",
+                "2GIS route geometry is invalid",
+                {"provider": self.name},
+            ) from exc
         if len(points) < 2:
             raise DependencyUnavailableError(
                 "invalid_route_response",
@@ -527,12 +592,20 @@ def _dgis_geometry_points(value: object) -> list[list[float]]:
     collect(value.get("result") if isinstance(value, dict) else value)
     points: list[list[float]] = []
     for selection in selections:
+        if not selection.endswith(")"):
+            raise ValueError("invalid LINESTRING")
         content = selection.removeprefix("LINESTRING(").removesuffix(")")
         for raw_point in content.split(","):
             parts = raw_point.strip().split()
             if len(parts) < 2:
-                continue
+                raise ValueError("invalid LINESTRING point")
             point = [float(parts[0]), float(parts[1])]
+            if (
+                not all(math.isfinite(coordinate) for coordinate in point)
+                or not -180 <= point[0] <= 180
+                or not -90 <= point[1] <= 90
+            ):
+                raise ValueError("invalid LINESTRING coordinates")
             if not points or point != points[-1]:
                 points.append(point)
     return points
@@ -610,7 +683,20 @@ class OsrmRoutingProvider:
                 if response.status_code >= 500 or response.status_code == 429:
                     raise httpx.HTTPStatusError("temporary OSRM failure", request=response.request, response=response)
                 response.raise_for_status()
-                payload: dict[str, object] = response.json()
+                try:
+                    payload = response.json()
+                except ValueError as exc:
+                    raise DependencyUnavailableError(
+                        "invalid_routing_response",
+                        "OSRM returned malformed JSON",
+                        {"provider": self.name},
+                    ) from exc
+                if not isinstance(payload, dict):
+                    raise DependencyUnavailableError(
+                        "invalid_routing_response",
+                        "OSRM returned an invalid response shape",
+                        {"provider": self.name},
+                    )
                 code = payload.get("code")
                 if code != "Ok":
                     raise DomainError(
@@ -651,14 +737,47 @@ class OsrmRoutingProvider:
                 provider_version = str(payload.get("data_version") or provider_version)
                 durations = payload.get("durations")
                 distances = payload.get("distances")
-                if not isinstance(durations, list) or not isinstance(distances, list):
-                    raise DomainError("invalid_routing_response", "OSRM matrix response is incomplete")
+                expected_rows = len(source_indices)
+                expected_columns = len(destination_indices)
+                if (
+                    not isinstance(durations, list)
+                    or not isinstance(distances, list)
+                    or len(durations) != expected_rows
+                    or len(distances) != expected_rows
+                    or any(
+                        not isinstance(row, list) or len(row) != expected_columns
+                        for row in durations + distances
+                    )
+                ):
+                    raise DependencyUnavailableError(
+                        "invalid_routing_response",
+                        "OSRM matrix response has an invalid shape",
+                        {"provider": self.name},
+                    )
                 for row_index, source_index in enumerate(source_indices):
                     duration_row = durations[row_index]
                     distance_row = distances[row_index]
                     for column_index, destination_index in enumerate(destination_indices):
                         duration = duration_row[column_index]
                         distance = distance_row[column_index]
+                        metrics_are_valid = (
+                            duration is None
+                            and distance is None
+                            or isinstance(duration, (int, float))
+                            and not isinstance(duration, bool)
+                            and math.isfinite(duration)
+                            and duration >= 0
+                            and isinstance(distance, (int, float))
+                            and not isinstance(distance, bool)
+                            and math.isfinite(distance)
+                            and distance >= 0
+                        )
+                        if not metrics_are_valid:
+                            raise DependencyUnavailableError(
+                                "invalid_routing_response",
+                                "OSRM matrix response contains invalid metrics",
+                                {"provider": self.name},
+                            )
                         cells[source_index][destination_index] = TravelCell(
                             duration_seconds=None if duration is None else int(duration),
                             distance_meters=None if distance is None else int(distance),

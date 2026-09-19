@@ -85,6 +85,8 @@ PostgreSQL: после запуска Docker пользователем испо
 
 2026-09-19, P1-10: full pytest — 29 passed; Ruff — passed; mypy(src) — passed. HTTPX request выполнен через MockTransport с синтетическим DGIS key; captured INFO logs не содержат key, effective logging level для `httpx` и `httpcore` — WARNING. Реальный provider/key не использовался.
 
+2026-09-19, P1-12: full pytest — 38 passed; Ruff — passed; mypy(src) — passed. MockTransport cases подтверждают controlled `DependencyUnavailableError` для negative/out-of-range 2GIS indices, array JSON, malformed route WKT, malformed Nominatim/OSRM JSON и неправильной размерности OSRM matrix. Live responses и provider-specific optional fields этой проверкой не охвачены.
+
 ## Контрольные суммы
 
 Контрольные суммы обновлены при переносе проверенного backend в командный monorepo. Они фиксируют содержимое первого импортирующего коммита; локальные environment/cache/data файлы не входят.

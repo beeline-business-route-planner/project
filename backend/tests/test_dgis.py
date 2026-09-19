@@ -216,3 +216,98 @@ async def test_dgis_matrix_and_route_geometry_contracts() -> None:
         "coordinates": [[37.6, 55.7], [37.65, 55.75], [37.7, 55.8]],
         "provider": "2gis",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_id", "target_id"),
+    [(-1, 2), (2, 2), (0, 1), (0, 4)],
+)
+async def test_dgis_matrix_rejects_invalid_route_indices(
+    source_id: int, target_id: int
+) -> None:
+    routes = [
+        {
+            "status": "OK",
+            "source_id": 0,
+            "target_id": 2,
+            "duration": 0,
+            "distance": 0,
+        },
+        {
+            "status": "OK",
+            "source_id": 0,
+            "target_id": 3,
+            "duration": 100,
+            "distance": 1500,
+        },
+        {
+            "status": "OK",
+            "source_id": 1,
+            "target_id": 2,
+            "duration": 120,
+            "distance": 1700,
+        },
+        {
+            "status": "ROUTE_NOT_FOUND",
+            "source_id": 1,
+            "target_id": 3,
+        },
+    ]
+    routes[0] = {**routes[0], "source_id": source_id, "target_id": target_id}
+    provider = DgisRoutingProvider(
+        "https://routing.api.2gis.test",
+        "test-key",
+        timeout_seconds=1,
+        matrix_block_size=25,
+        clock=FixedClock(),
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json={"routes": routes})
+        ),
+    )
+
+    with pytest.raises(DependencyUnavailableError) as invalid:
+        await provider.matrix(
+            [(55.7, 37.6), (55.8, 37.7)], "driving", FixedClock().now()
+        )
+    assert invalid.value.code == "invalid_routing_response"
+
+
+@pytest.mark.asyncio
+async def test_dgis_routing_rejects_non_object_json() -> None:
+    provider = DgisRoutingProvider(
+        "https://routing.api.2gis.test",
+        "test-key",
+        timeout_seconds=1,
+        matrix_block_size=25,
+        clock=FixedClock(),
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=[])),
+    )
+
+    with pytest.raises(DependencyUnavailableError) as invalid:
+        await provider.route_geometry([(55.7, 37.6), (55.8, 37.7)], "driving")
+    assert invalid.value.code == "invalid_routing_response"
+
+
+@pytest.mark.asyncio
+async def test_dgis_routing_rejects_malformed_wkt() -> None:
+    provider = DgisRoutingProvider(
+        "https://routing.api.2gis.test",
+        "test-key",
+        timeout_seconds=1,
+        matrix_block_size=25,
+        clock=FixedClock(),
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json={
+                    "status": "OK",
+                    "result": [{"selection": "LINESTRING(37.6 nope, 37.7 55.8)"}],
+                },
+            )
+        ),
+    )
+
+    with pytest.raises(DependencyUnavailableError) as invalid:
+        await provider.route_geometry([(55.7, 37.6), (55.8, 37.7)], "driving")
+    assert invalid.value.code == "invalid_route_response"

@@ -54,3 +54,20 @@ async def test_nominatim_distinguishes_not_found_and_rate_limit() -> None:
     with pytest.raises(DependencyUnavailableError) as rate_limited:
         await provider.geocode("адрес", "Москва")
     assert rate_limited.value.code == "geocoding_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_nominatim_rejects_malformed_json() -> None:
+    provider = NominatimGeocoder(
+        "https://nominatim.test",
+        "beeline-tests/1.0",
+        timeout_seconds=1,
+        min_interval_seconds=0,
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, content=b"not-json")
+        ),
+    )
+
+    with pytest.raises(DependencyUnavailableError) as invalid:
+        await provider.geocode("адрес", "Москва")
+    assert invalid.value.code == "invalid_geocoding_response"

@@ -33,7 +33,7 @@
 | P1-09 | 2GIS длинная geometry / live scopes | Даниил | OPEN | Маршруты соблюдают points limit; реальные scopes проверены при ключе; partial provider errors диагностируются |
 | P1-10 | Redaction key в HTTPX logs | Даниил | DONE | Synthetic-key test не находит key в логах/ошибках |
 | P1-11 | XLSX strings как текст | Даниил | DONE | Untrusted identifiers/addresses не становятся formula |
-| P1-12 | Валидация внешнего response | Даниил | OPEN | Negative/out-of-range indices, bad shape/WKT/JSON → controlled provider error, не corrupted matrix/500 |
+| P1-12 | Валидация внешнего response | Даниил | DONE | Negative/out-of-range indices, bad shape/WKT/JSON → controlled provider error, не corrupted matrix/500 |
 | P1-13 | Day metrics и baseline | Олег semantics; Юрий objective; Даниил reporting | OPEN | Completed/current/future day-active union; eligible coverage без cancelled; сравнение на одинаковых inputs/matrices |
 | P1-14 | Demo regression suite | Олег + Юрий + Даниил по слоям | OPEN | 12 event cases + anchors/time/partition/retry проходят; PostgreSQL flow подтверждён |
 
@@ -44,6 +44,8 @@ P1-05 завершён 2026-09-19: query-параметры `planning_date` ти
 P1-11 завершён 2026-09-19: XLSX renderer экранирует внешние строки, начинающиеся с `=`, `+`, `-`, `@`, tab или carriage return. Regression проверяет scenario, engineer, request ID, address и строковую metric value; ячейки сохраняются как text. Полный suite — 28 passed; Ruff/mypy(src) прошли.
 
 P1-10 завершён 2026-09-19: уровни логирования `httpx` и `httpcore` подняты до WARNING, поэтому INFO-запись полного request URL с query-параметром key не создаётся. Regression с синтетическим ключом подтверждает, что ключ отсутствует в captured logs. Полный suite — 29 passed; Ruff/mypy(src) прошли. Проверка не использует реальный 2GIS key.
+
+P1-12 завершён 2026-09-19: 2GIS routing проверяет object shape, полноту matrix block, диапазоны и уникальность индексов, неотрицательные конечные metrics и WKT coordinates. Nominatim и OSRM преобразуют malformed JSON в `DependencyUnavailableError`; OSRM дополнительно проверяет размерность и значения matrix. Negative/out-of-range 2GIS indices, array JSON, malformed WKT/JSON и bad OSRM matrix shape покрыты regression cases. Полный suite — 38 passed; Ruff/mypy(src) прошли. Live provider responses не использовались.
 
 ## P2 — хорошо иметь
 
