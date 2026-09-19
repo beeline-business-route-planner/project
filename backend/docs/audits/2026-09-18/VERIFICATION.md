@@ -91,6 +91,8 @@ PostgreSQL: после запуска Docker пользователем испо
 
 2026-09-19, P1-03: full pytest — 40 passed; Ruff — passed; mypy(src) — passed. Fail-once planner через HTTP сначала возвращает controlled 422 после сохранения event/failed run, затем тот же idempotency key успешно создаёт plan, а третий вызов возвращает cached plan ID без новой версии плана. Успешный cancellation duplicate также возвращает исходный replanning result. Конкурентный retry и аварийное завершение процесса проверкой не имитировались.
 
+2026-09-19, P1-06: full pytest — 42 passed; Ruff — passed; mypy(src) — passed. HTTP regressions подтверждают, что manual child первого draft имеет parent=source/base=None и утверждается с expected_base=None, а перенос будущей заявки не меняет engineer, position, arrival/start/finish текущей EN_ROUTE заявки. PostgreSQL concurrency для manual change не проверялся.
+
 ## Контрольные суммы
 
 Контрольные суммы обновлены при переносе проверенного backend в командный monorepo. Они фиксируют содержимое первого импортирующего коммита; локальные environment/cache/data файлы не входят.

@@ -78,6 +78,7 @@ class BackendService:
                 candidate,
                 self._planner.name,
                 route_geometries,
+                snapshot.base_plan_id,
             )
         except asyncio.CancelledError:
             await self.gateway.mark_run_failed(

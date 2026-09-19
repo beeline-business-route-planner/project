@@ -27,7 +27,7 @@
 | P1-03 | Retry после неудачного event/run | Даниил; Олег orchestration | DONE | Тот же idempotency key восстанавливает/возвращает результат, не duplicate-without-result; job/run state согласован |
 | P1-04 | Actual timestamps / полный report | Даниил | DONE | IN_PROGRESS(start)→COMPLETED(finish) сохраняет оба; unassigned/cancelled отражены отдельно; report freshness учитывает facts |
 | P1-05 | Invalid input→422 | Даниил | DONE | Invalid planning_date/reversed window не дают 500; validation ctx безопасно сериализуется |
-| P1-06 | Manual-change draft approval | Даниил | OPEN | Child initial draft имеет корректную base semantics; future edits не меняют completed/current |
+| P1-06 | Manual-change draft approval | Даниил | DONE | Child initial draft имеет корректную base semantics; future edits не меняют completed/current |
 | P1-07 | Combined work-type mapping | TEAM_DECISION_REQUIRED; Даниил реализует | NEEDS_DECISION | Утверждён норматив/skill для combined dataset rows; mapping tests |
 | P1-08 | Реальный planner и transport profiles | Юрий + Даниил | OPEN | Adapter подключён; coverage→day-active objective; travel соответствует профилю; limitations явны |
 | P1-09 | 2GIS длинная geometry / live scopes | Даниил | OPEN | Маршруты соблюдают points limit; реальные scopes проверены при ключе; partial provider errors диагностируются |
@@ -50,6 +50,8 @@ P1-12 завершён 2026-09-19: 2GIS routing проверяет object shape,
 P1-04 завершён 2026-09-19: каждый новый fact переносит ранее подтверждённые `actual_start`/`actual_finish`, поэтому последовательность IN_PROGRESS(start) → COMPLETED(finish) сохраняет оба значения. `report_version` теперь является hash plan input и последних fact event IDs для assigned и unassigned requests. XLSX и PDF содержат отдельный раздел для неназначенных и отменённых заявок с причиной и подтверждённым статусом. HTTP/XLSX regressions подтверждают сохранение времён, смену версии и вывод отменённой заявки; renderer test покрывает неназначенную заявку. Полный suite — 39 passed, Ruff/mypy(src) прошли.
 
 P1-03 завершён 2026-09-19: event processing и связанный outbox job переходят в running/failed/succeeded с числом попыток; успешный result сохраняется в job payload. Duplicate с готовым result возвращает тот же plan, failed/queued duplicate повторно запускает обработку, running duplicate получает controlled conflict. `CancelledError` помечает planning run и event job как failed. Regression с planner, падающим на первой попытке, подтверждает recovery на втором вызове и cached result без дополнительного плана на третьем. Полный suite — 40 passed; Ruff/mypy(src) прошли. Конкурентный retry на PostgreSQL отдельно не проверялся.
+
+P1-06 завершён 2026-09-19: manual child всегда получает `parent_plan_id` редактируемого плана, а approval `base_plan_id` берётся из активной основы: для initial draft остаётся `None`, для approved source указывает на него. Source должен быть draft/approved. EN_ROUTE, IN_PROGRESS и COMPLETED нельзя переназначить; при редактировании другой будущей заявки их engineer/position/from-location/times сохраняются, иначе возвращается controlled conflict. Manual candidate проходит independent validator до сохранения. Regressions подтверждают approval child от initial draft и неизменность текущего назначения. Полный suite — 42 passed; Ruff/mypy(src) прошли.
 
 ## P2 — хорошо иметь
 

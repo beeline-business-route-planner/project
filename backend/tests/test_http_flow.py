@@ -362,6 +362,115 @@ def test_manual_change_recalculates_and_respects_skill_and_execution_lock(
     assert locked.json()["code"] == "request_locked"
 
 
+def test_manual_change_of_initial_draft_keeps_approvable_base(
+    client: TestClient, synthetic_xlsx: bytes
+) -> None:
+    _, scenario_id = _import(client, synthetic_xlsx)
+    initial_plan_id = client.post(
+        "/api/v1/plans/run",
+        json={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
+    ).json()["plan_id"]
+    initial_plan = client.get(f"/api/v1/plans/{initial_plan_id}").json()
+    assignment = initial_plan["assignments"][0]
+    engineers = client.get("/api/v1/engineers", params={"scenario_id": scenario_id}).json()
+    target = next(
+        item
+        for item in engineers
+        if "local" in item["skills"] and item["id"] != assignment["engineer_id"]
+    )
+
+    changed = client.post(
+        f"/api/v1/plans/{initial_plan_id}/manual-change",
+        json={
+            "request_id": assignment["request_id"],
+            "engineer_id": target["id"],
+            "position": 1,
+            "reason": "edit initial draft",
+            "actor": "dispatcher",
+        },
+    )
+    assert changed.status_code == 200, changed.text
+    child_plan_id = changed.json()["plan_id"]
+    child_summary = next(
+        item
+        for item in client.get(
+            "/api/v1/plans",
+            params={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
+        ).json()
+        if item["id"] == child_plan_id
+    )
+    assert child_summary["parent_plan_id"] == initial_plan_id
+    assert child_summary["base_plan_id"] is None
+
+    approved = client.post(
+        f"/api/v1/plans/{child_plan_id}/approve",
+        json={"expected_base_plan_id": None, "actor": "dispatcher"},
+    )
+    assert approved.status_code == 200, approved.text
+
+
+def test_manual_future_edit_preserves_current_assignment(
+    client: TestClient, synthetic_xlsx: bytes
+) -> None:
+    _, scenario_id = _import(client, synthetic_xlsx)
+    plan_id = client.post(
+        "/api/v1/plans/run",
+        json={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
+    ).json()["plan_id"]
+    assert client.post(
+        f"/api/v1/plans/{plan_id}/approve",
+        json={"expected_base_plan_id": None, "actor": "dispatcher"},
+    ).status_code == 200
+    assignments = client.get(f"/api/v1/plans/{plan_id}").json()["assignments"]
+    current, future = assignments
+    for status, effective_at in (
+        ("SENT", "2026-08-17T08:05:00+03:00"),
+        ("EN_ROUTE", "2026-08-17T08:10:00+03:00"),
+    ):
+        fact = client.post(
+            f"/api/v1/requests/{current['request_id']}/facts",
+            json={
+                "status": status,
+                "effective_at": effective_at,
+                "actor": "dispatcher",
+                "reason": "preservation regression",
+            },
+        )
+        assert fact.status_code == 200, fact.text
+    engineers = client.get("/api/v1/engineers", params={"scenario_id": scenario_id}).json()
+    target = next(
+        item
+        for item in engineers
+        if "local" in item["skills"]
+        and item["id"] not in {current["engineer_id"], future["engineer_id"]}
+    )
+
+    changed = client.post(
+        f"/api/v1/plans/{plan_id}/manual-change",
+        json={
+            "request_id": future["request_id"],
+            "engineer_id": target["id"],
+            "position": 1,
+            "reason": "move future work",
+            "actor": "dispatcher",
+        },
+    )
+    assert changed.status_code == 200, changed.text
+    child_assignments = client.get(
+        f"/api/v1/plans/{changed.json()['plan_id']}"
+    ).json()["assignments"]
+    preserved = next(
+        item for item in child_assignments if item["request_id"] == current["request_id"]
+    )
+    assert {
+        key: preserved[key]
+        for key in ("engineer_id", "position", "arrival_at", "start_at", "finish_at")
+    } == {
+        key: current[key]
+        for key in ("engineer_id", "position", "arrival_at", "start_at", "finish_at")
+    }
+
+
 def test_only_one_candidate_can_win_concurrent_approval(
     client: TestClient, synthetic_xlsx: bytes
 ) -> None:

@@ -95,6 +95,7 @@ class Gateway(Protocol):
         candidate: PlanCandidate,
         algorithm: str,
         route_geometries: dict[UUID, dict[str, object]],
+        parent_plan_id: UUID | None,
     ) -> tuple[UUID, UUID]: ...
     async def mark_run_failed(self, run_id: UUID, code: str, message: str) -> None: ...
     async def approve_plan(

@@ -829,6 +829,7 @@ class SqlGateway:
         candidate: PlanCandidate,
         algorithm: str,
         route_geometries: dict[UUID, dict[str, object]],
+        parent_plan_id: UUID | None,
     ) -> tuple[UUID, UUID]:
         validate_candidate(snapshot, candidate)
         now = self._now()
@@ -842,7 +843,7 @@ class SqlGateway:
             dataset_id=snapshot.dataset_id,
             planning_run_id=run_id,
             planning_date=snapshot.planning_date,
-            parent_plan_id=snapshot.base_plan_id,
+            parent_plan_id=parent_plan_id,
             base_plan_id=snapshot.base_plan_id,
             status="draft",
             approved_slot=None,
@@ -1494,12 +1495,17 @@ class SqlGateway:
         plan = await self._session.get(PlanRow, plan_id)
         if plan is None:
             raise NotFoundError("plan_not_found", "Plan not found")
+        if plan.status not in {"draft", "approved"}:
+            raise ConflictError(
+                "plan_not_editable", "Manual changes require a draft or approved plan"
+            )
+        approval_base_id = plan.id if plan.status == "approved" else plan.base_plan_id
         original_snapshot = PlanningSnapshot.model_validate(plan.input_snapshot)
         snapshot = await self.build_snapshot(
             plan.scenario_id,
             plan.planning_date,
             self._now(),
-            plan_id,
+            approval_base_id,
         )
         snapshot = snapshot.model_copy(
             update={"travel_by_profile": original_snapshot.travel_by_profile}
@@ -1516,21 +1522,25 @@ class SqlGateway:
         ).all()
         if not any(item.request_id == request_id for item in existing):
             raise DomainError("request_not_assigned", "Manual change requires an assigned request")
+        existing_by_request = {item.request_id: item for item in existing}
+        statuses = await self._latest_statuses(list(existing_by_request))
         request_by_id = {item.id: item for item in snapshot.requests}
         engineer_by_id = {item.id: item for item in snapshot.engineers}
         request = request_by_id.get(request_id)
         target = engineer_by_id.get(engineer_id)
         if request is None or target is None:
             raise DomainError("manual_change_unknown_id", "Request or engineer is not in the snapshot")
-        latest_status = await self._session.scalar(
-            select(RequestStatusEventRow)
-            .where(RequestStatusEventRow.request_id == request_id)
-            .order_by(RequestStatusEventRow.recorded_at.desc())
-            .limit(1)
-        )
-        current_status = RequestStatus(latest_status.status) if latest_status else request.status
-        if current_status in {RequestStatus.EN_ROUTE, RequestStatus.IN_PROGRESS}:
-            raise ConflictError("request_locked", "EN_ROUTE and IN_PROGRESS requests cannot be reassigned")
+        current_status = RequestStatus(statuses[request_id].status)
+        preserved_statuses = {
+            RequestStatus.EN_ROUTE,
+            RequestStatus.IN_PROGRESS,
+            RequestStatus.COMPLETED,
+        }
+        if current_status in preserved_statuses:
+            raise ConflictError(
+                "request_locked",
+                "EN_ROUTE, IN_PROGRESS and COMPLETED requests cannot be reassigned",
+            )
         if request.required_skill and request.required_skill not in target.skills:
             raise DomainError("missing_skill", "Target engineer lacks the required skill")
         if request.required_transport and request.required_transport != target.transport:
@@ -1550,6 +1560,35 @@ class SqlGateway:
             previous_finish = engineer.shift_start
             for index, current_request_id in enumerate(route_requests, start=1):
                 current = request_by_id[current_request_id]
+                original = existing_by_request[current_request_id]
+                if RequestStatus(statuses[current_request_id].status) in preserved_statuses:
+                    if (
+                        original.engineer_id != route_engineer_id
+                        or original.position != index
+                        or original.from_location_id != previous_location
+                    ):
+                        raise ConflictError(
+                            "preserved_assignment_shifted",
+                            "Manual change would alter completed or current work",
+                        )
+                    rebuilt.append(
+                        Assignment(
+                            request_id=original.request_id,
+                            engineer_id=original.engineer_id,
+                            position=original.position,
+                            from_location_id=original.from_location_id,
+                            location_id=original.location_id,
+                            arrival_at=_with_zone(original.arrival_at, self._timezone),
+                            start_at=_with_zone(original.start_at, self._timezone),
+                            finish_at=_with_zone(original.finish_at, self._timezone),
+                            travel_seconds=original.travel_seconds,
+                            distance_meters=original.distance_meters,
+                            explanation=original.explanation,
+                        )
+                    )
+                    previous_location = original.location_id
+                    previous_finish = _with_zone(original.finish_at, self._timezone)
+                    continue
                 cell = travel.cells[location_index[previous_location]][location_index[current.location_id]]
                 if cell.duration_seconds is None or cell.distance_meters is None:
                     raise DomainError("unreachable", "Manual route contains an unreachable leg")
@@ -1594,6 +1633,7 @@ class SqlGateway:
                 for item in unassigned_rows
             ),
         )
+        validate_candidate(snapshot, candidate)
         run_id = await self.start_run(snapshot, "manual-dispatcher-v1")
         _, new_plan_id = await self.save_candidate(
             run_id,
@@ -1601,6 +1641,7 @@ class SqlGateway:
             candidate,
             "manual-dispatcher-v1",
             {},
+            plan_id,
         )
         await self._audit(
             plan.scenario_id,
