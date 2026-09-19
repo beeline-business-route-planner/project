@@ -1178,7 +1178,19 @@ class SqlGateway:
         )
         if latest is not None:
             validate_status_transition(RequestStatus(latest.status), status)
-        if actual_start and actual_finish and actual_finish < actual_start:
+        previous_actual_start = latest.actual_start if latest is not None else None
+        previous_actual_finish = latest.actual_finish if latest is not None else None
+        effective_actual_start = actual_start or previous_actual_start
+        effective_actual_finish = actual_finish or previous_actual_finish
+        if effective_actual_start is not None:
+            effective_actual_start = _as_utc(effective_actual_start)
+        if effective_actual_finish is not None:
+            effective_actual_finish = _as_utc(effective_actual_finish)
+        if (
+            effective_actual_start
+            and effective_actual_finish
+            and effective_actual_finish < effective_actual_start
+        ):
             raise DomainError("invalid_actual_times", "Actual finish cannot precede actual start")
         event = RequestStatusEventRow(
             request_id=request_id,
@@ -1187,8 +1199,8 @@ class SqlGateway:
             actor=actor,
             effective_at=_as_utc(effective_at),
             recorded_at=self._now(),
-            actual_start=_as_utc(actual_start) if actual_start else None,
-            actual_finish=_as_utc(actual_finish) if actual_finish else None,
+            actual_start=effective_actual_start,
+            actual_finish=effective_actual_finish,
             reason=reason,
             corrects_event_id=latest.id if latest else None,
             idempotency_key=None,
@@ -1543,14 +1555,32 @@ class SqlGateway:
                 .order_by(EngineerRow.name, AssignmentRow.position)
             )
         ).all()
-        statuses = await self._latest_statuses([request.id for _, request, _, _ in rows])
+        unassigned_request_ids = list(
+            await self._session.scalars(
+                select(UnassignedRequestRow.request_id).where(
+                    UnassignedRequestRow.plan_id == plan_id
+                )
+            )
+        )
+        statuses = await self._latest_statuses(
+            [request.id for _, request, _, _ in rows] + unassigned_request_ids
+        )
+        report_version = hashlib.sha256(
+            json.dumps(
+                {
+                    "plan_input_version": plan.input_version,
+                    "fact_event_ids": sorted(str(status.id) for status in statuses.values()),
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()[:12]
         metrics_rows = (
             await self._session.scalars(
                 select(PlanMetricRow).where(PlanMetricRow.plan_id == plan_id)
             )
         ).all()
         return DayReport(
-            report_version=plan.input_version[:12],
+            report_version=report_version,
             plan_id=plan.id,
             scenario=scenario.name if scenario else str(plan.scenario_id),
             planning_date=plan.planning_date,

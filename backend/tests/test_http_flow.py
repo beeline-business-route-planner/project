@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from io import BytesIO
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 
 def _import(client: TestClient, content: bytes) -> tuple[str, str]:
@@ -153,6 +155,65 @@ def test_planned_finish_does_not_create_completed_fact(
         params={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
     )
     assert {item["status"] for item in response.json()} == {"NOT_SENT"}
+
+
+def test_report_preserves_actual_start_and_tracks_fact_version(
+    client: TestClient, synthetic_xlsx: bytes
+) -> None:
+    _, scenario_id = _import(client, synthetic_xlsx)
+    run = client.post(
+        "/api/v1/plans/run",
+        json={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
+    )
+    assert run.status_code == 200, run.text
+    plan_id = run.json()["plan_id"]
+    assignment = client.get(f"/api/v1/plans/{plan_id}").json()["assignments"][0]
+
+    initial_report = client.get(f"/api/v1/plans/{plan_id}/reports/xlsx")
+    assert initial_report.status_code == 200, initial_report.text
+    initial_sheet = load_workbook(BytesIO(initial_report.content)).active
+    initial_version = initial_sheet.cell(row=3, column=2).value
+
+    facts = (
+        ("SENT", "2026-08-17T08:05:00+03:00", {}),
+        ("EN_ROUTE", "2026-08-17T08:10:00+03:00", {}),
+        (
+            "IN_PROGRESS",
+            "2026-08-17T10:15:00+03:00",
+            {"actual_start": "2026-08-17T10:15:00+03:00"},
+        ),
+        (
+            "COMPLETED",
+            "2026-08-17T11:00:00+03:00",
+            {"actual_finish": "2026-08-17T11:00:00+03:00"},
+        ),
+    )
+    for status, effective_at, actual_times in facts:
+        response = client.post(
+            f"/api/v1/requests/{assignment['request_id']}/facts",
+            json={
+                "status": status,
+                "effective_at": effective_at,
+                "actor": "dispatcher",
+                "reason": "report regression",
+                **actual_times,
+            },
+        )
+        assert response.status_code == 200, response.text
+
+    updated_report = client.get(f"/api/v1/plans/{plan_id}/reports/xlsx")
+    assert updated_report.status_code == 200, updated_report.text
+    updated_sheet = load_workbook(BytesIO(updated_report.content)).active
+    assert updated_sheet.cell(row=3, column=2).value != initial_version
+    report_row = next(
+        row
+        for row in updated_sheet.iter_rows(min_row=7, values_only=True)
+        if str(row[2]) == assignment["request_external_id"]
+    )
+    assert report_row[6] == "COMPLETED"
+    assert report_row[7] is not None
+    assert report_row[8] is not None
+    assert report_row[8] > report_row[7]
 
 
 def test_manual_change_recalculates_and_respects_skill_and_execution_lock(
