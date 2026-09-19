@@ -161,6 +161,15 @@ def validate_candidate(snapshot: PlanningSnapshot, candidate: PlanCandidate) -> 
         errors.append({"code": "input_version_mismatch"})
     request_by_id = {item.id: item for item in snapshot.requests}
     engineer_by_id = {item.id: item for item in snapshot.engineers}
+    location_index = {item: index for index, item in enumerate(snapshot.location_ids)}
+    matrix = snapshot.travel_by_profile.get("driving")
+    matrix_is_valid = matrix is not None and len(matrix.cells) == len(location_index) and all(
+        len(row) == len(location_index) for row in matrix.cells
+    )
+    if candidate.assignments and matrix is None:
+        errors.append({"code": "missing_travel_matrix", "profile": "driving"})
+    elif candidate.assignments and not matrix_is_valid:
+        errors.append({"code": "invalid_travel_matrix_shape", "profile": "driving"})
     seen: set[UUID] = set()
     schedule: dict[UUID, list[Assignment]] = defaultdict(list)
     locked_request_ids = {item.request_id for item in snapshot.locked_assignments}
@@ -176,6 +185,12 @@ def validate_candidate(snapshot: PlanningSnapshot, candidate: PlanCandidate) -> 
         if request.id in seen:
             errors.append({"code": "duplicate_assignment", "request_id": str(request.id)})
         seen.add(request.id)
+        if assignment.location_id != request.location_id:
+            errors.append(
+                {"code": "request_location_mismatch", "request_id": str(request.id)}
+            )
+        if assignment.start_at < assignment.arrival_at:
+            errors.append({"code": "start_before_arrival", "request_id": str(request.id)})
         if assignment.finish_at > request.window_end or assignment.start_at < request.window_start:
             errors.append({"code": "window_violation", "request_id": str(request.id)})
         if assignment.finish_at > engineer.shift_end or assignment.start_at < engineer.shift_start:
@@ -197,27 +212,41 @@ def validate_candidate(snapshot: PlanningSnapshot, candidate: PlanCandidate) -> 
             errors.append({"code": "invalid_route_positions", "engineer_id": str(engineer_id)})
         previous_finish = engineer.available_from
         previous_location = engineer.available_location_id
-        matrix = snapshot.travel_by_profile.get("driving")
-        location_index = {item: index for index, item in enumerate(snapshot.location_ids)}
         for assignment in ordered:
             if assignment.from_location_id != previous_location:
                 errors.append(
                     {"code": "route_continuity_violation", "request_id": str(assignment.request_id)}
                 )
-            if assignment.request_id not in locked_request_ids and matrix is not None:
+            if assignment.location_id not in location_index or previous_location not in location_index:
+                errors.append(
+                    {"code": "unknown_route_location", "request_id": str(assignment.request_id)}
+                )
+            elif (
+                assignment.request_id not in locked_request_ids
+                and matrix is not None
+                and matrix_is_valid
+            ):
                 cell = matrix.cells[location_index[previous_location]][location_index[assignment.location_id]]
-                if (
+                if cell.duration_seconds is None or cell.distance_meters is None:
+                    errors.append(
+                        {"code": "unreachable_assignment", "request_id": str(assignment.request_id)}
+                    )
+                elif (
                     cell.duration_seconds != assignment.travel_seconds
                     or cell.distance_meters != assignment.distance_meters
                 ):
                     errors.append(
                         {"code": "travel_matrix_mismatch", "request_id": str(assignment.request_id)}
                     )
-                expected_arrival = previous_finish + timedelta(seconds=assignment.travel_seconds)
-                if assignment.arrival_at != expected_arrival:
-                    errors.append(
-                        {"code": "arrival_time_mismatch", "request_id": str(assignment.request_id)}
-                    )
+                if cell.duration_seconds is not None:
+                    expected_arrival = previous_finish + timedelta(seconds=cell.duration_seconds)
+                    if assignment.arrival_at != expected_arrival:
+                        errors.append(
+                            {
+                                "code": "arrival_time_mismatch",
+                                "request_id": str(assignment.request_id),
+                            }
+                        )
             previous_finish = assignment.finish_at
             previous_location = assignment.location_id
         for previous, current in zip(ordered, ordered[1:], strict=False):
@@ -226,6 +255,14 @@ def validate_candidate(snapshot: PlanningSnapshot, candidate: PlanCandidate) -> 
     unassigned_ids = [item.request_id for item in candidate.unassigned]
     if len(unassigned_ids) != len(set(unassigned_ids)):
         errors.append({"code": "duplicate_unassigned"})
+    assigned_and_unassigned = seen & set(unassigned_ids)
+    if assigned_and_unassigned:
+        errors.append(
+            {
+                "code": "assigned_and_unassigned",
+                "request_ids": [str(item) for item in sorted(assigned_and_unassigned, key=str)],
+            }
+        )
     covered = seen | set(unassigned_ids)
     expected = set(request_by_id)
     if covered != expected:
@@ -240,7 +277,12 @@ def validate_candidate(snapshot: PlanningSnapshot, candidate: PlanCandidate) -> 
     actual = {item.request_id: item for item in candidate.assignments}
     for request_id, expected_assignment in locked.items():
         result = actual.get(request_id)
-        if result is None or result.engineer_id != expected_assignment.engineer_id:
+        if result is None or (
+            result.engineer_id != expected_assignment.engineer_id
+            or result.location_id != expected_assignment.location_id
+            or result.start_at != expected_assignment.start_at
+            or result.finish_at != expected_assignment.finish_at
+        ):
             errors.append({"code": "locked_assignment_changed", "request_id": str(request_id)})
     if errors:
         raise DomainError(

@@ -11,10 +11,12 @@
 | P0-01 | Согласовать residual planner contract | Олег + Юрий; backend участвует | OPEN | Future-only; anchors≥T; preserved prefix; day-active IDs; complete/disjoint result; units/outcome/version описаны и проверены contract cases |
 | P0-02 | Выбрать window policy и unavailable-current policy | TEAM_DECISION_REQUIRED | NEEDS_DECISION | Explicit START vs FINISH decision; текущая работа не завершена/переназначена молча; правило записано с provenance |
 | P0-03 | ActualState(T) reader / demo input | Даниил, контракт Олега | OPEN | Статусы/времена/attribution/position/source age согласованы на T; unknown не заменяется офисом; historical import state учтён явно |
-| P0-04 | Усилить independent validator | Юрий + backend; Олег residual invariants | OPEN | Reject start<arrival, wrong destination, start<T, bad/missing matrix, assigned∩unassigned, changed preserved portion |
+| P0-04 | Усилить independent validator | Юрий + backend; Олег residual invariants | IN_PROGRESS | Reject start<arrival, wrong destination, start<T, bad/missing matrix, assigned∩unassigned, changed preserved portion |
 | P0-05 | Исправить unavailable + lock boundary | Олег + Юрий + backend | OPEN | A исключён только из future roster; preserved/current учтены вне solver; нет KeyError, zero unreachable или duplicate service |
 
 Эти задачи не требуют предварительного большого refactor SqlGateway. Pure builder/tests возможны на explicit state; production integration ждёт P0.
+
+Прогресс P0-04 от 2026-09-19: validator отклоняет `start < arrival`, неверный адрес заявки, пересечение assigned/unassigned, отсутствующую или повреждённую driving matrix, unreachable-дугу и изменение engineer/location/start/finish locked assignment. Добавлены regression cases; полный suite — 27 passed, Ruff и mypy(src) прошли. Проверка `start >= T` остаётся открытой до P0-03/P0-05: текущий snapshot пока содержит весь день и иначе будет отклонять собственный full-day candidate вместо фикса причины.
 
 ## P1 — до demo
 

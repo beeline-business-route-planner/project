@@ -68,6 +68,17 @@ PostgreSQL: после запуска Docker пользователем испо
 - Две CLI-роли остановились usage limit до final report. Четыре роли завершили final conclusions, шесть запущены.
 - Возможность восстановить точный stdout после cleanup отсутствует; данный протокол сохраняет результаты и границы, не обещает raw evidence files.
 
+## Проверка после начала исправлений
+
+2026-09-19, P0-04 (частично):
+
+- `.venv/bin/python -m pytest -p no:cacheprovider` — 27 passed, 2 прежних deprecation warnings;
+- `.venv/bin/python -m ruff check . --no-cache` — All checks passed;
+- `.venv/bin/python -m mypy src` — Success, 23 source files;
+- `MYPYPATH=src .venv/bin/python -m mypy tests/test_planner_contract.py` — Success.
+
+Первая попытка pytest после `uv sync --no-install-project` не собрала tests: пакет не был установлен и PYTHONPATH не был задан. После обычного `uv sync --frozen`, соответствующего README, suite прошёл. Отдельный запуск mypy для test-файла без `MYPYPATH=src` видел установленный editable package как untyped; повтор с исходным деревом прошёл. Эти две ошибки относятся к командам проверки, не к runtime-поведению приложения. После реорганизации test-файла editable marker среды перестал добавлять пакет в import path; `uv pip install -e .` восстановил локальную установку, после чего полный suite из 27 tests прошёл.
+
 ## Контрольные суммы
 
 Контрольные суммы обновлены при переносе проверенного backend в командный monorepo. Они фиксируют содержимое первого импортирующего коммита; локальные environment/cache/data файлы не входят.
