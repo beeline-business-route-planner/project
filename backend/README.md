@@ -1,74 +1,117 @@
-# Project
+# Beeline Business Planning Backend
 
-Готовый шаблон backend-приложения на FastAPI: DI на dishka, SQLAlchemy + Alembic,
-структурные логи, метрики Prometheus и полный docker-compose стек с мониторингом
-(Prometheus, Loki, Promtail, cAdvisor, Grafana).
+Модульный backend диспетчерского прототипа: импорт синтетических XLSX, версионированные снимки для
+алгоритмов, планирование, утверждение, события/факты, перепланирование, diff, журнал и XLSX/PDF.
 
-## Стек
+## Архитектура
 
-- **FastAPI** + **uvicorn**
-- **dishka** — dependency injection
-- **SQLAlchemy** (async) + **asyncpg** + **Alembic** — БД и миграции
-- **pydantic-settings** — конфиг из `config.toml` / `.env` / переменных окружения
-- **prometheus-client** — метрики приложения (`/metrics`)
-- **Prometheus + Grafana + Loki + Promtail + cAdvisor** — мониторинг и логи в docker-compose
-- **ruff** + **mypy** — линт и типизация
+Зависимости направлены внутрь: `presentation → application → domain`; `infrastructure` реализует
+порты application. Domain не импортирует FastAPI, SQLAlchemy или httpx. Математическое ядро
+заменяется через `PlanningAlgorithm`; встроенный `deterministic-first-fit-v1` — рабочий тестовый
+адаптер, а не заявление о качестве оптимизации.
 
-## Быстрый старт
+Краткая ER-модель и нормализация: [docs/ER_MODEL.md](docs/ER_MODEL.md). Решения о версиях,
+фактах и провайдерах: [docs/ADR.md](docs/ADR.md). Примеры ответов: [docs/API_EXAMPLES.md](docs/API_EXAMPLES.md).
+Контракт, CORS и поток для frontend: [docs/FRONTEND_INTEGRATION.md](docs/FRONTEND_INTEGRATION.md).
+
+## Локальный запуск
 
 ```bash
 cp .env.example .env
-cp config.toml.example config.toml
-make up
+docker compose up -d db
+uv sync
+uv run alembic upgrade head
+uv run uvicorn beeline_backend.main:app --reload
 ```
 
-Приложение поднимется на `http://localhost:8000`, Grafana — на `http://localhost:3000`
-(логин/пароль из `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` в `.env`).
-
-Локально без docker (нужен поднятый Postgres):
+Альтернативно весь стек запускается одной командой; API-контейнер до старта
+автоматически применяет Alembic-миграции:
 
 ```bash
-make upgrade   # применить миграции
-make run       # запустить приложение
+docker compose up -d --build
 ```
 
-## Команды Makefile
+OpenAPI: `http://localhost:8000/docs`. Health/readiness: `/api/v1/health`, `/api/v1/readiness`.
+Машиночитаемая схема для генерации TypeScript-клиента: `http://localhost:8000/openapi.json`.
 
-```
-make help
-```
+Импортируйте только один из файлов вида `Восток Синтетические данные.xlsx`,
+`Югоцентр Синтетические данные.xlsx`, `Юго-восток Синтетические данные.xlsx`. Имена с
+`Контрольное распределение`, lock-файлы `~$...` и произвольные XLSX отклоняются.
 
-- `up` / `down` / `build` / `logs` / `ps` — управление docker-compose стеком
-- `upgrade` / `downgrade REV=<rev>` / `migrate MSG=<msg>` — миграции Alembic
-- `format` / `lint` / `lint-fix` / `typecheck` / `check` — качество кода
-- `run` — запуск приложения локально
-
-## Структура
-
-```
-src/
-  api/            корневой роутер и исключения API
-  config/         конфигурация (pydantic-settings)
-  core/
-    db/           модели, DTO, репозитории, unit of work
-    di/           провайдеры dishka
-    metrics.py    Prometheus-мидлварь
-    middleware.py логирующая мидлварь (request id, статус, длительность)
-    logging.py    настройка структурных логов
-  main.py         сборка FastAPI-приложения
-deploy/           конфиги prometheus/promtail/grafana для docker-compose
-alembic/          миграции
+```bash
+curl -F 'file=@Dataset/Восток Синтетические данные.xlsx' \
+  -H 'Idempotency-Key: demo-east-v1' http://localhost:8000/api/v1/imports
 ```
 
-## Конфигурация
+CLI для импорта демо-набора после миграции:
 
-Настройки читаются из `config.toml` (см. `config.toml.example`) и переопределяются
-переменными окружения с разделителем `__`, например `DATABASE__POSTGRES_HOST`.
-Секреты для docker-compose (пароли Postgres и Grafana) — в `.env` (см. `.env.example`).
+```bash
+uv run beeline-backend seed-demo 'Dataset/Восток Синтетические данные.xlsx'
+```
 
-## Использование как шаблона
+## API
 
-Это GitHub template repository — можно создать новый репозиторий кнопкой
-**Use this template** вместо `git clone`. При первом пуше в новом репозитории
-автоматически отработает workflow, который подставит имя проекта вместо плейсхолдеров
-(`Project`, `project`, `project`) и удалит сам себя.
+- `POST /api/v1/imports` — импорт и построчные ошибки.
+- `GET /api/v1/scenarios`, `GET /api/v1/requests`, `GET /api/v1/requests/{id}`.
+- `GET /api/v1/engineers`, `GET /api/v1/engineers/{id}/route`.
+- `POST /api/v1/requests` — новая заявка + идемпотентное событие + предложение перепланирования.
+- `POST /api/v1/requests/{id}/facts` — append-only подтверждённый факт.
+- `POST /api/v1/plans/run`, `GET /api/v1/planning-runs/{id}`.
+- `GET /api/v1/plans`, `GET /api/v1/plans/{id}`, `POST /api/v1/plans/{id}/approve`.
+- `POST /api/v1/events` — событие + один новый кандидат.
+- `POST /api/v1/plans/{id}/manual-change` — новый полностью пересчитанный черновик.
+- `GET /api/v1/plans/diff`, `GET /api/v1/plans/{id}/metrics`.
+- `GET /api/v1/audit`, `GET /api/v1/dashboard`.
+- `GET /api/v1/plans/{id}/reports/xlsx|pdf`.
+
+## Провайдеры
+
+Конфигурация по умолчанию использует 2ГИС: `GEOCODER_MODE=dgis` для Geocoder API и
+`ROUTING_PROVIDER=dgis` для Distance Matrix API и Routing API. Ключ задаётся только через
+`DGIS_API_KEY` в локальном `.env`. Матрица направленная, разбивается на блоки до 25 источников
+и 25 назначений; недостижимые пары хранятся как `null`. Для выбранных маршрутов запрашивается
+детальная геометрия 2ГИС в WKT и преобразуется в GeoJSON `[longitude, latitude]`.
+
+Доступ к Geocoder, Distance Matrix и Routing проверяется независимо. Отсутствующий scope возвращает
+диагностируемый `503`, без скрытого fallback на другого провайдера. Лимиты демо-ключа задаются
+кабинетом 2ГИС. `nominatim`, `osrm` и `demo` оставлены как явно выбираемые резервные/тестовые адаптеры.
+Геокодер проверяет код `meta.code` даже при HTTP 200 и поддерживает оба описанных в OpenAPI
+источника координат: `items.point` и WKT `items.geometry.centroid`.
+
+## Frontend и CORS
+
+CORS конфигурируется через `CORS_ORIGINS`, `CORS_ALLOW_METHODS`, `CORS_ALLOW_HEADERS`,
+`CORS_EXPOSE_HEADERS`, `CORS_ALLOW_CREDENTIALS` и `CORS_MAX_AGE`. По умолчанию разрешены Vite
+(`http://localhost:5173`) и React dev server (`http://localhost:3000`). Ключ 2ГИС остаётся
+только на backend и никогда не передаётся в браузер.
+
+## Проверки
+
+```bash
+docker compose up -d db
+uv sync
+uv run ruff check .
+uv run mypy src
+uv run pytest
+uv run alembic upgrade head
+uv run alembic downgrade base
+uv run alembic upgrade head
+```
+
+`downgrade base` — разрушительная проверка отката: она удаляет схему и все данны. После неё
+всегда выполняйте `upgrade head`; на ценной базе проверяйте downgrade только на отдельном тестовом
+экземпляре PostgreSQL.
+
+PostgreSQL опубликован на `localhost:55432`, чтобы не конфликтовать с уже установленной локальной БД.
+
+Приложение и миграции по умолчанию используют PostgreSQL 16 через `asyncpg`. SQLite подключён
+только в тестах как быстрый изолированный адаптер и не является поддерживаемой production-БД.
+
+## Известные ограничения и точки подключения
+
+- Реальные алгоритмы подключаются реализациями `PlanningAlgorithm`; снимок и валидатор стабильны.
+- Входящие факты промышленной FSM подключаются к use case `record_fact`; demo использует ручной API.
+- Демо-ключ 2ГИС может не включать все три API и имеет лимиты; приложение проверяет каждую возможность отдельно.
+- Demo-маршрутизатор строит геодезические расстояния. Для дорожной геометрии выберите OSRM.
+- Фоновая очередь хранится в `outbox_jobs`; текущий прототип исполняет расчёт синхронно после
+  транзакционной постановки события. Внешний worker можно добавить без изменения домена/API.

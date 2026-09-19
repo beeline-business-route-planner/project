@@ -36,3 +36,8 @@ htmlcov/
 
 # Logs
 *.log
+
+# Local generated artifacts
+*.db
+reports/
+tmp/

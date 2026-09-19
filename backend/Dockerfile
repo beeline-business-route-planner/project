@@ -1,34 +1,11 @@
-FROM python:3.14-slim AS builder
+FROM python:3.12-slim
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
-
-ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
-
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project --no-dev
-
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
+COPY pyproject.toml README.md alembic.ini ./
+COPY alembic ./alembic
 COPY src ./src
-RUN uv sync --frozen --no-dev
-
-
-FROM python:3.14-slim
-
-RUN useradd --create-home --shell /bin/bash app
-WORKDIR /app
-
-COPY --from=builder --chown=app:app /app/.venv /app/.venv
-COPY --from=builder --chown=app:app /app/src /app/src
-COPY --chown=app:app config.toml ./config.toml
-COPY --chown=app:app alembic.ini ./alembic.ini
-COPY --chown=app:app alembic ./alembic
-
-USER app
-
-ENV PATH="/app/.venv/bin:$PATH"
-
+RUN pip install --no-cache-dir .
 EXPOSE 8000
-
-CMD ["python", "-m", "src"]
+CMD ["uvicorn", "beeline_backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
