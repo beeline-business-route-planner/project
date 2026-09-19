@@ -21,6 +21,7 @@ from beeline_backend.application.contracts import (
     LockedAssignmentData,
     PlanningSnapshot,
     ReportAssignment,
+    ReportException,
     RequestData,
     RouteMatrix,
     TravelSnapshot,
@@ -1555,15 +1556,17 @@ class SqlGateway:
                 .order_by(EngineerRow.name, AssignmentRow.position)
             )
         ).all()
-        unassigned_request_ids = list(
-            await self._session.scalars(
-                select(UnassignedRequestRow.request_id).where(
-                    UnassignedRequestRow.plan_id == plan_id
-                )
+        unassigned_rows = (
+            await self._session.execute(
+                select(UnassignedRequestRow, RequestRow, LocationRow)
+                .join(RequestRow, UnassignedRequestRow.request_id == RequestRow.id)
+                .join(LocationRow, RequestRow.location_id == LocationRow.id)
+                .where(UnassignedRequestRow.plan_id == plan_id)
             )
-        )
+        ).all()
         statuses = await self._latest_statuses(
-            [request.id for _, request, _, _ in rows] + unassigned_request_ids
+            [request.id for _, request, _, _ in rows]
+            + [request.id for _, request, _ in unassigned_rows]
         )
         report_version = hashlib.sha256(
             json.dumps(
@@ -1608,6 +1611,33 @@ class SqlGateway:
                 else (item.text_value or "")
                 for item in metrics_rows
             },
+            exceptions=[
+                ReportException(
+                    category=(
+                        "cancelled"
+                        if statuses[request.id].status == RequestStatus.CANCELLED.value
+                        else "unassigned"
+                    ),
+                    request_external_id=request.external_id,
+                    address=location.address,
+                    confirmed_status=statuses[request.id].status,
+                    reason_code=unassigned.reason_code,
+                    explanation=unassigned.explanation,
+                )
+                for unassigned, request, location in unassigned_rows
+            ]
+            + [
+                ReportException(
+                    category="cancelled",
+                    request_external_id=request.external_id,
+                    address=location.address,
+                    confirmed_status=statuses[request.id].status,
+                    reason_code="cancelled",
+                    explanation=statuses[request.id].reason,
+                )
+                for _, request, _, location in rows
+                if statuses[request.id].status == RequestStatus.CANCELLED.value
+            ],
         )
 
     async def route_coordinate_sets(

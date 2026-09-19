@@ -87,12 +87,27 @@ class XlsxReportRenderer:
                     item.distance_meters,
                 ]
             )
+        exception_sheet = workbook.create_sheet("Исключения")
+        exception_sheet.append(
+            ["Категория", "Заявка", "Адрес", "Статус", "Код причины", "Пояснение"]
+        )
+        for exception in report.exceptions:
+            exception_sheet.append(
+                [
+                    exception.category,
+                    _excel_text(exception.request_external_id),
+                    _excel_text(exception.address),
+                    _excel_text(exception.confirmed_status),
+                    _excel_text(exception.reason_code),
+                    _excel_text(exception.explanation),
+                ]
+            )
         metric_sheet = workbook.create_sheet("Метрики")
         metric_sheet.append(["Метрика", "Значение"])
         for code, value in sorted(report.metrics.items()):
             metric_sheet.append([_excel_text(code), _excel_value(value)])
         header_fill = PatternFill("solid", fgColor="4A0072")
-        for current in (sheet, metric_sheet):
+        for current in (sheet, exception_sheet, metric_sheet):
             header_row = 6 if current is sheet else 1
             for cell in current[header_row]:
                 cell.fill = header_fill
@@ -210,6 +225,39 @@ class PdfReportRenderer:
         )
         story.append(table)
         story.append(Spacer(1, 5 * mm))
+        if report.exceptions:
+            story.append(Paragraph("Неназначенные и отменённые", styles["Heading2"]))
+            exception_data = [
+                ["Категория", "Заявка", "Адрес", "Статус", "Причина"]
+            ] + [
+                [
+                    exception.category,
+                    exception.request_external_id,
+                    exception.address,
+                    exception.confirmed_status,
+                    f"{exception.reason_code}: {exception.explanation}",
+                ]
+                for exception in report.exceptions
+            ]
+            exception_table = Table(
+                exception_data,
+                repeatRows=1,
+                colWidths=[25 * mm, 25 * mm, 85 * mm, 28 * mm, 90 * mm],
+            )
+            exception_table.setStyle(
+                TableStyle(
+                    [
+                        ("FONTNAME", (0, 0), (-1, -1), self._font),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4A0072")),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 7),
+                    ]
+                )
+            )
+            story.append(exception_table)
+            story.append(Spacer(1, 5 * mm))
         story.append(Paragraph("Метрики", styles["Heading2"]))
         metric_data = [[code, str(value)] for code, value in sorted(report.metrics.items())]
         metric_table = Table(metric_data, colWidths=[75 * mm, 40 * mm])

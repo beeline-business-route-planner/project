@@ -157,6 +157,15 @@ class ReportAssignment(BaseModel):
     distance_meters: int
 
 
+class ReportException(BaseModel):
+    category: Literal["unassigned", "cancelled"]
+    request_external_id: str
+    address: str
+    confirmed_status: str
+    reason_code: str
+    explanation: str
+
+
 class DayReport(BaseModel):
     report_version: str
     plan_id: UUID
@@ -166,4 +175,4 @@ class DayReport(BaseModel):
     interim: bool
     assignments: list[ReportAssignment]
     metrics: dict[str, float | int | str]
-
+    exceptions: list[ReportException] = Field(default_factory=list)

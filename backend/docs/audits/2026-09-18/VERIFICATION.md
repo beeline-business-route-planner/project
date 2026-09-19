@@ -87,7 +87,7 @@ PostgreSQL: после запуска Docker пользователем испо
 
 2026-09-19, P1-12: full pytest — 38 passed; Ruff — passed; mypy(src) — passed. MockTransport cases подтверждают controlled `DependencyUnavailableError` для negative/out-of-range 2GIS indices, array JSON, malformed route WKT, malformed Nominatim/OSRM JSON и неправильной размерности OSRM matrix. Live responses и provider-specific optional fields этой проверкой не охвачены.
 
-2026-09-19, P1-04 (частично): full pytest — 39 passed; Ruff — passed; mypy(src) — passed. HTTP regression записывает SENT → EN_ROUTE → IN_PROGRESS(actual_start) → COMPLETED(actual_finish), повторно открывает XLSX и подтверждает оба actual timestamps и новую `report_version`. Отдельный вывод unassigned/cancelled ещё не проверен и не реализован.
+2026-09-19, P1-04: full pytest — 39 passed; Ruff — passed; mypy(src) — passed. HTTP regression записывает SENT → EN_ROUTE → IN_PROGRESS(actual_start) → COMPLETED(actual_finish), повторно открывает XLSX и подтверждает оба actual timestamps и новую `report_version`. Replanning cancellation regression подтверждает отдельную строку cancelled в листе «Исключения»; renderer test подтверждает unassigned section и XLSX text escaping. PDF успешно рендерит тот же раздел.
 
 ## Контрольные суммы
 

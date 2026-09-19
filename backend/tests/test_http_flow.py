@@ -380,6 +380,24 @@ def test_cancellation_event_removes_request_from_active_routes(
         if item["request_id"] == cancelled_request_id
     } == {"cancelled"}
 
+    report = client.get(
+        f"/api/v1/plans/{event.json()['replanning']['plan_id']}/reports/xlsx"
+    )
+    assert report.status_code == 200, report.text
+    exception_rows = load_workbook(BytesIO(report.content))["Исключения"].iter_rows(
+        min_row=2, values_only=True
+    )
+    cancelled_external_id = next(
+        item["external_id"] for item in requests if item["id"] == cancelled_request_id
+    )
+    assert any(
+        row[0] == "cancelled"
+        and str(row[1]) == cancelled_external_id
+        and row[3] == "CANCELLED"
+        and row[4] == "cancelled"
+        for row in exception_rows
+    )
+
     current_requests = client.get(
         "/api/v1/requests",
         params={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
