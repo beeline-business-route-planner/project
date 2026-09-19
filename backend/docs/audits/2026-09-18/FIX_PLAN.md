@@ -24,7 +24,7 @@
 |---|---|---|---|---|
 | P1-01 | ReplanningService / ResidualProblemBuilder для unavailable | Олег | OPEN | A1/A2 immutable, A3/A4 residual, B/C actual anchors; новый draft не активируется автоматически |
 | P1-02 | UUID события до outbox/audit | Даниил | DONE | Валидные ссылки, GET audit 200, regression test |
-| P1-03 | Retry после неудачного event/run | Даниил; Олег orchestration | OPEN | Тот же idempotency key восстанавливает/возвращает результат, не duplicate-without-result; job/run state согласован |
+| P1-03 | Retry после неудачного event/run | Даниил; Олег orchestration | DONE | Тот же idempotency key восстанавливает/возвращает результат, не duplicate-without-result; job/run state согласован |
 | P1-04 | Actual timestamps / полный report | Даниил | DONE | IN_PROGRESS(start)→COMPLETED(finish) сохраняет оба; unassigned/cancelled отражены отдельно; report freshness учитывает facts |
 | P1-05 | Invalid input→422 | Даниил | DONE | Invalid planning_date/reversed window не дают 500; validation ctx безопасно сериализуется |
 | P1-06 | Manual-change draft approval | Даниил | OPEN | Child initial draft имеет корректную base semantics; future edits не меняют completed/current |
@@ -48,6 +48,8 @@ P1-10 завершён 2026-09-19: уровни логирования `httpx` �
 P1-12 завершён 2026-09-19: 2GIS routing проверяет object shape, полноту matrix block, диапазоны и уникальность индексов, неотрицательные конечные metrics и WKT coordinates. Nominatim и OSRM преобразуют malformed JSON в `DependencyUnavailableError`; OSRM дополнительно проверяет размерность и значения matrix. Negative/out-of-range 2GIS indices, array JSON, malformed WKT/JSON и bad OSRM matrix shape покрыты regression cases. Полный suite — 38 passed; Ruff/mypy(src) прошли. Live provider responses не использовались.
 
 P1-04 завершён 2026-09-19: каждый новый fact переносит ранее подтверждённые `actual_start`/`actual_finish`, поэтому последовательность IN_PROGRESS(start) → COMPLETED(finish) сохраняет оба значения. `report_version` теперь является hash plan input и последних fact event IDs для assigned и unassigned requests. XLSX и PDF содержат отдельный раздел для неназначенных и отменённых заявок с причиной и подтверждённым статусом. HTTP/XLSX regressions подтверждают сохранение времён, смену версии и вывод отменённой заявки; renderer test покрывает неназначенную заявку. Полный suite — 39 passed, Ruff/mypy(src) прошли.
+
+P1-03 завершён 2026-09-19: event processing и связанный outbox job переходят в running/failed/succeeded с числом попыток; успешный result сохраняется в job payload. Duplicate с готовым result возвращает тот же plan, failed/queued duplicate повторно запускает обработку, running duplicate получает controlled conflict. `CancelledError` помечает planning run и event job как failed. Regression с planner, падающим на первой попытке, подтверждает recovery на втором вызове и cached result без дополнительного плана на третьем. Полный suite — 40 passed; Ruff/mypy(src) прошли. Конкурентный retry на PostgreSQL отдельно не проверялся.
 
 ## P2 — хорошо иметь
 

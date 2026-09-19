@@ -1229,6 +1229,7 @@ class SqlGateway:
         idempotency_key: str,
         actor: str,
     ) -> dict[str, object]:
+        job_key = f"event:{scenario_id}:{idempotency_key}"
         existing = await self._session.scalar(
             select(DayEventRow).where(
                 DayEventRow.scenario_id == scenario_id,
@@ -1236,7 +1237,17 @@ class SqlGateway:
             )
         )
         if existing is not None:
-            return {"event_id": existing.id, "duplicate": True}
+            job = await self._session.scalar(
+                select(OutboxJobRow).where(OutboxJobRow.idempotency_key == job_key)
+            )
+            replanning = job.payload.get("result") if job is not None else None
+            return {
+                "event_id": existing.id,
+                "duplicate": True,
+                "processing_state": existing.processing_state,
+                "job_key": job_key,
+                "replanning": replanning if isinstance(replanning, dict) else None,
+            }
         now = self._now()
         if event_type == "request_cancelled":
             raw_request_id = payload.get("request_id")
@@ -1322,7 +1333,7 @@ class SqlGateway:
         job = OutboxJobRow(
             job_type="replan",
             status="queued",
-            idempotency_key=f"event:{scenario_id}:{idempotency_key}",
+            idempotency_key=job_key,
             payload={"event_id": str(event.id), "scenario_id": str(scenario_id)},
             available_at=now,
             attempts=0,
@@ -1338,7 +1349,69 @@ class SqlGateway:
             details={"event_type": event_type},
         )
         await self._session.commit()
-        return {"event_id": event.id, "duplicate": False}
+        return {
+            "event_id": event.id,
+            "duplicate": False,
+            "processing_state": event.processing_state,
+            "job_key": job_key,
+            "replanning": None,
+        }
+
+    async def start_event_replanning(self, event_id: UUID, job_key: str) -> None:
+        event = await self._session.scalar(
+            select(DayEventRow).where(DayEventRow.id == event_id).with_for_update()
+        )
+        job = await self._session.scalar(
+            select(OutboxJobRow)
+            .where(OutboxJobRow.idempotency_key == job_key)
+            .with_for_update()
+        )
+        if event is None or job is None:
+            raise NotFoundError("replanning_job_not_found", "Event replanning job was not found")
+        if event.processing_state == "running":
+            raise ConflictError("replanning_in_progress", "Event replanning is already running")
+        if event.processing_state == "succeeded":
+            raise ConflictError(
+                "replanning_result_missing",
+                "Event replanning succeeded but its result is unavailable",
+            )
+        event.processing_state = "running"
+        job.status = "running"
+        job.attempts += 1
+        job.last_error = None
+        await self._session.commit()
+
+    async def complete_event_replanning(
+        self, event_id: UUID, job_key: str, result: dict[str, object]
+    ) -> None:
+        event = await self._session.get(DayEventRow, event_id)
+        job = await self._session.scalar(
+            select(OutboxJobRow).where(OutboxJobRow.idempotency_key == job_key)
+        )
+        if event is None or job is None:
+            raise NotFoundError("replanning_job_not_found", "Event replanning job was not found")
+        serialized_result = {
+            key: str(value) if isinstance(value, UUID) else value for key, value in result.items()
+        }
+        event.processing_state = "succeeded"
+        job.status = "succeeded"
+        job.payload = {**job.payload, "result": serialized_result}
+        job.last_error = None
+        await self._session.commit()
+
+    async def fail_event_replanning(
+        self, event_id: UUID, job_key: str, error_code: str
+    ) -> None:
+        event = await self._session.get(DayEventRow, event_id)
+        job = await self._session.scalar(
+            select(OutboxJobRow).where(OutboxJobRow.idempotency_key == job_key)
+        )
+        if event is None or job is None:
+            return
+        event.processing_state = "failed"
+        job.status = "failed"
+        job.last_error = error_code
+        await self._session.commit()
 
     async def diff_plans(self, old_plan_id: UUID, new_plan_id: UUID) -> dict[str, object]:
         old = await self._session.get(PlanRow, old_plan_id)

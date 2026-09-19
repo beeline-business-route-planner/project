@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime
 from pathlib import Path
 from uuid import UUID
@@ -78,6 +79,11 @@ class BackendService:
                 self._planner.name,
                 route_geometries,
             )
+        except asyncio.CancelledError:
+            await self.gateway.mark_run_failed(
+                run_id, "planning_cancelled", "Planning run was cancelled"
+            )
+            raise
         except DomainError as exc:
             await self.gateway.mark_run_failed(run_id, exc.code, exc.message)
             raise
@@ -148,17 +154,42 @@ class BackendService:
             idempotency_key,
             actor,
         )
-        if event["duplicate"]:
-            return {**event, "replanning": None}
-        plans = await self.gateway.list_plans(scenario_id, planning_date)
-        active = next((item for item in plans if item["status"] == "approved"), None)
-        replanning = await self.run_plan(
-            scenario_id,
-            planning_date,
-            active["id"] if active else None,  # type: ignore[arg-type]
-            effective_at,
-        )
-        return {**event, "replanning": replanning}
+        event_id = event.get("event_id")
+        job_key = event.get("job_key")
+        if not isinstance(event_id, UUID) or not isinstance(job_key, str):
+            raise DomainError(
+                "invalid_event_processing_state",
+                "Event processing metadata is incomplete",
+            )
+        duplicate = event.get("duplicate") is True
+        cached_replanning = event.get("replanning")
+        if duplicate and isinstance(cached_replanning, dict):
+            return {
+                "event_id": event_id,
+                "duplicate": True,
+                "replanning": cached_replanning,
+            }
+        await self.gateway.start_event_replanning(event_id, job_key)
+        try:
+            plans = await self.gateway.list_plans(scenario_id, planning_date)
+            active = next((item for item in plans if item["status"] == "approved"), None)
+            replanning = await self.run_plan(
+                scenario_id,
+                planning_date,
+                active["id"] if active else None,  # type: ignore[arg-type]
+                effective_at,
+            )
+        except asyncio.CancelledError:
+            await self.gateway.fail_event_replanning(event_id, job_key, "planning_cancelled")
+            raise
+        except DomainError as exc:
+            await self.gateway.fail_event_replanning(event_id, job_key, exc.code)
+            raise
+        except Exception as exc:
+            await self.gateway.fail_event_replanning(event_id, job_key, type(exc).__name__)
+            raise
+        await self.gateway.complete_event_replanning(event_id, job_key, replanning)
+        return {"event_id": event_id, "duplicate": duplicate, "replanning": replanning}
 
     async def record_fact(
         self,

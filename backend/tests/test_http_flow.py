@@ -6,6 +6,24 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
+from beeline_backend.application.contracts import PlanningSnapshot
+from beeline_backend.application.planner import DeterministicPlanningAlgorithm
+from beeline_backend.domain.errors import DomainError
+from beeline_backend.domain.model import PlanCandidate
+
+
+class FailOncePlanner(DeterministicPlanningAlgorithm):
+    name = "fail-once-test-planner"
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def plan(self, snapshot: PlanningSnapshot) -> PlanCandidate:
+        self.attempts += 1
+        if self.attempts == 1:
+            raise DomainError("forced_planning_failure", "Synthetic first-attempt failure")
+        return await super().plan(snapshot)
+
 
 def _import(client: TestClient, content: bytes) -> tuple[str, str]:
     response = client.post(
@@ -144,6 +162,43 @@ def test_import_plan_approve_replan_diff_and_reports(
     )
     assert dashboard.status_code == 200
     assert dashboard.json()["active_plan"]["id"] == second_plan
+
+
+def test_failed_event_replanning_resumes_with_same_idempotency_key(
+    client: TestClient, synthetic_xlsx: bytes
+) -> None:
+    _, scenario_id = _import(client, synthetic_xlsx)
+    clock, geocoder, router, _planner = client.app.state.providers
+    fail_once = FailOncePlanner()
+    client.app.state.providers = (clock, geocoder, router, fail_once)
+    payload = {
+        "scenario_id": scenario_id,
+        "planning_date": "2026-08-17",
+        "event_type": "fact_changed",
+        "effective_at": "2026-08-17T10:00:00+03:00",
+        "payload": {"note": "retry regression"},
+        "idempotency_key": "retry-failed-event-1",
+        "actor": "dispatcher",
+    }
+
+    first = client.post("/api/v1/events", json=payload)
+    assert first.status_code == 422, first.text
+    assert first.json()["code"] == "forced_planning_failure"
+
+    retry = client.post("/api/v1/events", json=payload)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["duplicate"] is True
+    recovered_plan_id = retry.json()["replanning"]["plan_id"]
+
+    cached = client.post("/api/v1/events", json=payload)
+    assert cached.status_code == 200, cached.text
+    assert cached.json()["duplicate"] is True
+    assert cached.json()["replanning"]["plan_id"] == recovered_plan_id
+    plans = client.get(
+        "/api/v1/plans",
+        params={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
+    )
+    assert [item["id"] for item in plans.json()] == [recovered_plan_id]
 
 
 def test_planned_finish_does_not_create_completed_fact(
@@ -420,4 +475,4 @@ def test_cancellation_event_removes_request_from_active_routes(
     )
     assert duplicate.status_code == 200, duplicate.text
     assert duplicate.json()["duplicate"] is True
-    assert duplicate.json()["replanning"] is None
+    assert duplicate.json()["replanning"] == event.json()["replanning"]

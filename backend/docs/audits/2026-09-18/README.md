@@ -56,5 +56,6 @@
 | 2026-09-19 | Завершено P1-10 | HTTPX/HTTPCore не записывают URL с ключами на INFO-уровне | Да; 29 tests passed, Ruff/mypy passed |
 | 2026-09-19 | Завершено P1-12 | Адаптеры отклоняют повреждённые JSON, индексы, матрицы и WKT контролируемой ошибкой | Да; 38 tests passed, Ruff/mypy passed |
 | 2026-09-19 | Завершено P1-04 | Сохранены actual timestamps и freshness; unassigned/cancelled вынесены в отдельный раздел XLSX/PDF | Да; 39 tests passed, Ruff/mypy passed |
+| 2026-09-19 | Завершено P1-03 | Повтор failed event возобновляет replanning, а успешный duplicate возвращает сохранённый plan | Да; 40 tests passed, Ruff/mypy passed |
 
 Следующий предлагаемый шаг: P0-01/P0-02 — residual-контракт и спорные правила. Наличие этого предложения не запускает реализацию автоматически.

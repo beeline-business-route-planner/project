@@ -89,6 +89,8 @@ PostgreSQL: после запуска Docker пользователем испо
 
 2026-09-19, P1-04: full pytest — 39 passed; Ruff — passed; mypy(src) — passed. HTTP regression записывает SENT → EN_ROUTE → IN_PROGRESS(actual_start) → COMPLETED(actual_finish), повторно открывает XLSX и подтверждает оба actual timestamps и новую `report_version`. Replanning cancellation regression подтверждает отдельную строку cancelled в листе «Исключения»; renderer test подтверждает unassigned section и XLSX text escaping. PDF успешно рендерит тот же раздел.
 
+2026-09-19, P1-03: full pytest — 40 passed; Ruff — passed; mypy(src) — passed. Fail-once planner через HTTP сначала возвращает controlled 422 после сохранения event/failed run, затем тот же idempotency key успешно создаёт plan, а третий вызов возвращает cached plan ID без новой версии плана. Успешный cancellation duplicate также возвращает исходный replanning result. Конкурентный retry и аварийное завершение процесса проверкой не имитировались.
+
 ## Контрольные суммы
 
 Контрольные суммы обновлены при переносе проверенного backend в командный monorepo. Они фиксируют содержимое первого импортирующего коммита; локальные environment/cache/data файлы не входят.
