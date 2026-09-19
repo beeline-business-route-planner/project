@@ -594,6 +594,7 @@ class SqlGateway:
             processing_state="queued",
         )
         self._session.add(event)
+        await self._session.flush()
         self._session.add(
             OutboxJobRow(
                 job_type="replan",
@@ -1303,6 +1304,8 @@ class SqlGateway:
             payload=payload,
             processing_state="queued",
         )
+        self._session.add(event)
+        await self._session.flush()
         job = OutboxJobRow(
             job_type="replan",
             status="queued",
@@ -1312,7 +1315,7 @@ class SqlGateway:
             attempts=0,
             last_error=None,
         )
-        self._session.add_all([event, job])
+        self._session.add(job)
         await self._audit(
             scenario_id,
             "day_event_created",

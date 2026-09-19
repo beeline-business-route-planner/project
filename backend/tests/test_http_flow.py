@@ -70,8 +70,16 @@ def test_import_plan_approve_replan_diff_and_reports(
         },
     )
     assert event.status_code == 200, event.text
+    event_id = event.json()["event_id"]
     second_plan = event.json()["replanning"]["plan_id"]
     assert second_plan != first_plan
+
+    audit = client.get("/api/v1/audit", params={"scenario_id": scenario_id})
+    assert audit.status_code == 200, audit.text
+    day_event_audit = next(
+        item for item in audit.json() if item["action"] == "day_event_created"
+    )
+    assert day_event_audit["object_id"] == event_id
 
     diff = client.get(
         "/api/v1/plans/diff",

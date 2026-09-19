@@ -23,7 +23,7 @@
 | ID | Задача | Владелец | Статус | Критерий завершения |
 |---|---|---|---|---|
 | P1-01 | ReplanningService / ResidualProblemBuilder для unavailable | Олег | OPEN | A1/A2 immutable, A3/A4 residual, B/C actual anchors; новый draft не активируется автоматически |
-| P1-02 | UUID события до outbox/audit | Даниил | OPEN | Валидные ссылки, GET audit 200, regression test |
+| P1-02 | UUID события до outbox/audit | Даниил | DONE | Валидные ссылки, GET audit 200, regression test |
 | P1-03 | Retry после неудачного event/run | Даниил; Олег orchestration | OPEN | Тот же idempotency key восстанавливает/возвращает результат, не duplicate-without-result; job/run state согласован |
 | P1-04 | Actual timestamps / полный report | Даниил | OPEN | IN_PROGRESS(start)→COMPLETED(finish) сохраняет оба; unassigned/cancelled отражены отдельно; report freshness учитывает facts |
 | P1-05 | Invalid input→422 | Даниил | OPEN | Invalid planning_date/reversed window не дают 500; validation ctx безопасно сериализуется |
@@ -36,6 +36,8 @@
 | P1-12 | Валидация внешнего response | Даниил | OPEN | Negative/out-of-range indices, bad shape/WKT/JSON → controlled provider error, не corrupted matrix/500 |
 | P1-13 | Day metrics и baseline | Олег semantics; Юрий objective; Даниил reporting | OPEN | Completed/current/future day-active union; eligible coverage без cancelled; сравнение на одинаковых inputs/matrices |
 | P1-14 | Demo regression suite | Олег + Юрий + Даниил по слоям | OPEN | 12 event cases + anchors/time/partition/retry проходят; PostgreSQL flow подтверждён |
+
+P1-02 завершён 2026-09-19: `DayEventRow` явно flush-ится до формирования outbox payload и audit row как для общего события, так и при создании новой заявки. HTTP regression подтверждает `GET /audit` 200 и совпадение audit object_id с event_id. Полный suite — 27 passed; Ruff/mypy(src) прошли.
 
 ## P2 — хорошо иметь
 
