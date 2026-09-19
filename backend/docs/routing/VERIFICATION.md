@@ -1,6 +1,6 @@
 # Routing Verification
 
-Документ фиксирует проверку новой routing-архитектуры backend: локальный OSRM, сегментное хранение маршрутов, `detailed`/`overview` geometry, Redis cache и переиспользование сегментов при replanning.
+Документ фиксирует проверку новой routing-архитектуры backend: локальный OSRM, сегментное хранение маршрутов, `detailed`/`overview` geometry, Dragonfly cache и переиспользование сегментов при replanning.
 
 > Важно: этот файл должен содержать только фактические результаты. Значения производительности и количество пройденных тестов нельзя заполнять приблизительно. Сначала выполните команды из разделов ниже, затем внесите реальные результаты в таблицу в конце документа.
 
@@ -45,7 +45,7 @@ git rev-parse HEAD
    - `overview` geometry — облегчённая геометрия.
 6. `overview` строится алгоритмом Douglas–Peucker с допуском в метрах.
 7. PostgreSQL остаётся source of truth.
-8. Redis используется только как read cache готовых route responses.
+8. Dragonfly используется только как read cache готовых route responses.
 9. GET-запросы маршрутов не должны обращаться к OSRM, 2ГИС или геокодеру.
 10. Replanning должен пересчитывать только новые/изменившиеся сегменты.
 11. 2ГИС не находится на critical path.
@@ -68,7 +68,7 @@ flowchart TD
     K --> L[overview geometry]
     J --> M[plan_route_artifacts]
     L --> M
-    M --> N[Redis warm/read cache]
+    M --> N[Dragonfly warm/read cache]
     N --> O[Frontend]
 ```
 
@@ -91,7 +91,7 @@ OSRM Table -> Planner -> OSRM Route -> PostgreSQL
 ```text
 db
 api
-redis
+dragonfly
 osrm
 ```
 
@@ -107,7 +107,7 @@ OSRM_DATA_DIR=/absolute/path/to/prepared/osrm/data docker compose config --servi
 ```text
 db
 api
-redis
+dragonfly
 osrm
 ```
 
@@ -126,7 +126,7 @@ OSRM_DATA_DIR=/absolute/path/to/prepared/osrm/data docker compose config --quiet
 | Backend API | `8000` |
 | PostgreSQL | `55432` |
 | OSRM | `5000` |
-| Redis | `56379` |
+| Dragonfly | `56379` |
 
 OSRM внутри docker-сети доступен backend по:
 
@@ -134,10 +134,10 @@ OSRM внутри docker-сети доступен backend по:
 http://osrm:5000
 ```
 
-Redis внутри docker-сети:
+Dragonfly внутри docker-сети:
 
 ```text
-redis://redis:6379/0
+redis://dragonfly:6379/0
 ```
 
 ## 5. Подготовка локального OSRM
@@ -204,10 +204,10 @@ curl -s http://127.0.0.1:8000/api/v1/readiness | python3 -m json.tool
 }
 ```
 
-Проверить Redis:
+Проверить Dragonfly:
 
 ```bash
-docker compose exec redis redis-cli ping
+docker compose exec dragonfly redis-cli ping
 ```
 
 Ожидается:
@@ -451,7 +451,7 @@ ROUTE_OVERVIEW_TOLERANCE_METERS=20
 
 Упрощение выполняется отдельно для каждого сегмента, поэтому начало и конец сегмента сохраняются.
 
-## 14. Проверка Redis cache
+## 14. Проверка Dragonfly cache
 
 Текущие ключи:
 
@@ -466,7 +466,7 @@ TTL по умолчанию:
 21600 секунд
 ```
 
-Timeout Redis:
+Timeout Dragonfly:
 
 ```text
 0.25 секунды
@@ -477,7 +477,7 @@ Timeout Redis:
 Удалить только route keys выбранного плана:
 
 ```bash
-docker compose exec redis redis-cli --scan \
+docker compose exec dragonfly redis-cli --scan \
   --pattern "routes:v1:plan:${PLAN_ID}:*"
 ```
 
@@ -486,11 +486,11 @@ docker compose exec redis redis-cli --scan \
 Первый запрос должен:
 
 ```text
-Redis miss
+Dragonfly miss
     ↓
 PostgreSQL
     ↓
-Redis set
+Dragonfly set
     ↓
 response
 ```
@@ -499,16 +499,16 @@ response
 
 Повторить тот же GET.
 
-Он должен прочитать готовый response из Redis после короткой проверки revision/status в PostgreSQL.
+Он должен прочитать готовый response из Dragonfly после короткой проверки revision/status в PostgreSQL.
 
 ## 15. PostgreSQL — source of truth
 
-Redis не должен быть единственным местом хранения маршрута.
+Dragonfly не должен быть единственным местом хранения маршрута.
 
 Проверка:
 
 ```bash
-docker compose exec redis redis-cli FLUSHDB
+docker compose exec dragonfly redis-cli FLUSHDB
 ```
 
 После этого повторить:
@@ -519,13 +519,13 @@ curl -s "http://127.0.0.1:8000/api/v1/plans/$PLAN_ID/routes" >/dev/null
 
 и detailed endpoint.
 
-Оба запроса должны успешно отработать, восстановив response из PostgreSQL и снова заполнив Redis.
+Оба запроса должны успешно отработать, восстановив response из PostgreSQL и снова заполнив Dragonfly.
 
 Это подтверждает:
 
 ```text
 PostgreSQL = source of truth
-Redis      = cache
+Dragonfly      = cache
 ```
 
 ## 16. GET не должен вызывать routing provider
@@ -675,7 +675,7 @@ uv run python scripts/routing_demo.py \
   --database-url postgresql+asyncpg://beeline:beeline@127.0.0.1:55432/beeline \
   --api-url http://127.0.0.1:8000 \
   --osrm-url http://127.0.0.1:5000 \
-  --redis-url redis://127.0.0.1:56379/0 \
+  --dragonfly-url redis://127.0.0.1:56379/0 \
   --repeats 30 \
   --output routing-demo-results.json
 ```
@@ -747,14 +747,14 @@ segments_calculated = Y
 
 где при небольшом replanning `X` заметно больше нуля.
 
-## 23. Поведение при отказе Redis
+## 23. Поведение при отказе Dragonfly
 
-Redis не является обязательным для корректности.
+Dragonfly не является обязательным для корректности.
 
 Проверка:
 
 ```bash
-docker compose stop redis
+docker compose stop dragonfly
 ```
 
 После этого выполнить overview и detailed GET.
@@ -763,12 +763,12 @@ docker compose stop redis
 
 - API продолжает отвечать;
 - данные читаются из PostgreSQL;
-- ошибка Redis не превращается в 5xx route endpoint.
+- ошибка Dragonfly не превращается в 5xx route endpoint.
 
 После проверки:
 
 ```bash
-docker compose start redis
+docker compose start dragonfly
 ```
 
 ## 24. Поведение при отказе OSRM после расчёта плана
@@ -801,7 +801,7 @@ docker compose start osrm
 1. OSRM использует статический дорожный граф и не предоставляет live traffic.
 2. Подготовленный `car.lua` graph покрывает driving, но не public transit/walking.
 3. Покрытие маршрутов зависит от выбранного `.osm.pbf` bbox.
-4. Redis — best-effort cache; eviction допустим.
+4. Dragonfly — best-effort cache; eviction допустим.
 5. Дедупликация одновременных одинаковых routing calls гарантируется внутри процесса; между несколькими API replicas возможны повторные внешние вызовы, при этом уникальность хранения защищает БД.
 6. Segment reuse корректен только при совпадающем graph fingerprint/profile/options/координатах.
 7. `overview` уменьшает объём geometry, но конкретный процент зависит от формы реального маршрута и tolerance.
@@ -813,14 +813,14 @@ docker compose start osrm
 При ревью исходников новой реализации подтверждено наличие:
 
 - локального `osrm` service в Docker Compose;
-- Redis service;
+- Dragonfly service;
 - `scripts/prepare_osrm.py`;
 - `scripts/routing_demo.py`;
 - миграции `0002_route_artifacts`;
 - `RouteBuilder` с segment reuse;
 - Douglas–Peucker simplification;
 - `plan_route_artifacts`;
-- Redis read-through cache;
+- Dragonfly read-through cache;
 - overview/detailed API;
 - тестов route artifacts/cache/read API/OSRM.
 
@@ -839,7 +839,7 @@ python -m compileall src tests scripts alembic
 
 - [ ] `feature/routing-cache-osrm` содержит commit новой реализации.
 - [ ] `docker compose config --quiet` проходит.
-- [ ] `db`, `api`, `redis`, `osrm` запущены.
+- [ ] `db`, `api`, `dragonfly`, `osrm` запущены.
 - [ ] OSRM `nearest` работает.
 - [ ] OSRM Table работает.
 - [ ] `alembic upgrade head` проходит.
@@ -852,9 +852,9 @@ python -m compileall src tests scripts alembic
 - [ ] Detailed API отдаёт выбранного инженера.
 - [ ] Overview содержит меньше либо столько же координат, чем detailed.
 - [ ] Повторные GET не вызывают OSRM.
-- [ ] Redis cache hit подтверждён.
+- [ ] Dragonfly cache hit подтверждён.
 - [ ] После `FLUSHDB` данные восстанавливаются из PostgreSQL.
-- [ ] При остановленном Redis read API продолжает работать.
+- [ ] При остановленном Dragonfly read API продолжает работать.
 - [ ] При остановленном OSRM уже сохранённые routes продолжают читаться.
 - [ ] Replanning показывает `segments_reused > 0` для частичного изменения маршрута.
 - [ ] Старый plan остаётся неизменным после replan.
@@ -881,4 +881,4 @@ Routing-контур готов к демонстрации, когда можн
 
 Для защиты ключевая формулировка архитектуры:
 
-> Массовый расчёт матрицы и маршрутов выполняется собственным OSRM без внешних квот. Маршруты рассчитываются один раз после planning/replanning и сохраняются в PostgreSQL. Для общей карты backend отдаёт облегчённую geometry, для выбранного инженера — full geometry. Redis ускоряет чтение, но не является источником истины. При replanning неизменившиеся сегменты переиспользуются, поэтому OSRM вызывается только для новых переходов. 2ГИС сохранён как дополнительный provider и не находится на critical path.
+> Массовый расчёт матрицы и маршрутов выполняется собственным OSRM без внешних квот. Маршруты рассчитываются один раз после planning/replanning и сохраняются в PostgreSQL. Для общей карты backend отдаёт облегчённую geometry, для выбранного инженера — full geometry. Dragonfly ускоряет чтение, но не является источником истины. При replanning неизменившиеся сегменты переиспользуются, поэтому OSRM вызывается только для новых переходов. 2ГИС сохранён как дополнительный provider и не находится на critical path.

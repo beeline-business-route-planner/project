@@ -1,6 +1,6 @@
-# Локальные маршруты: OSRM, PostgreSQL и Redis
+# Локальные маршруты: OSRM, PostgreSQL и Dragonfly
 
-Основной режим — `ROUTING_PROVIDER=osrm`. Матрица и дорожная геометрия рассчитываются своим OSRM; PostgreSQL сохраняет результат, Redis ускоряет чтение. Ключ 2ГИС для этого пути не нужен. Поддерживаемый `hybrid` теперь также использует OSRM для обеих операций. Коммерческие адаптеры остаются явно выбираемыми; автоматического обращения к 2ГИС при отказе OSRM нет.
+Основной режим — `ROUTING_PROVIDER=osrm`. Матрица и дорожная геометрия рассчитываются своим OSRM; PostgreSQL сохраняет результат, Dragonfly ускоряет чтение. Ключ 2ГИС для этого пути не нужен. Поддерживаемый `hybrid` теперь также использует OSRM для обеих операций. Коммерческие адаптеры остаются явно выбираемыми; автоматического обращения к 2ГИС при отказе OSRM нет.
 
 ## Поток расчёта и хранения
 
@@ -14,7 +14,7 @@ flowchart LR
     Cache --> Build[Сборка detailed и overview]
     Store --> Build
     Build --> Commit[План и артефакты одной транзакцией]
-    Commit --> Redis[Необязательный прогрев Redis]
+    Commit --> Dragonfly[Необязательный прогрев Dragonfly]
 ```
 
 Алгоритм назначения инженеров не менялся. Его матрица и расписание сохраняют прежнюю семантику. Route строит каждый направленный переход отдельно; суммарные дорожные метрики в новом API могут отличаться от плановых метрик матрицы. Старые `metrics`, assignments и времена не переписываются после построения геометрии.
@@ -65,25 +65,25 @@ Detailed — полная GeoJSON LineString. Overview — упрощение к
 sequenceDiagram
     participant UI as Карта
     participant API
-    participant Redis
+    participant Dragonfly
     participant PG as PostgreSQL
     UI->>API: GET overview
     API->>PG: Проверить план и revision
-    API->>Redis: Прочитать кэш
-    alt Нет значения или Redis недоступен
+    API->>Dragonfly: Прочитать кэш
+    alt Нет значения или Dragonfly недоступен
         API->>PG: Прочитать сохранённый overview
-        API->>Redis: Попытаться заполнить кэш
+        API->>Dragonfly: Попытаться заполнить кэш
     end
     API-->>UI: Overview всех инженеров
     UI->>API: Выбран инженер — GET detailed
     API-->>UI: Сохранённая полная геометрия
 ```
 
-### Redis
+### Dragonfly
 
 Ключи: `routes:v1:plan:{id}:revision:{revision}:overview` и `...:engineer:{id}:detailed`. Revision зависит от версии плана и хэша immutable артефакта; после утверждения не возвращается старый статус draft. Перед cache lookup выполняется небольшой SQL-запрос метаданных; при hit полная геометрия из БД не загружается.
 
-По умолчанию TTL — 21600 секунд, timeout — 0,25 секунды. Ошибка соединения/чтения/записи, eviction и некорректный JSON приводят к чтению PostgreSQL. Redis можно выключить, оставив `REDIS_URL` не заданным при запуске на хосте. В Compose Redis имеет лимит 128 МБ с `allkeys-lru`; постоянное хранение не требуется. После commit прогревается overview; ошибка прогрева не отменяет план.
+По умолчанию TTL — 21600 секунд, timeout — 0,25 секунды. Ошибка соединения/чтения/записи, eviction и некорректный JSON приводят к чтению PostgreSQL. Dragonfly можно выключить, оставив `DRAGONFLY_URL` не заданным при запуске на хосте. В Compose Dragonfly имеет лимит 256 МБ, один worker thread и запущен с `cache_mode=true`; постоянное хранение не требуется. Python-пакет `redis` остаётся RESP-клиентом, совместимым с Dragonfly. После commit прогревается overview; ошибка прогрева не отменяет план.
 
 ## Подготовка собственного OSRM
 
@@ -123,9 +123,9 @@ docker compose up -d --build
 docker compose ps
 ```
 
-API сам применяет миграции перед стартом. PostgreSQL — `127.0.0.1:55432`, API — `:8000`, OSRM — `:5000`, Redis — `:56379`. Для отдельного стека задаются `POSTGRES_PORT`, `API_PORT`, `OSRM_PORT`, `REDIS_PORT` и `docker compose -p <project>`. `BACKEND_ENV_FILE` позволяет подключить отдельный файл окружения API. Рабочие volumes не удаляются при обновлении.
+API сам применяет миграции перед стартом. PostgreSQL — `127.0.0.1:55432`, API — `:8000`, OSRM — `:5000`, Dragonfly — `:56379`. Для отдельного стека задаются `POSTGRES_PORT`, `API_PORT`, `OSRM_PORT`, `DRAGONFLY_PORT` и `docker compose -p <project>`. `BACKEND_ENV_FILE` позволяет подключить отдельный файл окружения API. Рабочие volumes не удаляются при обновлении.
 
-При запуске API на хосте: `uv sync --locked`, `uv run alembic upgrade head`, затем задайте `OSRM_BASE_URL=http://127.0.0.1:5000`, `OSRM_GRAPH_MANIFEST=<OSRM_DATA_DIR>/manifest.json`, `REDIS_URL=redis://127.0.0.1:56379/0` и запустите `uv run uvicorn beeline_backend.main:app --reload`. Manifest либо проверенный `OSRM_GRAPH_FINGERPRINT` обязателен для osrm/hybrid.
+При запуске API на хосте: `uv sync --locked`, `uv run alembic upgrade head`, затем задайте `OSRM_BASE_URL=http://127.0.0.1:5000`, `OSRM_GRAPH_MANIFEST=<OSRM_DATA_DIR>/manifest.json`, `DRAGONFLY_URL=redis://127.0.0.1:56379/0` и запустите `uv run uvicorn beeline_backend.main:app --reload`. Manifest либо проверенный `OSRM_GRAPH_FINGERPRINT` обязателен для osrm/hybrid.
 
 | Настройка | Значение по умолчанию |
 | --- | --- |
@@ -134,11 +134,11 @@ API сам применяет миграции перед стартом. Postgr
 | `OSRM_TIMEOUT_SECONDS` | 8 |
 | `OSRM_MAX_COORDINATES` | 80, блочная Table-матрица |
 | `OSRM_MAX_CONCURRENCY` | 8 |
-| `REDIS_ROUTE_TTL_SECONDS` | 21600 |
-| `REDIS_TIMEOUT_SECONDS` | 0.25 |
+| `DRAGONFLY_ROUTE_TTL_SECONDS` | 21600 |
+| `DRAGONFLY_TIMEOUT_SECONDS` | 0.25 |
 | `ROUTE_OVERVIEW_TOLERANCE_METERS` | 20 |
 
-Liveness `/health` проверяет процесс, `/readiness` — PostgreSQL. Redis/OSRM не являются обязательными startup-зависимостями API: сохранённые маршруты доступны без них. Новое планирование при недоступном OSRM возвращает контролируемую ошибку, не расходует квоту 2ГИС и не заменяет действующий план.
+Liveness `/health` проверяет процесс, `/readiness` — PostgreSQL. Dragonfly/OSRM не являются обязательными startup-зависимостями API: сохранённые маршруты доступны без них. Новое планирование при недоступном OSRM возвращает контролируемую ошибку, не расходует квоту 2ГИС и не заменяет действующий план.
 
 ## Координаты и геокодирование
 
@@ -171,7 +171,7 @@ uv run python scripts/routing_demo.py \
   --database-url postgresql+asyncpg://beeline:beeline@127.0.0.1:55432/beeline \
   --api-url http://127.0.0.1:8000 \
   --osrm-url http://127.0.0.1:5000 \
-  --redis-url redis://127.0.0.1:56379/0 \
+  --dragonfly-url redis://127.0.0.1:56379/0 \
   --output /tmp/routing-demo-results.json
 ```
 

@@ -6,29 +6,29 @@ import sys
 from pathlib import Path
 
 import pytest
-from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ConnectionError as RedisProtocolConnectionError
 from sqlalchemy import create_engine, inspect, text
 
 from beeline_backend.config import Settings
 from beeline_backend.infrastructure.providers import NominatimGeocoder
-from beeline_backend.infrastructure.route_store import RedisRouteCache
+from beeline_backend.infrastructure.route_store import DragonflyRouteCache
 from beeline_backend.presentation.api import _provider_bundle
 
 
 @pytest.mark.asyncio
-async def test_redis_outage_fails_open_for_reads_and_writes():
-    class FailingRedis:
+async def test_dragonfly_outage_fails_open_for_reads_and_writes():
+    class FailingDragonfly:
         async def get(self, key):
-            raise RedisConnectionError("offline")
+            raise RedisProtocolConnectionError("offline")
 
         async def set(self, *args, **kwargs):
-            raise RedisConnectionError("offline")
+            raise RedisProtocolConnectionError("offline")
 
         async def aclose(self):
             pass
 
-    cache = RedisRouteCache(None, 60, 0.05)
-    cache.client = FailingRedis()
+    cache = DragonflyRouteCache(None, 60, 0.05)
+    cache.client = FailingDragonfly()
     assert await cache.get("key") is None
     await cache.set("key", "value")
     await cache.aclose()

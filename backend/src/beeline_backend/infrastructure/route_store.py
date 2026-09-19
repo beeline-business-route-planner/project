@@ -6,7 +6,7 @@ from typing import Protocol, cast
 from uuid import UUID
 
 from pydantic import ValidationError
-from redis.asyncio import Redis
+from redis.asyncio import Redis as RedisProtocolClient
 from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -87,10 +87,10 @@ class ReadCache(Protocol):
     async def aclose(self) -> None: ...
 
 
-class RedisRouteCache:
+class DragonflyRouteCache:
     def __init__(self, url: str | None, ttl: int, timeout: float) -> None:
-        self.client: Redis | None = (
-            Redis.from_url(
+        self.client: RedisProtocolClient | None = (
+            RedisProtocolClient.from_url(
                 url,
                 decode_responses=True,
                 socket_connect_timeout=timeout,

@@ -48,7 +48,7 @@ origin explicitly in production. Do not use `*` together with credentials.
 
 The existing dashboard and full-plan endpoints remain compatible and include detailed geometry;
 using those large responses for the map would lose the payload benefit of overview. All route GETs
-read saved PostgreSQL/Redis data without routing calls. A legacy plan without new artifacts returns
+read saved PostgreSQL/Dragonfly data without routing calls. A legacy plan without new artifacts returns
 `409 route_artifacts_unavailable` on the new endpoints; offer explicit creation of a new plan.
 Contract details and backend demo commands: [ROUTING.md](ROUTING.md). This change supplies backend
 API support; it does not implement a frontend map.

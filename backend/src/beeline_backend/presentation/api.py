@@ -49,7 +49,11 @@ from beeline_backend.infrastructure.providers import (
     YandexRoutingProvider,
 )
 from beeline_backend.infrastructure.reports import PdfReportRenderer, XlsxReportRenderer
-from beeline_backend.infrastructure.route_store import RedisRouteCache, RouteReader, SqlSegmentStore
+from beeline_backend.infrastructure.route_store import (
+    DragonflyRouteCache,
+    RouteReader,
+    SqlSegmentStore,
+)
 from beeline_backend.presentation.dto import (
     ApprovalRequest,
     ApprovalResponse,
@@ -171,7 +175,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             async with engine.begin() as connection:
                 await connection.run_sync(Base.metadata.create_all)
         _, _, routing_provider, _ = app.state.providers
-        app.state.route_cache = RedisRouteCache(app_settings.redis_url, app_settings.redis_route_ttl_seconds, app_settings.redis_timeout_seconds)
+        app.state.route_cache = DragonflyRouteCache(
+            app_settings.dragonfly_url,
+            app_settings.dragonfly_route_ttl_seconds,
+            app_settings.dragonfly_timeout_seconds,
+        )
         app.state.route_builder = RouteBuilder(routing_provider, SqlSegmentStore(app.state.session_factory),
                                                app_settings.route_overview_tolerance_meters, app_settings.osrm_max_concurrency)
         app.state.route_reader = RouteReader(app.state.session_factory, app.state.route_cache)

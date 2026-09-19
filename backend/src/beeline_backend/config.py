@@ -29,9 +29,9 @@ class Settings(BaseSettings):
     osrm_max_concurrency: int = Field(default=8, ge=1, le=32)
     osrm_graph_manifest: Path | None = None
     osrm_graph_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
-    redis_url: str | None = None
-    redis_route_ttl_seconds: int = Field(default=21600, ge=1, le=604800)
-    redis_timeout_seconds: float = Field(default=0.25, gt=0, le=2)
+    dragonfly_url: str | None = None
+    dragonfly_route_ttl_seconds: int = Field(default=21600, ge=1, le=604800)
+    dragonfly_timeout_seconds: float = Field(default=0.25, gt=0, le=2)
     route_overview_tolerance_meters: float = Field(default=20, ge=0, le=100)
     dgis_base_url: str = "https://routing.api.2gis.com"
     dgis_catalog_base_url: str = "https://catalog.api.2gis.com"

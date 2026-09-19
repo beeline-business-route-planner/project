@@ -82,7 +82,7 @@ def workbook(planning_date: date, addresses: list[str]) -> bytes:
 async def main(args: argparse.Namespace) -> None:
     engine = create_engine(Settings(database_url=args.database_url))
     factory = create_session_factory(engine)
-    cache = Redis.from_url(args.redis_url, decode_responses=True)
+    cache = Redis.from_url(args.dragonfly_url, decode_responses=True)
     planning_date = date.fromisoformat(args.date) if args.date else date.today() + timedelta(days=1)
     addresses = [f"Москва, контрольная точка routing demo {i}" for i in range(len(POINTS))]
     try:
@@ -276,7 +276,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--osrm-url", default="http://127.0.0.1:5000")
-    parser.add_argument("--redis-url", default="redis://127.0.0.1:56379/0")
+    parser.add_argument("--dragonfly-url", default="redis://127.0.0.1:56379/0")
     parser.add_argument("--date")
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--output", type=Path, default=Path("routing-demo-results.json"))
