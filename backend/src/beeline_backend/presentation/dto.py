@@ -102,6 +102,34 @@ class NewRequest(BaseModel):
         return self
 
 
+class RequestUpdate(BaseModel):
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+    service_minutes: int | None = Field(default=None, gt=0, le=24 * 60)
+    required_skill: Literal["connection", "emergency", "local"] | None = None
+    required_transport: Literal["car", "walking", "bicycle", "transit"] | None = None
+    priority: Literal["normal", "urgent"] | None = None
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    actor: str = Field(min_length=1, max_length=160)
+
+    @model_validator(mode="after")
+    def valid_changes(self) -> RequestUpdate:
+        changed = self.model_fields_set - {"idempotency_key", "actor"}
+        if not changed:
+            raise ValueError("At least one request field must be changed")
+        for field_name in ("window_start", "window_end"):
+            value = getattr(self, field_name)
+            if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+                raise ValueError(f"{field_name} must contain a timezone offset")
+        if (
+            self.window_start is not None
+            and self.window_end is not None
+            and self.window_end <= self.window_start
+        ):
+            raise ValueError("window_end must be after window_start")
+        return self
+
+
 class ManualChangeRequest(BaseModel):
     request_id: UUID
     engineer_id: UUID
@@ -331,6 +359,13 @@ class NewRequestResponse(BaseModel):
     request_id: UUID
     event_id: UUID
     duplicate: bool
+
+
+class RequestUpdateResponse(BaseModel):
+    request_id: UUID
+    event_id: UUID
+    duplicate: bool
+    version: int
 
 
 class DayEventResponse(BaseModel):

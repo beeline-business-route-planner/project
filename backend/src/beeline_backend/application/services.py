@@ -199,6 +199,17 @@ class BackendService:
         await self.gateway.complete_event_replanning(event_id, job_key, replanning)
         return {"event_id": event_id, "duplicate": duplicate, "replanning": replanning}
 
+    async def update_request(
+        self,
+        request_id: UUID,
+        changes: dict[str, object],
+        idempotency_key: str,
+        actor: str,
+    ) -> dict[str, object]:
+        return await self.gateway.update_request(
+            request_id, changes, idempotency_key, actor
+        )
+
     async def record_fact(
         self,
         request_id: UUID,

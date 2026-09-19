@@ -61,6 +61,8 @@ All timestamps are ISO 8601. Send timestamps with an explicit UTC offset, for ex
 
 - `POST /imports` accepts `multipart/form-data` with field `file`; pass `Idempotency-Key`.
 - `POST /requests` creates a request only. It returns `request_id` and the recorded `event_id`.
+- `PATCH /requests/{id}` changes the window, duration, priority, skill or transport requirement;
+  it records an event but does not run replanning.
 - `POST /plans/replan` explicitly creates a proposal from `base_plan_id`; pass
   `Idempotency-Key` and reuse it on retry.
 - `POST /requests/{id}/facts` records a confirmed manual fact.
@@ -83,6 +85,7 @@ idempotency key when retrying the same logical action.
 | Load engineers | `GET /engineers?scenario_id=...` |
 | Approve proposal | `POST /plans/{plan_id}/approve` |
 | Create urgent request | `POST /requests` |
+| Change existing request | `PATCH /requests/{request_id}` |
 | Replan from approved plan | `POST /plans/replan` |
 | Show replan changes | `GET /plans/{new_plan_id}/changes` |
 

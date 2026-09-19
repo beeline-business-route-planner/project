@@ -11,6 +11,7 @@
 | Planner contract | `PlanningSnapshot -> PlanningAlgorithm -> PlanCandidate`; mock planner проходит полный service flow, controller не знает реализацию solver |
 | Replanning orchestration | Отдельный `POST /plans/replan` принимает обязательный `base_plan_id`, создаёт новую версию и не изменяет старый plan |
 | Urgent request flow | `POST /requests` только создаёт заявку; replan запускается отдельным use case |
+| Request changes | Типизированный идемпотентный `PATCH /requests/{id}` меняет окно, длительность, приоритет, skill/transport и пишет event; replan запускается отдельно |
 | Plan approval | Проверяются состояние, assignments, route artifacts, свежесть input/base; повтор того же approve идемпотентен; routing после approve не запускается |
 | Plan diff | `GET /plans/{new_plan_id}/changes` возвращает `ASSIGNED`, `UNASSIGNED`, `REASSIGNED`, `TIME_CHANGED`, `ROUTE_CHANGED`; старый детальный `/plans/diff` сохранён |
 | Reasons and violations | Assignment reason codes и planner violations валидируются, сохраняются в PostgreSQL и возвращаются `GET /plans/{id}` |
@@ -29,7 +30,6 @@
 | Приоритет | Пробел | Почему не отмечен закрытым |
 |---|---|---|
 | P0 для динамики | Equipment inventory и request requirements | Нет модели утренней выдачи, резерва и расхода оборудования; пустое поле в API не подставляется фиктивно |
-| P0 для динамики | Изменение полей существующей заявки | Есть создание, отмена, urgent и facts, но нет типизированной команды изменения окна/длительности/требований |
 | P1 | Точное состояние на `as_of` | Latest fact пока выбирается по recorded order без полной temporal projection; прошлое и текущее местоположение инженера требуют отдельной модели |
 | P1 | Недоступность во время текущей работы | Сейчас возвращается контролируемый conflict; политика завершения текущего визита и будущей доступности ещё не моделируется |
 | P1 | Явный статус `calculated` | Успешный calculation фиксируется состоянием run и audit event, а plan создаётся как approvable `draft`; отдельный переход ещё не введён |

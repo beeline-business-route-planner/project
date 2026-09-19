@@ -90,6 +90,13 @@ class Gateway(Protocol):
         idempotency_key: str,
         actor: str,
     ) -> dict[str, object]: ...
+    async def update_request(
+        self,
+        request_id: UUID,
+        changes: dict[str, object],
+        idempotency_key: str,
+        actor: str,
+    ) -> dict[str, object]: ...
     async def build_snapshot(
         self, scenario_id: UUID, planning_date: date, as_of: datetime, base_plan_id: UUID | None
     ) -> PlanningSnapshot: ...

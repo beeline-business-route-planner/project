@@ -646,6 +646,120 @@ class SqlGateway:
         await self._session.commit()
         return {"request_id": request.id, "event_id": event.id, "duplicate": False}
 
+    async def update_request(
+        self,
+        request_id: UUID,
+        changes: dict[str, object],
+        idempotency_key: str,
+        actor: str,
+    ) -> dict[str, object]:
+        request = await self._session.get(RequestRow, request_id)
+        if request is None:
+            raise NotFoundError("request_not_found", "Request not found")
+        existing = await self._session.scalar(
+            select(DayEventRow).where(
+                DayEventRow.scenario_id == request.scenario_id,
+                DayEventRow.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            if existing.payload.get("request_id") != str(request_id):
+                raise ConflictError(
+                    "idempotency_key_reused",
+                    "Idempotency key was already used for another request",
+                )
+            version = existing.payload.get("version")
+            if not isinstance(version, int):
+                raise ConflictError(
+                    "request_update_result_missing",
+                    "The previous request update result is unavailable",
+                )
+            return {
+                "request_id": request_id,
+                "event_id": existing.id,
+                "duplicate": True,
+                "version": version,
+            }
+        latest = await self._session.scalar(
+            select(RequestStatusEventRow)
+            .where(RequestStatusEventRow.request_id == request_id)
+            .order_by(RequestStatusEventRow.recorded_at.desc())
+            .limit(1)
+        )
+        if latest is not None and latest.status in {
+            RequestStatus.COMPLETED.value,
+            RequestStatus.CANCELLED.value,
+        }:
+            raise ConflictError(
+                "request_not_editable", "Completed or cancelled requests cannot be changed"
+            )
+        window_start = cast(datetime, changes.get("window_start", request.window_start))
+        window_end = cast(datetime, changes.get("window_end", request.window_end))
+        if _as_utc(window_end) <= _as_utc(window_start):
+            raise DomainError("invalid_window", "Window end must be after start")
+        required_skill = changes.get("required_skill", request.required_skill_code)
+        if not isinstance(required_skill, str) or await self._session.get(
+            SkillRow, required_skill
+        ) is None:
+            raise DomainError("unknown_skill", "Required skill is not in the reference data")
+        required_transport = changes.get(
+            "required_transport", request.required_transport_code
+        )
+        if required_transport is not None and (
+            not isinstance(required_transport, str)
+            or await self._session.get(TransportTypeRow, required_transport) is None
+        ):
+            raise DomainError(
+                "unknown_transport", "Required transport is not in the reference data"
+            )
+        request.window_start = _as_utc(window_start)
+        request.window_end = _as_utc(window_end)
+        request.service_minutes = cast(
+            int, changes.get("service_minutes", request.service_minutes)
+        )
+        request.full_normative_minutes = request.service_minutes
+        request.required_skill_code = required_skill
+        request.required_transport_code = required_transport
+        request.priority = cast(str, changes.get("priority", request.priority))
+        request.version += 1
+        now = self._now()
+        serialized_changes = {
+            key: value.isoformat() if isinstance(value, datetime) else value
+            for key, value in changes.items()
+        }
+        event = DayEventRow(
+            scenario_id=request.scenario_id,
+            planning_date=request.planning_date,
+            event_type="request_changed",
+            effective_at=now,
+            recorded_at=now,
+            actor=actor,
+            idempotency_key=idempotency_key,
+            payload={
+                "request_id": str(request.id),
+                "changes": serialized_changes,
+                "version": request.version,
+            },
+            processing_state="recorded",
+        )
+        self._session.add(event)
+        await self._session.flush()
+        await self._audit(
+            request.scenario_id,
+            "request_changed",
+            "request",
+            request.id,
+            actor,
+            details={"event_id": str(event.id), "changes": serialized_changes},
+        )
+        await self._session.commit()
+        return {
+            "request_id": request.id,
+            "event_id": event.id,
+            "duplicate": False,
+            "version": request.version,
+        }
+
     async def build_snapshot(
         self, scenario_id: UUID, planning_date: date, as_of: datetime, base_plan_id: UUID | None
     ) -> PlanningSnapshot:

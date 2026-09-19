@@ -129,6 +129,32 @@ def test_event_rejects_malformed_target_uuid(
     assert response.json()["code"] == "invalid_event_target"
 
 
+def test_request_change_is_typed_idempotent_and_does_not_hide_replanning(
+    client: TestClient, synthetic_xlsx: bytes
+) -> None:
+    _, scenario_id = _import(client, synthetic_xlsx)
+    request_id = client.get(
+        "/api/v1/requests",
+        params={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
+    ).json()[0]["id"]
+    payload = {
+        "service_minutes": 35,
+        "priority": "urgent",
+        "idempotency_key": "change-request-1",
+        "actor": "dispatcher",
+    }
+    changed = client.patch(f"/api/v1/requests/{request_id}", json=payload)
+    assert changed.status_code == 200, changed.text
+    assert "replanning" not in changed.json()
+    duplicate = client.patch(f"/api/v1/requests/{request_id}", json=payload)
+    assert duplicate.status_code == 200, duplicate.text
+    assert duplicate.json()["duplicate"] is True
+    assert duplicate.json()["event_id"] == changed.json()["event_id"]
+    request = client.get(f"/api/v1/requests/{request_id}").json()
+    assert request["service_minutes"] == 35
+    assert request["priority"] == "urgent"
+
+
 def test_import_plan_approve_replan_diff_and_reports(
     client: TestClient, synthetic_xlsx: bytes
 ) -> None:

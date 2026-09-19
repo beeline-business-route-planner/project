@@ -82,6 +82,8 @@ from beeline_backend.presentation.dto import (
     ReplanningRequest,
     RequestDetailResponse,
     RequestListItemResponse,
+    RequestUpdate,
+    RequestUpdateResponse,
     ScenarioResponse,
     StatusResponse,
 )
@@ -377,6 +379,21 @@ def _router() -> APIRouter:
         payload: NewRequest, service: BackendService = Depends(_service)
     ) -> dict[str, object]:
         return await service.create_request(**payload.model_dump())
+
+    @router.patch(
+        "/requests/{request_id}", response_model=RequestUpdateResponse, tags=["requests"]
+    )
+    async def update_request(
+        request_id: UUID,
+        payload: RequestUpdate,
+        service: BackendService = Depends(_service),
+    ) -> dict[str, object]:
+        values = payload.model_dump(exclude_unset=True)
+        idempotency_key = cast(str, values.pop("idempotency_key"))
+        actor = cast(str, values.pop("actor"))
+        return await service.update_request(
+            request_id, values, idempotency_key, actor
+        )
 
     @router.post(
         "/requests/{request_id}/facts", response_model=FactResponse, tags=["requests"]

@@ -61,6 +61,7 @@ uv run python scripts/demo.py 'Dataset/Восток Синтетические �
 - `GET /api/v1/scenarios`, `GET /api/v1/requests`, `GET /api/v1/requests/{id}`.
 - `GET /api/v1/engineers`, `GET /api/v1/engineers/{id}/route`.
 - `POST /api/v1/requests` — идемпотентно создать новую заявку без скрытого перепланирования.
+- `PATCH /api/v1/requests/{id}` — идемпотентно изменить окно, длительность или требования без скрытого перепланирования.
 - `POST /api/v1/requests/{id}/facts` — append-only подтверждённый факт.
 - `POST /api/v1/plans/run`, `POST /api/v1/plans/replan`, `GET /api/v1/planning-runs/{id}`.
 - `GET /api/v1/plans`, `GET /api/v1/plans/{id}`, `POST /api/v1/plans/{id}/approve`.
