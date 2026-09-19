@@ -11,7 +11,7 @@ from beeline_backend.infrastructure.providers import NominatimGeocoder
 async def test_nominatim_uses_identifying_header_and_russian_search() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["User-Agent"] == "beeline-tests/1.0"
-        assert request.url.params["q"] == "г. Москва, Тверская, 1, Москва"
+        assert request.url.params["q"] == "г. Москва, Тверская, 1"
         assert request.url.params["countrycodes"] == "ru"
         assert request.url.params["limit"] == "1"
         return httpx.Response(200, json=[{"lat": "55.757", "lon": "37.615"}])

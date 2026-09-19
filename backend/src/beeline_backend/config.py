@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     dgis_api_key: str | None = None
     dgis_timeout_seconds: float = Field(default=15.0, gt=0, le=60)
     dgis_matrix_block_size: int = Field(default=25, ge=1, le=25)
+    hybrid_dgis_max_route_points: int = Field(default=5, ge=2, le=10)
     yandex_api_key: str | None = None
     upload_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
     cors_origins: Annotated[list[str], NoDecode] = [

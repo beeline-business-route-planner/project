@@ -38,6 +38,8 @@ from beeline_backend.infrastructure.providers import (
     DemoRoutingProvider,
     DgisGeocoder,
     DgisRoutingProvider,
+    FallbackGeocoder,
+    HybridRoutingProvider,
     MissingGeocoder,
     NominatimGeocoder,
     OsrmRoutingProvider,
@@ -97,6 +99,17 @@ def _provider_bundle(settings: Settings) -> tuple[object, object, object, object
             settings.nominatim_min_interval_seconds,
             settings.nominatim_email,
         )
+    elif settings.geocoder_mode == "hybrid":
+        geocoder = FallbackGeocoder(
+            NominatimGeocoder(
+                settings.nominatim_base_url,
+                settings.nominatim_user_agent,
+                settings.nominatim_timeout_seconds,
+                settings.nominatim_min_interval_seconds,
+                settings.nominatim_email,
+            ),
+            DemoGeocoder(),
+        )
     elif settings.geocoder_mode == "demo":
         geocoder = DemoGeocoder()
     else:
@@ -116,6 +129,26 @@ def _provider_bundle(settings: Settings) -> tuple[object, object, object, object
             settings.osrm_timeout_seconds,
             settings.osrm_max_coordinates,
             clock,
+        )
+    elif settings.routing_provider == "hybrid":
+        osrm = OsrmRoutingProvider(
+            settings.osrm_base_url,
+            settings.osrm_timeout_seconds,
+            settings.osrm_max_coordinates,
+            clock,
+        )
+        dgis = DgisRoutingProvider(
+            settings.dgis_base_url,
+            settings.dgis_api_key,
+            settings.dgis_timeout_seconds,
+            settings.dgis_matrix_block_size,
+            clock,
+        )
+        router = HybridRoutingProvider(
+            matrix_provider=osrm,
+            geometry_provider=dgis,
+            fallback_geometry_provider=osrm,
+            dgis_max_route_points=settings.hybrid_dgis_max_route_points,
         )
     elif settings.routing_provider == "yandex":
         router = YandexRoutingProvider(settings.yandex_api_key)

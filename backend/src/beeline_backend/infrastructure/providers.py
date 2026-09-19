@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import math
+import re
 from datetime import datetime
 from typing import cast
 
 import httpx
 
 from beeline_backend.application.contracts import RouteMatrix, TravelCell
+from beeline_backend.application.ports import GeocodingProvider, RoutingProvider
 from beeline_backend.domain.errors import DependencyUnavailableError, DomainError
 
 
@@ -22,6 +24,30 @@ class DemoGeocoder:
         latitude = 55.55 + int.from_bytes(digest[:4], "big") / 2**32 * 0.35
         longitude = 37.35 + int.from_bytes(digest[4:8], "big") / 2**32 * 0.55
         return latitude, longitude
+
+
+class FallbackGeocoder:
+    """Use a free primary geocoder and fall back to deterministic synthetic coordinates.
+
+    The fallback is intended for synthetic hackathon datasets only. Production deployments
+    should use a real geocoder or pre-validated coordinates.
+    """
+
+    name = "nominatim_with_demo_fallback"
+
+    def __init__(self, primary: GeocodingProvider, fallback: GeocodingProvider) -> None:
+        self._primary = primary
+        self._fallback = fallback
+
+    async def geocode(self, address: str, region: str) -> tuple[float, float]:
+        try:
+            return await self._primary.geocode(address, region)
+        except DomainError as exc:
+            if exc.code != "geocoding_not_found":
+                raise
+        except DependencyUnavailableError:
+            pass
+        return await self._fallback.geocode(address, region)
 
 
 class MissingGeocoder:
@@ -159,6 +185,28 @@ class DgisGeocoder:
         return float(latitude), float(longitude)
 
 
+def _nominatim_query_candidates(address: str, region: str) -> list[str]:
+    cleaned = " ".join(address.strip().split())
+    region_cf = region.casefold().strip()
+
+    def with_region(value: str) -> str:
+        if not region_cf or region_cf in value.casefold():
+            return value
+        return f"{value}, {region}"
+
+    candidates = [with_region(cleaned)]
+    normalized = cleaned
+    normalized = re.sub(r"^г\.?\s*москва\s*,?\s*", "Москва, ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bул\.?\s+", "улица ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bд\.?\s+", "дом ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"(\d+)\s*с\s*(\d+)", r"\1, строение \2", normalized, flags=re.IGNORECASE)
+    normalized = " ".join(normalized.split())
+    normalized_query = with_region(normalized)
+    if normalized_query not in candidates:
+        candidates.append(normalized_query)
+    return candidates
+
+
 class NominatimGeocoder:
     """Free OSM geocoder with public-service rate limiting and explicit attribution metadata."""
 
@@ -190,47 +238,51 @@ class NominatimGeocoder:
         self._last_request_at = loop.time()
 
     async def geocode(self, address: str, region: str) -> tuple[float, float]:
-        params = {
-            "q": f"{address}, {region}" if region else address,
-            "format": "jsonv2",
-            "limit": "1",
-            "countrycodes": "ru",
-            "addressdetails": "1",
-        }
-        if self._email:
-            params["email"] = self._email
-        try:
-            async with self._lock:
-                await self._wait_for_rate_limit()
-                async with httpx.AsyncClient(
-                    timeout=self._timeout,
-                    transport=self._transport,
-                    headers={"User-Agent": self._user_agent},
-                ) as client:
-                    response = await client.get(f"{self._base_url}/search", params=params)
-            if response.status_code == 429 or response.status_code >= 500:
+        payload: object = []
+        for query in _nominatim_query_candidates(address, region):
+            params = {
+                "q": query,
+                "format": "jsonv2",
+                "limit": "1",
+                "countrycodes": "ru",
+                "addressdetails": "1",
+            }
+            if self._email:
+                params["email"] = self._email
+            try:
+                async with self._lock:
+                    await self._wait_for_rate_limit()
+                    async with httpx.AsyncClient(
+                        timeout=self._timeout,
+                        transport=self._transport,
+                        headers={"User-Agent": self._user_agent},
+                    ) as client:
+                        response = await client.get(f"{self._base_url}/search", params=params)
+                if response.status_code == 429 or response.status_code >= 500:
+                    raise DependencyUnavailableError(
+                        "geocoding_unavailable",
+                        "Nominatim is temporarily unavailable or rate-limited",
+                        {"provider": self.name, "status_code": response.status_code},
+                    )
+                response.raise_for_status()
+            except DependencyUnavailableError:
+                raise
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
                 raise DependencyUnavailableError(
                     "geocoding_unavailable",
-                    "Nominatim is temporarily unavailable or rate-limited",
-                    {"provider": self.name, "status_code": response.status_code},
-                )
-            response.raise_for_status()
-        except DependencyUnavailableError:
-            raise
-        except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
-            raise DependencyUnavailableError(
-                "geocoding_unavailable",
-                "Nominatim request failed",
-                {"provider": self.name},
-            ) from exc
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise DependencyUnavailableError(
-                "invalid_geocoding_response",
-                "Nominatim returned malformed JSON",
-                {"provider": self.name},
-            ) from exc
+                    "Nominatim request failed",
+                    {"provider": self.name},
+                ) from exc
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise DependencyUnavailableError(
+                    "invalid_geocoding_response",
+                    "Nominatim returned malformed JSON",
+                    {"provider": self.name},
+                ) from exc
+            if isinstance(payload, list) and payload:
+                break
         if not isinstance(payload, list) or not payload:
             raise DomainError(
                 "geocoding_not_found",
@@ -806,7 +858,53 @@ class OsrmRoutingProvider:
         geometry = first["geometry"]
         if not isinstance(geometry, dict):
             raise DomainError("invalid_route_response", "OSRM route geometry is invalid")
-        return geometry
+        result = dict(geometry)
+        result["provider"] = self.name
+        return result
+
+
+class HybridRoutingProvider:
+    """Free-first routing: OSRM matrix, 2GIS geometry when quota allows, OSRM fallback."""
+
+    name = "hybrid_osrm_2gis"
+
+    def __init__(
+        self,
+        matrix_provider: RoutingProvider,
+        geometry_provider: RoutingProvider,
+        fallback_geometry_provider: RoutingProvider,
+        dgis_max_route_points: int = 5,
+    ) -> None:
+        self._matrix_provider = matrix_provider
+        self._geometry_provider = geometry_provider
+        self._fallback_geometry_provider = fallback_geometry_provider
+        self._dgis_max_route_points = max(2, dgis_max_route_points)
+
+    async def matrix(
+        self, coordinates: list[tuple[float, float]], profile: str, departure_at: datetime
+    ) -> RouteMatrix:
+        return await self._matrix_provider.matrix(coordinates, profile, departure_at)
+
+    async def route_geometry(
+        self, coordinates: list[tuple[float, float]], profile: str
+    ) -> dict[str, object]:
+        if len(coordinates) <= self._dgis_max_route_points:
+            try:
+                geometry = await self._geometry_provider.route_geometry(coordinates, profile)
+                result = dict(geometry)
+                result["routing_strategy"] = self.name
+                return result
+            except (DependencyUnavailableError, DomainError) as exc:
+                fallback_reason = exc.code
+        else:
+            fallback_reason = "dgis_demo_point_budget"
+
+        geometry = await self._fallback_geometry_provider.route_geometry(coordinates, profile)
+        result = dict(geometry)
+        result["routing_strategy"] = self.name
+        result["fallback_from"] = "2gis"
+        result["fallback_reason"] = fallback_reason
+        return result
 
 
 class YandexRoutingProvider:
