@@ -53,7 +53,7 @@ async def test_fallback_geocoder_uses_demo_when_primary_cannot_find_address() ->
 
 
 @pytest.mark.asyncio
-async def test_hybrid_router_uses_osrm_for_matrix_and_2gis_for_short_geometry() -> None:
+async def test_hybrid_router_uses_osrm_for_matrix_and_short_geometry() -> None:
     osrm = StubRouter("osrm")
     dgis = StubRouter("2gis")
     router = HybridRoutingProvider(osrm, dgis, osrm, dgis_max_route_points=5)
@@ -63,13 +63,24 @@ async def test_hybrid_router_uses_osrm_for_matrix_and_2gis_for_short_geometry() 
 
     assert matrix.provider == "osrm"
     assert osrm.matrix_calls == 1
-    assert dgis.geometry_calls == 1
-    assert geometry["provider"] == "2gis"
-    assert geometry["routing_strategy"] == "hybrid_osrm_2gis"
+    assert dgis.geometry_calls == 0
+    assert osrm.geometry_calls == 1
+    assert geometry["provider"] == "osrm"
+    assert geometry["routing_strategy"] == "hybrid_osrm"
 
 
 @pytest.mark.asyncio
-async def test_hybrid_router_falls_back_to_osrm_when_2gis_is_unavailable() -> None:
+async def test_hybrid_osrm_outage_never_spends_2gis_quota() -> None:
+    osrm = StubRouter("osrm", DependencyUnavailableError("routing_unavailable", "offline"))
+    dgis = StubRouter("2gis")
+    router = HybridRoutingProvider(osrm, dgis, osrm)
+    with pytest.raises(DependencyUnavailableError):
+        await router.route_geometry([(55.7, 37.6), (55.8, 37.7)], "driving")
+    assert dgis.geometry_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_hybrid_router_does_not_contact_unavailable_2gis() -> None:
     osrm = StubRouter("osrm")
     dgis = StubRouter(
         "2gis",
@@ -80,8 +91,8 @@ async def test_hybrid_router_falls_back_to_osrm_when_2gis_is_unavailable() -> No
     geometry = await router.route_geometry([(55.7, 37.6), (55.8, 37.7)], "driving")
 
     assert geometry["provider"] == "osrm"
-    assert geometry["fallback_from"] == "2gis"
-    assert geometry["fallback_reason"] == "dgis_routing_access_denied"
+    assert dgis.geometry_calls == 0
+    assert osrm.geometry_calls == 1
 
 
 @pytest.mark.asyncio
@@ -95,4 +106,4 @@ async def test_hybrid_router_skips_2gis_when_route_exceeds_demo_point_budget() -
 
     assert dgis.geometry_calls == 0
     assert geometry["provider"] == "osrm"
-    assert geometry["fallback_reason"] == "dgis_demo_point_budget"
+    assert osrm.geometry_calls == 1

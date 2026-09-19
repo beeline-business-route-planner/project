@@ -18,20 +18,17 @@
 
 ## Локальный запуск
 
-```bash
-cp .env.example .env
-docker compose up -d db
-uv sync
-uv run alembic upgrade head
-uv run uvicorn beeline_backend.main:app --reload
-```
-
-Альтернативно весь стек запускается одной командой; API-контейнер до старта
-автоматически применяет Alembic-миграции:
+Основной контур: собственный OSRM + PostgreSQL + Redis. Сначала подготовьте граф и задайте
+`OSRM_DATA_DIR` по [инструкции маршрутов](docs/ROUTING.md). Существующий `.env` с ключами сохраните;
+копировать `.env.example` нужно только при первом запуске.
 
 ```bash
+docker compose config --quiet
 docker compose up -d --build
 ```
+
+API-контейнер автоматически применяет миграции. Для запуска API на хосте и настройки
+геокодирования используйте [инструкцию](docs/ROUTING.md#запуск).
 
 OpenAPI: `http://localhost:8000/docs`. Health/readiness: `/api/v1/health`, `/api/v1/readiness`.
 Машиночитаемая схема для генерации TypeScript-клиента: `http://localhost:8000/openapi.json`.
@@ -45,7 +42,7 @@ curl -F 'file=@Dataset/Восток Синтетические данные.xlsx
   -H 'Idempotency-Key: demo-east-v1' http://localhost:8000/api/v1/imports
 ```
 
-CLI для импорта демо-набора после миграции:
+CLI для импорта **явно синтетического** демо-набора после миграции (координаты не подтверждают реальные адреса):
 
 ```bash
 uv run beeline-backend seed-demo 'Dataset/Восток Синтетические данные.xlsx'
@@ -60,6 +57,8 @@ uv run beeline-backend seed-demo 'Dataset/Восток Синтетически�
 - `POST /api/v1/requests/{id}/facts` — append-only подтверждённый факт.
 - `POST /api/v1/plans/run`, `GET /api/v1/planning-runs/{id}`.
 - `GET /api/v1/plans`, `GET /api/v1/plans/{id}`, `POST /api/v1/plans/{id}/approve`.
+- `GET /api/v1/plans/{id}/routes` — лёгкий overview всех инженеров.
+- `GET /api/v1/plans/{id}/engineers/{engineer_id}/route` — сохранённый detailed выбранного инженера.
 - `POST /api/v1/events` — событие + один новый кандидат.
 - `POST /api/v1/plans/{id}/manual-change` — новый полностью пересчитанный черновик.
 - `GET /api/v1/plans/diff`, `GET /api/v1/plans/{id}/metrics`.
@@ -68,17 +67,18 @@ uv run beeline-backend seed-demo 'Dataset/Восток Синтетически�
 
 ## Провайдеры
 
-Конфигурация по умолчанию использует 2ГИС: `GEOCODER_MODE=dgis` для Geocoder API и
-`ROUTING_PROVIDER=dgis` для Distance Matrix API и Routing API. Ключ задаётся только через
-`DGIS_API_KEY` в локальном `.env`. Матрица направленная, разбивается на блоки до 25 источников
-и 25 назначений; недостижимые пары хранятся как `null`. Для выбранных маршрутов запрашивается
-детальная геометрия 2ГИС в WKT и преобразуется в GeoJSON `[longitude, latitude]`.
+`ROUTING_PROVIDER=osrm` использует локальный OSRM для матрицы и геометрии. `hybrid` сохраняется
+как совместимый режим с тем же основным путём: 2ГИС автоматически не вызывается. Геометрия и
+сегменты хранятся в PostgreSQL, Redis необязателен. Все GET маршрутов читают сохранённый результат.
 
-Доступ к Geocoder, Distance Matrix и Routing проверяется независимо. Отсутствующий scope возвращает
-диагностируемый `503`, без скрытого fallback на другого провайдера. Лимиты демо-ключа задаются
-кабинетом 2ГИС. `nominatim`, `osrm` и `demo` оставлены как явно выбираемые резервные/тестовые адаптеры.
-Геокодер проверяет код `meta.code` даже при HTTP 200 и поддерживает оба описанных в OpenAPI
-источника координат: `items.point` и WKT `items.geometry.centroid`.
+Геокодирование выбирается отдельно. По умолчанию `GEOCODER_MODE=missing`: используйте известные
+координаты либо явно включите `dgis` с `DGIS_API_KEY` для новых реальных адресов. `nominatim` и
+alias `hybrid` больше не подставляют синтетические координаты при ошибке. Ограничения публичного
+геокодера, роли demo-адаптеров и параметры описаны в [docs/ROUTING.md](docs/ROUTING.md).
+
+`DgisRoutingProvider` сохранён для явного режима `dgis`; Geocoder, Distance Matrix и Routing
+по-прежнему имеют независимую диагностику доступа. Эти коммерческие API не нужны для основного
+routing-контура. Доступ к live геокодированию не подтверждается локальным OSRM-тестом.
 
 ## Frontend и CORS
 
@@ -90,19 +90,16 @@ CORS конфигурируется через `CORS_ORIGINS`, `CORS_ALLOW_METHO
 ## Проверки
 
 ```bash
-docker compose up -d db
-uv sync
+uv sync --locked
 uv run ruff check .
 uv run mypy src
 uv run pytest
-uv run alembic upgrade head
-uv run alembic downgrade base
-uv run alembic upgrade head
+uv run python scripts/verify_postgres_migrations.py --server-url postgresql://beeline:beeline@127.0.0.1:55432/postgres
 ```
 
-`downgrade base` — разрушительная проверка отката: она удаляет схему и все данны. После неё
-всегда выполняйте `upgrade head`; на ценной базе проверяйте downgrade только на отдельном тестовом
-экземпляре PostgreSQL.
+Миграционная утилита сама создаёт и удаляет отдельную тестовую БД. Проверять `downgrade` на
+пользовательской БД не нужно. Сквозной demo/benchmark и изоляция Docker описаны в
+[docs/ROUTING.md](docs/ROUTING.md); результаты — в [docs/routing/VERIFICATION.md](docs/routing/VERIFICATION.md).
 
 PostgreSQL опубликован на `localhost:55432`, чтобы не конфликтовать с уже установленной локальной БД.
 

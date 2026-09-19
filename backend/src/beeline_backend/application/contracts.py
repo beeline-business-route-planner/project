@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from beeline_backend.domain.model import Priority, RequestStatus
+from beeline_backend.domain.model import PlanCandidate, Priority, RequestStatus
 
 
 class LocationData(BaseModel):
@@ -176,3 +177,19 @@ class DayReport(BaseModel):
     assignments: list[ReportAssignment]
     metrics: dict[str, float | int | str]
     exceptions: list[ReportException] = Field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PreparedManualPlan:
+    snapshot: PlanningSnapshot
+    candidate: PlanCandidate
+    parent_version: int
+
+
+@dataclass(frozen=True)
+class ManualChangeContext:
+    parent_plan_id: UUID
+    parent_version: int
+    request_id: UUID
+    actor: str
+    reason: str

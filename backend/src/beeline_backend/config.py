@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -14,17 +15,24 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str = "postgresql+asyncpg://beeline:beeline@localhost:55432/beeline"
     business_timezone: str = "Europe/Moscow"
-    geocoder_mode: str = "dgis"
-    routing_provider: str = "dgis"
+    geocoder_mode: Literal["missing", "dgis", "nominatim", "hybrid", "demo"] = "missing"
+    routing_provider: Literal["osrm", "hybrid", "dgis", "demo", "yandex"] = "osrm"
     planner_provider: str = "deterministic"
     nominatim_base_url: str = "https://nominatim.openstreetmap.org"
     nominatim_user_agent: str = "beeline-business-planner/1.0"
     nominatim_email: str | None = None
     nominatim_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     nominatim_min_interval_seconds: float = Field(default=1.05, ge=1.0, le=60)
-    osrm_base_url: str = "http://router.project-osrm.org"
+    osrm_base_url: str = "http://localhost:5000"
     osrm_timeout_seconds: float = Field(default=8.0, gt=0, le=60)
     osrm_max_coordinates: int = Field(default=80, ge=2, le=500)
+    osrm_max_concurrency: int = Field(default=8, ge=1, le=32)
+    osrm_graph_manifest: Path | None = None
+    osrm_graph_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    redis_url: str | None = None
+    redis_route_ttl_seconds: int = Field(default=21600, ge=1, le=604800)
+    redis_timeout_seconds: float = Field(default=0.25, gt=0, le=2)
+    route_overview_tolerance_meters: float = Field(default=20, ge=0, le=100)
     dgis_base_url: str = "https://routing.api.2gis.com"
     dgis_catalog_base_url: str = "https://catalog.api.2gis.com"
     dgis_api_key: str | None = None

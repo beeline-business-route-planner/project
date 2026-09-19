@@ -408,9 +408,6 @@ class RouteLegRow(Base):
     )
     duration_seconds: Mapped[int] = mapped_column(Integer)
     distance_meters: Mapped[int] = mapped_column(Integer)
-    route_cache_id: Mapped[UUID | None] = mapped_column(
-        Uuid, ForeignKey("route_cache.id", ondelete="RESTRICT"), nullable=True
-    )
     matrix_snapshot_key: Mapped[str] = mapped_column(String(128))
     geometry: Mapped[dict[str, object] | None] = mapped_column(JSON_TYPE)
 
@@ -525,13 +522,3 @@ class OutboxJobRow(Base):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
-
-
-class PlanRouteArtifactRow(Base):
-    __tablename__ = "plan_route_artifacts"
-
-    plan_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("plans.id", ondelete="CASCADE"), primary_key=True)
-    engineer_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("engineers.id", ondelete="RESTRICT"), primary_key=True)
-    revision: Mapped[str] = mapped_column(String(64))
-    detailed: Mapped[dict[str, object]] = mapped_column(JSON_TYPE)
-    overview: Mapped[dict[str, object]] = mapped_column(JSON_TYPE)

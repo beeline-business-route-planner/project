@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-co
 COPY pyproject.toml README.md alembic.ini ./
 COPY alembic ./alembic
 COPY src ./src
+COPY scripts ./scripts
 RUN pip install --no-cache-dir .
 EXPOSE 8000
 CMD ["uvicorn", "beeline_backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

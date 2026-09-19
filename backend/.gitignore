@@ -41,3 +41,8 @@ htmlcov/
 *.db
 reports/
 tmp/
+
+# Local routing extracts and generated graph data
+data/osrm/
+*.osm.pbf
+*.osrm*

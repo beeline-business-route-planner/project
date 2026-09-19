@@ -29,3 +29,10 @@ payload события, геометрии и расширяемых метад�
 `engineer_skills`. Частичная семантика «один активный утверждённый план» реализована nullable-полем
 `approved_slot` и уникальным ограничением `(scenario_id, planning_date, approved_slot)`.
 
+
+## Сохранённые дорожные маршруты
+
+Миграция `0002_route_artifacts` добавляет `plan_route_artifacts` с составным PK `(plan_id, engineer_id)`,
+JSON detailed/overview и revision. Nullable `route_legs.route_cache_id` ссылается на immutable
+сегмент существующей `route_cache` и запрещает удаление используемого сегмента. Историческая
+геометрия первого leg сохранена для старого API. Подробности: [ROUTING.md](ROUTING.md).

@@ -10,6 +10,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from beeline_backend.application.planner import DeterministicPlanningAlgorithm
+from beeline_backend.application.routing import RouteBuilder
 from beeline_backend.application.services import BackendService
 from beeline_backend.config import get_settings
 from beeline_backend.infrastructure.clock import SystemClock
@@ -17,6 +18,7 @@ from beeline_backend.infrastructure.db import create_engine, create_session_fact
 from beeline_backend.infrastructure.gateway import SqlGateway
 from beeline_backend.infrastructure.importer import XlsxDatasetImporter
 from beeline_backend.infrastructure.providers import DemoGeocoder, DemoRoutingProvider
+from beeline_backend.infrastructure.route_store import SqlSegmentStore
 
 
 async def _seed_demo(dataset_path: Path) -> None:
@@ -32,6 +34,7 @@ async def _seed_demo(dataset_path: Path) -> None:
             DemoRoutingProvider(clock),
             DeterministicPlanningAlgorithm(),
             clock,
+            RouteBuilder(DemoRoutingProvider(clock), SqlSegmentStore(factory), settings.route_overview_tolerance_meters, settings.osrm_max_concurrency),
         )
         result = await service.import_dataset(
             dataset_path.name,
@@ -55,6 +58,7 @@ async def _plan_demo(scenario_id: UUID, planning_date: date) -> None:
             DemoRoutingProvider(clock),
             DeterministicPlanningAlgorithm(),
             clock,
+            RouteBuilder(DemoRoutingProvider(clock), SqlSegmentStore(factory), settings.route_overview_tolerance_meters, settings.osrm_max_concurrency),
         )
         result = await service.run_plan(
             scenario_id,

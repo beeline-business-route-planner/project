@@ -13,3 +13,8 @@ Dataset
 tests
 reports
 tmp
+
+# Local routing extracts and generated graph data
+data/osrm/
+*.osm.pbf
+*.osrm*

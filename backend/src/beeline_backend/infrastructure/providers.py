@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import math
 import re
 from datetime import datetime
+from time import perf_counter
 from typing import cast
 
 import httpx
@@ -712,13 +714,29 @@ class OsrmRoutingProvider:
         max_coordinates: int,
         clock: object,
         transport: httpx.AsyncBaseTransport | None = None,
+        max_concurrency: int = 8,
+        graph_fingerprint: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout_seconds
         self._max_coordinates = max_coordinates
         self._clock = clock
         self._transport = transport
-        self._semaphore = asyncio.Semaphore(4)
+        self._semaphore = asyncio.Semaphore(max_concurrency)
+        self.graph_fingerprint = graph_fingerprint
+        self._data_version: str | None = None
+        self._client = httpx.AsyncClient(
+            timeout=timeout_seconds, transport=transport, trust_env=False,
+            limits=httpx.Limits(max_connections=max_concurrency, max_keepalive_connections=max_concurrency),
+        )
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    @staticmethod
+    def _validate_profile(profile: str) -> None:
+        if profile != "driving":
+            raise DomainError("unsupported_routing_profile", "The local graph supports driving only")
 
     @staticmethod
     def _coordinates(coordinates: list[tuple[float, float]]) -> str:
@@ -728,13 +746,17 @@ class OsrmRoutingProvider:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                async with self._semaphore, httpx.AsyncClient(
-                    timeout=self._timeout, transport=self._transport
-                ) as client:
-                    response = await client.get(f"{self._base_url}{path}", params=params)
+                async with self._semaphore:
+                    started = perf_counter()
+                    try:
+                        response = await self._client.get(f"{self._base_url}{path}", params=params)
+                    finally:
+                        logging.getLogger(__name__).info("routing_request", extra={"fields": {
+                            "provider": self.name, "service": path.split("/")[1], "attempt": attempt+1,
+                            "elapsed_ms": round((perf_counter()-started)*1000, 3),
+                        }})
                 if response.status_code >= 500 or response.status_code == 429:
                     raise httpx.HTTPStatusError("temporary OSRM failure", request=response.request, response=response)
-                response.raise_for_status()
                 try:
                     payload = response.json()
                 except ValueError as exc:
@@ -754,6 +776,12 @@ class OsrmRoutingProvider:
                     raise DomainError(
                         "routing_failed", f"OSRM returned {code}", {"provider_code": code}
                     )
+                response.raise_for_status()
+                data_version = payload.get("data_version")
+                if isinstance(data_version, str):
+                    if self._data_version is not None and self._data_version != data_version:
+                        raise DependencyUnavailableError("routing_graph_changed", "OSRM graph changed; restart the API with its matching manifest")
+                    self._data_version = data_version
                 return payload
             except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
                 last_error = exc
@@ -766,6 +794,7 @@ class OsrmRoutingProvider:
     async def matrix(
         self, coordinates: list[tuple[float, float]], profile: str, departure_at: datetime
     ) -> RouteMatrix:
+        self._validate_profile(profile)
         size = len(coordinates)
         cells = [[TravelCell(duration_seconds=None, distance_meters=None) for _ in range(size)] for _ in range(size)]
         block_size = max(1, self._max_coordinates // 2)
@@ -836,7 +865,7 @@ class OsrmRoutingProvider:
                         )
         return RouteMatrix(
             provider=self.name,
-            provider_version=provider_version,
+            provider_version=self.graph_fingerprint or provider_version,
             captured_at=self._clock.now(),  # type: ignore[attr-defined]
             profile=profile,
             cells=cells,
@@ -845,9 +874,10 @@ class OsrmRoutingProvider:
     async def route_geometry(
         self, coordinates: list[tuple[float, float]], profile: str
     ) -> dict[str, object]:
+        self._validate_profile(profile)
         payload = await self._request(
             f"/route/v1/{profile}/{self._coordinates(coordinates)}",
-            {"overview": "full", "geometries": "geojson"},
+            {"overview": "full", "geometries": "geojson", "alternatives": "false"},
         )
         routes = payload.get("routes")
         if not isinstance(routes, list) or not routes:
@@ -860,25 +890,32 @@ class OsrmRoutingProvider:
             raise DomainError("invalid_route_response", "OSRM route geometry is invalid")
         result = dict(geometry)
         result["provider"] = self.name
+        result["distance_meters"] = first.get("distance")
+        result["duration_seconds"] = first.get("duration")
+        points = result.get("coordinates")
+        if isinstance(points, list) and len(points) == 1 and first.get("distance") == 0:
+            result["coordinates"] = [points[0], points[0]]
         return result
 
 
 class HybridRoutingProvider:
-    """Free-first routing: OSRM matrix, 2GIS geometry when quota allows, OSRM fallback."""
+    """Compatibility strategy: local OSRM owns matrix and primary geometry.
 
-    name = "hybrid_osrm_2gis"
+    Commercial refinement is never called implicitly during planning or reads.
+    Legacy constructor arguments are accepted to ease migration of integrations.
+    """
+
+    name = "hybrid_osrm"
 
     def __init__(
         self,
         matrix_provider: RoutingProvider,
-        geometry_provider: RoutingProvider,
-        fallback_geometry_provider: RoutingProvider,
+        geometry_provider: RoutingProvider | None = None,
+        fallback_geometry_provider: RoutingProvider | None = None,
         dgis_max_route_points: int = 5,
     ) -> None:
         self._matrix_provider = matrix_provider
-        self._geometry_provider = geometry_provider
-        self._fallback_geometry_provider = fallback_geometry_provider
-        self._dgis_max_route_points = max(2, dgis_max_route_points)
+        self.graph_fingerprint = getattr(matrix_provider, "graph_fingerprint", None)
 
     async def matrix(
         self, coordinates: list[tuple[float, float]], profile: str, departure_at: datetime
@@ -888,23 +925,15 @@ class HybridRoutingProvider:
     async def route_geometry(
         self, coordinates: list[tuple[float, float]], profile: str
     ) -> dict[str, object]:
-        if len(coordinates) <= self._dgis_max_route_points:
-            try:
-                geometry = await self._geometry_provider.route_geometry(coordinates, profile)
-                result = dict(geometry)
-                result["routing_strategy"] = self.name
-                return result
-            except (DependencyUnavailableError, DomainError) as exc:
-                fallback_reason = exc.code
-        else:
-            fallback_reason = "dgis_demo_point_budget"
-
-        geometry = await self._fallback_geometry_provider.route_geometry(coordinates, profile)
+        geometry = await self._matrix_provider.route_geometry(coordinates, profile)
         result = dict(geometry)
         result["routing_strategy"] = self.name
-        result["fallback_from"] = "2gis"
-        result["fallback_reason"] = fallback_reason
         return result
+
+    async def aclose(self) -> None:
+        close = getattr(self._matrix_provider, "aclose", None)
+        if close is not None:
+            await close()
 
 
 class YandexRoutingProvider:

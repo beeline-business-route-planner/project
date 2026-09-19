@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
+from time import perf_counter
 from typing import cast
 from uuid import UUID, uuid4
 
@@ -20,6 +22,7 @@ from starlette.background import BackgroundTask
 
 from beeline_backend.application.planner import DeterministicPlanningAlgorithm
 from beeline_backend.application.ports import ReportRenderer
+from beeline_backend.application.routing import DetailedResponse, OverviewResponse, RouteBuilder
 from beeline_backend.application.services import BackendService
 from beeline_backend.config import Settings, get_settings
 from beeline_backend.domain.errors import (
@@ -32,13 +35,13 @@ from beeline_backend.infrastructure.clock import SystemClock
 from beeline_backend.infrastructure.db import create_engine, create_session_factory
 from beeline_backend.infrastructure.gateway import SqlGateway
 from beeline_backend.infrastructure.importer import XlsxDatasetImporter
+from beeline_backend.infrastructure.logging import JsonFormatter
 from beeline_backend.infrastructure.models import Base
 from beeline_backend.infrastructure.providers import (
     DemoGeocoder,
     DemoRoutingProvider,
     DgisGeocoder,
     DgisRoutingProvider,
-    FallbackGeocoder,
     HybridRoutingProvider,
     MissingGeocoder,
     NominatimGeocoder,
@@ -46,6 +49,7 @@ from beeline_backend.infrastructure.providers import (
     YandexRoutingProvider,
 )
 from beeline_backend.infrastructure.reports import PdfReportRenderer, XlsxReportRenderer
+from beeline_backend.infrastructure.route_store import RedisRouteCache, RouteReader, SqlSegmentStore
 from beeline_backend.presentation.dto import (
     ApprovalRequest,
     ApprovalResponse,
@@ -100,15 +104,11 @@ def _provider_bundle(settings: Settings) -> tuple[object, object, object, object
             settings.nominatim_email,
         )
     elif settings.geocoder_mode == "hybrid":
-        geocoder = FallbackGeocoder(
-            NominatimGeocoder(
-                settings.nominatim_base_url,
-                settings.nominatim_user_agent,
-                settings.nominatim_timeout_seconds,
-                settings.nominatim_min_interval_seconds,
-                settings.nominatim_email,
-            ),
-            DemoGeocoder(),
+        # Compatibility alias: real addresses never silently become synthetic points.
+        geocoder = NominatimGeocoder(
+            settings.nominatim_base_url, settings.nominatim_user_agent,
+            settings.nominatim_timeout_seconds, settings.nominatim_min_interval_seconds,
+            settings.nominatim_email,
         )
     elif settings.geocoder_mode == "demo":
         geocoder = DemoGeocoder()
@@ -123,33 +123,25 @@ def _provider_bundle(settings: Settings) -> tuple[object, object, object, object
             settings.dgis_matrix_block_size,
             clock,
         )
-    elif settings.routing_provider == "osrm":
-        router = OsrmRoutingProvider(
-            settings.osrm_base_url,
-            settings.osrm_timeout_seconds,
-            settings.osrm_max_coordinates,
-            clock,
-        )
-    elif settings.routing_provider == "hybrid":
+    elif settings.routing_provider in {"osrm", "hybrid"}:
+        fingerprint = settings.osrm_graph_fingerprint
+        if settings.osrm_graph_manifest is not None:
+            manifest = json.loads(settings.osrm_graph_manifest.read_text())
+            manifest_fingerprint = manifest.get("fingerprint")
+            if not isinstance(manifest_fingerprint, str) or len(manifest_fingerprint) != 64:
+                raise ValueError("OSRM manifest must contain its graph fingerprint")
+            if fingerprint is not None and fingerprint != manifest_fingerprint:
+                raise ValueError("OSRM manifest and configured fingerprint do not match")
+            fingerprint = manifest_fingerprint
+        if fingerprint is None:
+            raise ValueError("Local routing requires OSRM_GRAPH_MANIFEST or OSRM_GRAPH_FINGERPRINT")
         osrm = OsrmRoutingProvider(
-            settings.osrm_base_url,
-            settings.osrm_timeout_seconds,
-            settings.osrm_max_coordinates,
-            clock,
+            settings.osrm_base_url, settings.osrm_timeout_seconds,
+            settings.osrm_max_coordinates, clock,
+            max_concurrency=settings.osrm_max_concurrency,
+            graph_fingerprint=fingerprint,
         )
-        dgis = DgisRoutingProvider(
-            settings.dgis_base_url,
-            settings.dgis_api_key,
-            settings.dgis_timeout_seconds,
-            settings.dgis_matrix_block_size,
-            clock,
-        )
-        router = HybridRoutingProvider(
-            matrix_provider=osrm,
-            geometry_provider=dgis,
-            fallback_geometry_provider=osrm,
-            dgis_max_route_points=settings.hybrid_dgis_max_route_points,
-        )
+        router = HybridRoutingProvider(osrm) if settings.routing_provider == "hybrid" else osrm
     elif settings.routing_provider == "yandex":
         router = YandexRoutingProvider(settings.yandex_api_key)
     else:
@@ -163,6 +155,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         level=app_settings.log_level,
         format='{"time":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","message":"%(message)s"}',
     )
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(JsonFormatter())
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -176,8 +170,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if app_settings.app_env == "test":
             async with engine.begin() as connection:
                 await connection.run_sync(Base.metadata.create_all)
-        yield
-        await engine.dispose()
+        _, _, routing_provider, _ = app.state.providers
+        app.state.route_cache = RedisRouteCache(app_settings.redis_url, app_settings.redis_route_ttl_seconds, app_settings.redis_timeout_seconds)
+        app.state.route_builder = RouteBuilder(routing_provider, SqlSegmentStore(app.state.session_factory),
+                                               app_settings.route_overview_tolerance_meters, app_settings.osrm_max_concurrency)
+        app.state.route_reader = RouteReader(app.state.session_factory, app.state.route_cache)
+        try:
+            yield
+        finally:
+            await app.state.route_builder.aclose()
+            await app.state.route_cache.aclose()
+            close = getattr(routing_provider, "aclose", None)
+            if close is not None:
+                await close()
+            await engine.dispose()
 
     app = FastAPI(
         title="Beeline Business Planning Backend",
@@ -200,11 +206,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def correlation_middleware(request: Request, call_next: object) -> object:
+        started = perf_counter()
         correlation_id = request.headers.get("X-Correlation-ID") or str(uuid4())
         token = correlation_id_var.set(correlation_id)
         try:
             response = await call_next(request)  # type: ignore[operator]
             response.headers["X-Correlation-ID"] = correlation_id
+            logger.info("http_request", extra={"fields": {"method": request.method, "path": request.url.path,
+                        "status_code": response.status_code, "correlation_id": correlation_id,
+                        "elapsed_ms": round((perf_counter()-started)*1000, 3)}})
             return response
         finally:
             correlation_id_var.reset(token)
@@ -272,6 +282,8 @@ def _service(request: Request, session: AsyncSession = Depends(_session)) -> Bac
         router,
         planner,
         clock,
+        request.app.state.route_builder,
+        request.app.state.route_reader.warm,
     )
 
 
@@ -298,6 +310,16 @@ def _router() -> APIRouter:
     async def readiness(session: AsyncSession = Depends(_session)) -> dict[str, str]:
         await session.execute(select(1))
         return {"status": "ready"}
+
+    @router.get("/plans/{plan_id}/routes", response_model=OverviewResponse, tags=["routes"])
+    async def overview_routes(plan_id: UUID, request: Request) -> OverviewResponse:
+        reader: RouteReader = request.app.state.route_reader
+        return await reader.overview(plan_id)
+
+    @router.get("/plans/{plan_id}/engineers/{engineer_id}/route", response_model=DetailedResponse, tags=["routes"])
+    async def detailed_route(plan_id: UUID, engineer_id: UUID, request: Request) -> DetailedResponse:
+        reader: RouteReader = request.app.state.route_reader
+        return await reader.detailed(plan_id, engineer_id)
 
     @router.post("/imports", response_model=ImportResponse, tags=["datasets"])
     async def import_dataset(

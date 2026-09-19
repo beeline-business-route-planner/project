@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from pathlib import Path
 from uuid import UUID
 
+from beeline_backend.application.contracts import ManualChangeContext
 from beeline_backend.application.planner import validate_candidate
 from beeline_backend.application.ports import (
     Clock,
@@ -14,8 +17,9 @@ from beeline_backend.application.ports import (
     ReportRenderer,
     RoutingProvider,
 )
+from beeline_backend.application.routing import RouteBuilder
 from beeline_backend.domain.errors import DomainError
-from beeline_backend.domain.model import Assignment, RequestStatus
+from beeline_backend.domain.model import RequestStatus
 
 
 class BackendService:
@@ -26,12 +30,16 @@ class BackendService:
         router: RoutingProvider,
         planner: PlanningAlgorithm,
         clock: Clock,
+        route_builder: RouteBuilder,
+        warm_routes: Callable[[UUID], Awaitable[None]] | None = None,
     ) -> None:
         self.gateway = gateway
         self._importer = importer
         self._router = router
         self._planner = planner
         self._clock = clock
+        self._route_builder = route_builder
+        self._warm_routes = warm_routes
 
     async def import_dataset(
         self, filename: str, content: bytes, idempotency_key: str | None
@@ -57,28 +65,15 @@ class BackendService:
             snapshot = await self.gateway.attach_matrix(snapshot, matrix)
             candidate = await self._planner.plan(snapshot)
             validate_candidate(snapshot, candidate)
-            location_by_id = {item.id: item for item in snapshot.locations}
-            by_engineer: dict[UUID, list[Assignment]] = {}
-            for assignment in candidate.assignments:
-                by_engineer.setdefault(assignment.engineer_id, []).append(assignment)
-            route_geometries: dict[UUID, dict[str, object]] = {}
-            for engineer_id, assignments in by_engineer.items():
-                ordered = sorted(assignments, key=lambda item: item.position)
-                location_ids = [ordered[0].from_location_id, *[item.location_id for item in ordered]]
-                route_coordinates = [
-                    (location_by_id[item].latitude, location_by_id[item].longitude)
-                    for item in location_ids
-                ]
-                route_geometries[engineer_id] = await self._router.route_geometry(
-                    route_coordinates, "driving"
-                )
+            route_build = await self._route_builder.build(snapshot, candidate)
             run_id, plan_id = await self.gateway.save_candidate(
                 run_id,
                 snapshot,
                 candidate,
                 self._planner.name,
-                route_geometries,
+                route_build.legacy_geometries,
                 snapshot.base_plan_id,
+                route_build,
             )
         except asyncio.CancelledError:
             await self.gateway.mark_run_failed(
@@ -88,9 +83,15 @@ class BackendService:
         except DomainError as exc:
             await self.gateway.mark_run_failed(run_id, exc.code, exc.message)
             raise
-        except Exception as exc:
-            await self.gateway.mark_run_failed(run_id, "unexpected_planning_error", str(exc))
+        except Exception:
+            await self.gateway.mark_run_failed(run_id, "unexpected_planning_error", "Unexpected planning failure")
             raise
+        logging.getLogger(__name__).info("plan_routes_persisted", extra={"fields": {
+            "plan_id": str(plan_id), "run_id": str(run_id),
+            "segments_reused": route_build.segments_reused, "segments_calculated": route_build.segments_calculated,
+        }})
+        if self._warm_routes is not None:
+            await self._warm_routes(plan_id)
         return {"planning_run_id": run_id, "plan_id": plan_id, "status": "succeeded"}
 
     async def create_request_and_replan(
@@ -222,21 +223,28 @@ class BackendService:
         reason: str,
         actor: str,
     ) -> UUID:
-        new_plan_id = await self.gateway.manual_change(
-            plan_id,
-            request_id,
-            engineer_id,
-            position,
-            start_at,
-            reason,
-            actor,
+        prepared = await self.gateway.prepare_manual_change(
+            plan_id, request_id, engineer_id, position, start_at, reason, actor,
         )
-        coordinate_sets = await self.gateway.route_coordinate_sets(new_plan_id)
-        geometries = {
-            current_engineer_id: await self._router.route_geometry(coordinates, "driving")
-            for current_engineer_id, coordinates in coordinate_sets.items()
-        }
-        await self.gateway.store_route_geometries(new_plan_id, geometries)
+        run_id = await self.gateway.start_run(prepared.snapshot, "manual-dispatcher-v1")
+        try:
+            route_build = await self._route_builder.build(prepared.snapshot, prepared.candidate)
+            _, new_plan_id = await self.gateway.save_candidate(
+                run_id, prepared.snapshot, prepared.candidate, "manual-dispatcher-v1",
+                route_build.legacy_geometries, plan_id, route_build,
+                ManualChangeContext(plan_id, prepared.parent_version, request_id, actor, reason),
+            )
+        except asyncio.CancelledError:
+            await self.gateway.mark_run_failed(run_id, "planning_cancelled", "Manual routing was cancelled")
+            raise
+        except DomainError as exc:
+            await self.gateway.mark_run_failed(run_id, exc.code, exc.message)
+            raise
+        except Exception:
+            await self.gateway.mark_run_failed(run_id, "unexpected_planning_error", "Manual routing failed")
+            raise
+        if self._warm_routes is not None:
+            await self._warm_routes(new_plan_id)
         return new_plan_id
 
     async def render_report(

@@ -2,16 +2,21 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from beeline_backend.application.contracts import (
     DayReport,
     ImportedDataset,
+    ManualChangeContext,
     PlanningSnapshot,
+    PreparedManualPlan,
     RouteMatrix,
 )
 from beeline_backend.domain.model import PlanCandidate, RequestStatus
+
+if TYPE_CHECKING:
+    from beeline_backend.application.routing import RouteBuild
 
 
 class Clock(Protocol):
@@ -96,6 +101,8 @@ class Gateway(Protocol):
         algorithm: str,
         route_geometries: dict[UUID, dict[str, object]],
         parent_plan_id: UUID | None,
+        route_build: RouteBuild | None = None,
+        manual_context: ManualChangeContext | None = None,
     ) -> tuple[UUID, UUID]: ...
     async def mark_run_failed(self, run_id: UUID, code: str, message: str) -> None: ...
     async def approve_plan(
@@ -134,7 +141,7 @@ class Gateway(Protocol):
         self, event_id: UUID, job_key: str, error_code: str
     ) -> None: ...
     async def diff_plans(self, old_plan_id: UUID, new_plan_id: UUID) -> dict[str, object]: ...
-    async def manual_change(
+    async def prepare_manual_change(
         self,
         plan_id: UUID,
         request_id: UUID,
@@ -143,7 +150,7 @@ class Gateway(Protocol):
         start_at: datetime | None,
         reason: str,
         actor: str,
-    ) -> UUID: ...
+    ) -> PreparedManualPlan: ...
     async def route_coordinate_sets(
         self, plan_id: UUID
     ) -> dict[UUID, list[tuple[float, float]]]: ...

@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: beeline
       POSTGRES_PASSWORD: beeline
     ports:
-      - "55432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U beeline -d beeline"]
       interval: 3s
@@ -22,12 +22,18 @@ services:
     command:
       - /bin/sh
       - -c
-      - alembic upgrade head && exec uvicorn beeline_backend.main:app --host 0.0.0.0 --port 8000
-    env_file: .env
+      - alembic upgrade head && exec uvicorn beeline_backend.main:app --host 0.0.0.0 --port 8000 --limit-concurrency 64
+    env_file: ${BACKEND_ENV_FILE:-.env}
     environment:
       DATABASE_URL: postgresql+asyncpg://beeline:beeline@db:5432/beeline
+      OSRM_BASE_URL: http://osrm:5000
+      OSRM_GRAPH_MANIFEST: /osrm-data/manifest.json
+      ROUTING_PROVIDER: ${ROUTING_PROVIDER:-osrm}
+      REDIS_URL: redis://redis:6379/0
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    volumes:
+      - ${OSRM_DATA_DIR:?Run scripts/prepare_osrm.py and set OSRM_DATA_DIR}:/osrm-data:ro
     depends_on:
       db:
         condition: service_healthy
@@ -42,6 +48,36 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-56379}:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend@sha256:8a1b1bc938412f15f9b5b32d794c4ec6bf4a85dfbbabfa0a014b70b187edb53b
+    command: ["osrm-routed", "--algorithm", "mld", "--max-table-size", "500", "/data/region.osrm"]
+    volumes:
+      - ${OSRM_DATA_DIR:?Run scripts/prepare_osrm.py and set OSRM_DATA_DIR}:/data:ro
+      - ./scripts/osrm-health.sh:/checks/osrm-health.sh:ro
+    environment:
+      OSRM_HEALTH_COORDINATE: ${OSRM_HEALTH_COORDINATE:-37.6173,55.7558}
+    ports:
+      - "127.0.0.1:5001:5000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bash", "/checks/osrm-health.sh"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+      start_period: 20s
 
 volumes:
   beeline_pg:

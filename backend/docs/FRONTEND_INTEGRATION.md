@@ -36,13 +36,22 @@ origin explicitly in production. Do not use `*` together with credentials.
 ## Recommended first-screen flow
 
 1. `GET /scenarios` and select a scenario plus `planning_date`.
-2. `GET /dashboard?scenario_id=...&planning_date=YYYY-MM-DD` for the active plan, requests and
-   engineers in one response.
-3. If there is no active plan, upload the synthetic workbook with `POST /imports`, then call
-   `POST /plans/run` and approve the returned draft with `POST /plans/{id}/approve`.
-4. Render `active_plan.routes[].geometry` as GeoJSON. Coordinates are always
-   `[longitude, latitude]`.
-5. Use `GET /plans/diff` before approving a proposed replan.
+2. `GET /plans?scenario_id=...&planning_date=YYYY-MM-DD` and select the approved plan.
+   Load requests and engineers through their list endpoints as needed.
+3. If there is no plan, import a geocoded dataset, call `POST /plans/run`, and approve the draft.
+4. `GET /plans/{plan_id}/routes` loads overview geometry for every engineer. Coordinates are
+   `[longitude, latitude]`; empty routes have `geometry=null` and `route_status="empty"`.
+5. On engineer selection, request `GET /plans/{plan_id}/engineers/{engineer_id}/route` and display
+   its detailed geometry. Keep responses by plan ID, revision and engineer ID.
+6. Use `GET /plans/diff` before approving a proposed replan. The new plan has a different ID;
+   old saved routes stay unchanged.
+
+The existing dashboard and full-plan endpoints remain compatible and include detailed geometry;
+using those large responses for the map would lose the payload benefit of overview. All route GETs
+read saved PostgreSQL/Redis data without routing calls. A legacy plan without new artifacts returns
+`409 route_artifacts_unavailable` on the new endpoints; offer explicit creation of a new plan.
+Contract details and backend demo commands: [ROUTING.md](ROUTING.md). This change supplies backend
+API support; it does not implement a frontend map.
 
 All timestamps are ISO 8601. Send timestamps with an explicit UTC offset, for example
 `2026-08-17T10:00:00+03:00`. Identifiers are UUID strings.

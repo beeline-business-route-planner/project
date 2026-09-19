@@ -19,7 +19,9 @@ from beeline_backend.application.contracts import (
     ImportedDataset,
     LocationData,
     LockedAssignmentData,
+    ManualChangeContext,
     PlanningSnapshot,
+    PreparedManualPlan,
     ReportAssignment,
     ReportException,
     RequestData,
@@ -28,6 +30,7 @@ from beeline_backend.application.contracts import (
 )
 from beeline_backend.application.planner import validate_candidate
 from beeline_backend.application.ports import Clock, GeocodingProvider
+from beeline_backend.application.routing import RouteBuild
 from beeline_backend.domain.errors import ConflictError, DomainError, NotFoundError
 from beeline_backend.domain.model import (
     Assignment,
@@ -51,6 +54,7 @@ from beeline_backend.infrastructure.models import (
     PlanApprovalRow,
     PlanMetricRow,
     PlanningRunRow,
+    PlanRouteArtifactRow,
     PlanRow,
     RequestRow,
     RequestStatusEventRow,
@@ -830,8 +834,14 @@ class SqlGateway:
         algorithm: str,
         route_geometries: dict[UUID, dict[str, object]],
         parent_plan_id: UUID | None,
+        route_build: RouteBuild | None = None,
+        manual_context: ManualChangeContext | None = None,
     ) -> tuple[UUID, UUID]:
         validate_candidate(snapshot, candidate)
+        if manual_context is not None:
+            parent = await self._session.scalar(select(PlanRow).where(PlanRow.id == manual_context.parent_plan_id).with_for_update().execution_options(populate_existing=True))
+            if parent is None or parent.version != manual_context.parent_version or parent.status not in {"draft", "approved"}:
+                raise ConflictError("manual_plan_changed", "Parent plan changed during route calculation")
         now = self._now()
         run = await self._session.get(PlanningRunRow, run_id)
         if run is None:
@@ -882,12 +892,27 @@ class SqlGateway:
                     to_location_id=item.location_id,
                     duration_seconds=item.travel_seconds,
                     distance_meters=item.distance_meters,
+                    route_cache_id=(route_build.routes[item.engineer_id].cache_ids[item.position-1] if route_build else None),
                     matrix_snapshot_key=snapshot.input_version,
                     geometry=(
                         route_geometries.get(item.engineer_id) if item.position == 1 else None
                     ),
                 )
             )
+        if route_build is not None:
+            for engineer_id, artifact in route_build.routes.items():
+                self._session.add(PlanRouteArtifactRow(
+                    plan_id=plan.id, engineer_id=engineer_id, revision=artifact.revision,
+                    detailed=artifact.detailed.model_dump(mode="json"),
+                    overview=artifact.overview.model_dump(mode="json"),
+                ))
+            run.diagnostics = {"segments_reused": route_build.segments_reused,
+                               "segments_calculated": route_build.segments_calculated}
+        if manual_context is not None:
+            await self._audit(snapshot.scenario_id, "manual_plan_change", "plan", plan.id,
+                              manual_context.actor, manual_context.reason,
+                              {"parent_plan_id": str(manual_context.parent_plan_id),
+                               "request_id": str(manual_context.request_id)})
         for unassigned_item in candidate.unassigned:
             self._session.add(
                 UnassignedRequestRow(
@@ -947,6 +972,7 @@ class SqlGateway:
         return run_id, plan.id
 
     async def mark_run_failed(self, run_id: UUID, code: str, message: str) -> None:
+        await self._session.rollback()
         row = await self._session.get(PlanningRunRow, run_id)
         if row is None:
             return
@@ -1482,7 +1508,7 @@ class SqlGateway:
             "distance_meters": row.distance_meters,
         }
 
-    async def manual_change(
+    async def prepare_manual_change(
         self,
         plan_id: UUID,
         request_id: UUID,
@@ -1491,7 +1517,7 @@ class SqlGateway:
         start_at: datetime | None,
         reason: str,
         actor: str,
-    ) -> UUID:
+    ) -> PreparedManualPlan:
         plan = await self._session.get(PlanRow, plan_id)
         if plan is None:
             raise NotFoundError("plan_not_found", "Plan not found")
@@ -1510,6 +1536,8 @@ class SqlGateway:
         snapshot = snapshot.model_copy(
             update={"travel_by_profile": original_snapshot.travel_by_profile}
         )
+        if snapshot.location_ids != original_snapshot.location_ids:
+            raise ConflictError("manual_matrix_stale", "Recalculate the plan before a manual change after its locations changed")
         existing = (
             await self._session.scalars(
                 select(AssignmentRow).where(AssignmentRow.plan_id == plan_id)
@@ -1634,26 +1662,7 @@ class SqlGateway:
             ),
         )
         validate_candidate(snapshot, candidate)
-        run_id = await self.start_run(snapshot, "manual-dispatcher-v1")
-        _, new_plan_id = await self.save_candidate(
-            run_id,
-            snapshot,
-            candidate,
-            "manual-dispatcher-v1",
-            {},
-            plan_id,
-        )
-        await self._audit(
-            plan.scenario_id,
-            "manual_plan_change",
-            "plan",
-            new_plan_id,
-            actor,
-            reason,
-            {"parent_plan_id": str(plan_id), "request_id": str(request_id)},
-        )
-        await self._session.commit()
-        return new_plan_id
+        return PreparedManualPlan(snapshot, candidate, plan.version)
 
     async def build_report(self, plan_id: UUID, now: datetime) -> DayReport:
         plan = await self._session.get(PlanRow, plan_id)
