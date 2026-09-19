@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from io import BytesIO
 from uuid import uuid4
 
@@ -9,7 +10,7 @@ from openpyxl import load_workbook
 from beeline_backend.application.contracts import PlanningSnapshot
 from beeline_backend.application.planner import DeterministicPlanningAlgorithm
 from beeline_backend.domain.errors import DomainError
-from beeline_backend.domain.model import PlanCandidate
+from beeline_backend.domain.model import PlanCandidate, Violation
 
 
 class FailOncePlanner(DeterministicPlanningAlgorithm):
@@ -23,6 +24,23 @@ class FailOncePlanner(DeterministicPlanningAlgorithm):
         if self.attempts == 1:
             raise DomainError("forced_planning_failure", "Synthetic first-attempt failure")
         return await super().plan(snapshot)
+
+
+class PlannerWithViolation(DeterministicPlanningAlgorithm):
+    name = "test-planner-with-violation"
+
+    async def plan(self, snapshot: PlanningSnapshot) -> PlanCandidate:
+        candidate = await super().plan(snapshot)
+        return replace(
+            candidate,
+            violations=(
+                Violation(
+                    type="SLA_VIOLATION",
+                    request_id=candidate.assignments[0].request_id,
+                    details={"delay_seconds": 120},
+                ),
+            ),
+        )
 
 
 def _import(client: TestClient, content: bytes) -> tuple[str, str]:
@@ -130,6 +148,9 @@ def test_import_plan_approve_replan_diff_and_reports(
     )
     assert requests.status_code == 200
     assert len(requests.json()) == 2
+    assert requests.json()[0]["required_skills"]
+    assert requests.json()[0]["coordinates"]
+    assert requests.json()[0]["sla_deadline"] == requests.json()[0]["window_end"]
 
     run = client.post(
         "/api/v1/plans/run",
@@ -141,12 +162,34 @@ def test_import_plan_approve_replan_diff_and_reports(
     assert plan.status_code == 200
     assert len(plan.json()["assignments"]) == 2
     assert plan.json()["metrics"]["travel_time_seconds"] >= 0
+    engineers = client.get(
+        "/api/v1/engineers",
+        params={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
+    )
+    assert engineers.status_code == 200, engineers.text
+    assert engineers.json()[0]["work_start"] == "08:00:00"
+    assert engineers.json()[0]["availability"] is True
+    assert engineers.json()[0]["start_location"]["coordinates"]
+    assigned_engineer_id = plan.json()["assignments"][0]["engineer_id"]
+    engineer_plan = client.get(
+        f"/api/v1/engineers/{assigned_engineer_id}/route",
+        params={"plan_id": first_plan},
+    )
+    assert engineer_plan.status_code == 200, engineer_plan.text
+    assert engineer_plan.json()["assigned_requests_count"] >= 1
+    assert engineer_plan.json()["route_duration_seconds"] >= 0
 
     approved = client.post(
         f"/api/v1/plans/{first_plan}/approve",
         json={"expected_base_plan_id": None, "actor": "dispatcher"},
     )
     assert approved.status_code == 200, approved.text
+    duplicate_approval = client.post(
+        f"/api/v1/plans/{first_plan}/approve",
+        json={"expected_base_plan_id": None, "actor": "dispatcher"},
+    )
+    assert duplicate_approval.status_code == 200, duplicate_approval.text
+    assert duplicate_approval.json() == approved.json()
 
     event = client.post(
         "/api/v1/events",
@@ -179,6 +222,14 @@ def test_import_plan_approve_replan_diff_and_reports(
     assert diff.status_code == 200, diff.text
     assert diff.json()["summary"]["unchanged"] == 2
 
+    changes = client.get(f"/api/v1/plans/{second_plan}/changes")
+    assert changes.status_code == 200, changes.text
+    assert changes.json() == {
+        "base_plan_id": first_plan,
+        "new_plan_id": second_plan,
+        "changes": [],
+    }
+
     stale = client.post(
         f"/api/v1/plans/{second_plan}/approve",
         json={"expected_base_plan_id": None, "actor": "dispatcher"},
@@ -202,6 +253,70 @@ def test_import_plan_approve_replan_diff_and_reports(
     )
     assert dashboard.status_code == 200
     assert dashboard.json()["active_plan"]["id"] == second_plan
+
+
+def test_urgent_request_creation_and_replanning_are_separate_use_cases(
+    client: TestClient, synthetic_xlsx: bytes
+) -> None:
+    _, scenario_id = _import(client, synthetic_xlsx)
+    first_plan_id = client.post(
+        "/api/v1/plans/run",
+        json={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
+    ).json()["plan_id"]
+    assert client.post(
+        f"/api/v1/plans/{first_plan_id}/approve",
+        json={"expected_base_plan_id": None, "actor": "dispatcher"},
+    ).status_code == 200
+
+    created = client.post(
+        "/api/v1/requests",
+        json={
+            "scenario_id": scenario_id,
+            "planning_date": "2026-08-17",
+            "external_id": "urgent-demo-1",
+            "address": "Москва, новый адрес для срочной заявки",
+            "district": "Центр",
+            "window_start": "2026-08-17T12:00:00+03:00",
+            "window_end": "2026-08-17T18:00:00+03:00",
+            "service_minutes": 30,
+            "required_skill": "emergency",
+            "priority": "urgent",
+            "idempotency_key": "urgent-demo-1",
+            "actor": "dispatcher",
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert "replanning" not in created.json()
+
+    replan_payload = {
+        "scenario_id": scenario_id,
+        "planning_date": "2026-08-17",
+        "base_plan_id": first_plan_id,
+        "as_of": "2026-08-17T10:00:00+03:00",
+    }
+    replanned = client.post(
+        "/api/v1/plans/replan",
+        json=replan_payload,
+        headers={"Idempotency-Key": "urgent-demo-replan-1"},
+    )
+    assert replanned.status_code == 200, replanned.text
+    second_plan_id = replanned.json()["plan_id"]
+    assert second_plan_id != first_plan_id
+    duplicate_replan = client.post(
+        "/api/v1/plans/replan",
+        json=replan_payload,
+        headers={"Idempotency-Key": "urgent-demo-replan-1"},
+    )
+    assert duplicate_replan.status_code == 200, duplicate_replan.text
+    assert duplicate_replan.json()["duplicate"] is True
+    assert duplicate_replan.json()["plan_id"] == second_plan_id
+    assert client.get(f"/api/v1/plans/{first_plan_id}").status_code == 200
+    changes = client.get(f"/api/v1/plans/{second_plan_id}/changes")
+    assert changes.status_code == 200, changes.text
+    assert any(
+        item["request_id"] == created.json()["request_id"] and item["type"] == "ASSIGNED"
+        for item in changes.json()["changes"]
+    )
 
 
 def test_failed_event_replanning_resumes_with_same_idempotency_key(
@@ -239,6 +354,31 @@ def test_failed_event_replanning_resumes_with_same_idempotency_key(
         params={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
     )
     assert [item["id"] for item in plans.json()] == [recovered_plan_id]
+
+
+def test_planner_reasons_and_violations_are_persisted_for_frontend(
+    client: TestClient, synthetic_xlsx: bytes
+) -> None:
+    _, scenario_id = _import(client, synthetic_xlsx)
+    clock, geocoder, router, _planner = client.app.state.providers
+    client.app.state.providers = (clock, geocoder, router, PlannerWithViolation())
+
+    run = client.post(
+        "/api/v1/plans/run",
+        json={"scenario_id": scenario_id, "planning_date": "2026-08-17"},
+    )
+    assert run.status_code == 200, run.text
+    plan = client.get(f"/api/v1/plans/{run.json()['plan_id']}")
+    assert plan.status_code == 200, plan.text
+    body = plan.json()
+    assert "engineer_has_required_skill" in body["assignments"][0]["reasons"]
+    assert len(body["violations"]) == 1
+    violation = body["violations"][0]
+    assert violation["type"] == "SLA_VIOLATION"
+    assert violation["details"] == {"delay_seconds": 120}
+    assert violation["request_id"] in {
+        assignment["request_id"] for assignment in body["assignments"]
+    }
 
 
 def test_planned_finish_does_not_create_completed_fact(

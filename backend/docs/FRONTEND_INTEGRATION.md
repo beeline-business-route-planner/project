@@ -43,8 +43,9 @@ origin explicitly in production. Do not use `*` together with credentials.
    `[longitude, latitude]`; empty routes have `geometry=null` and `route_status="empty"`.
 5. On engineer selection, request `GET /plans/{plan_id}/engineers/{engineer_id}/route` and display
    its detailed geometry. Keep responses by plan ID, revision and engineer ID.
-6. Use `GET /plans/diff` before approving a proposed replan. The new plan has a different ID;
-   old saved routes stay unchanged.
+6. Use `GET /plans/{new_plan_id}/changes` before approving a proposed replan. The new plan has a
+   different ID; old saved routes stay unchanged. `GET /plans/diff` remains available for a
+   detailed arbitrary comparison.
 
 The existing dashboard and full-plan endpoints remain compatible and include detailed geometry;
 using those large responses for the map would lose the payload benefit of overview. All route GETs
@@ -59,7 +60,9 @@ All timestamps are ISO 8601. Send timestamps with an explicit UTC offset, for ex
 ## Mutating requests
 
 - `POST /imports` accepts `multipart/form-data` with field `file`; pass `Idempotency-Key`.
-- `POST /requests` creates a request and starts one replanning proposal.
+- `POST /requests` creates a request only. It returns `request_id` and the recorded `event_id`.
+- `POST /plans/replan` explicitly creates a proposal from `base_plan_id`; pass
+  `Idempotency-Key` and reuse it on retry.
 - `POST /requests/{id}/facts` records a confirmed manual fact.
 - `POST /events` records a day event and starts one replanning proposal.
 - `POST /plans/{id}/manual-change` creates a new draft; it never mutates the old plan.
@@ -68,6 +71,66 @@ All timestamps are ISO 8601. Send timestamps with an explicit UTC offset, for ex
 
 The frontend should disable repeated submit while a mutation is in flight and reuse the same
 idempotency key when retrying the same logical action.
+
+## Screen to endpoint map
+
+| Screen action | Endpoint |
+|---|---|
+| Open plan | `GET /plans/{plan_id}` |
+| Load overview map | `GET /plans/{plan_id}/routes` |
+| Select engineer | `GET /plans/{plan_id}/engineers/{engineer_id}/route` |
+| Load requests | `GET /requests?scenario_id=...&planning_date=...` |
+| Load engineers | `GET /engineers?scenario_id=...` |
+| Approve proposal | `POST /plans/{plan_id}/approve` |
+| Create urgent request | `POST /requests` |
+| Replan from approved plan | `POST /plans/replan` |
+| Show replan changes | `GET /plans/{new_plan_id}/changes` |
+
+`GET /requests` includes coordinates, time window, service duration, priority, required skills,
+required transport, current status and `sla_deadline`. `GET /engineers` accepts the optional
+`planning_date` query parameter and includes the shift, availability and start location. The legacy
+plan-scoped engineer card `GET /engineers/{engineer_id}/route?plan_id=...` additionally returns
+assigned request count, workload, route distance/duration and SLA violation count.
+
+Create the urgent request first:
+
+```json
+{
+  "scenario_id": "6fcb7dd4-9980-467d-b347-e6d4f295340f",
+  "planning_date": "2026-08-17",
+  "external_id": "urgent-demo-1",
+  "address": "Москва, адрес клиента",
+  "district": "Центр",
+  "window_start": "2026-08-17T12:00:00+03:00",
+  "window_end": "2026-08-17T18:00:00+03:00",
+  "service_minutes": 80,
+  "required_skill": "emergency",
+  "required_transport": "car",
+  "priority": "urgent",
+  "idempotency_key": "urgent-demo-1",
+  "actor": "dispatcher"
+}
+```
+
+Then create a new plan version explicitly:
+
+```json
+{
+  "scenario_id": "6fcb7dd4-9980-467d-b347-e6d4f295340f",
+  "planning_date": "2026-08-17",
+  "base_plan_id": "7f3c5ef5-21d4-46e4-ae5e-3ecbd31e9724",
+  "as_of": "2026-08-17T10:00:00+03:00"
+}
+```
+
+`GET /plans/{new_plan_id}/changes` returns a flat list whose `type` is one of `ASSIGNED`,
+`UNASSIGNED`, `REASSIGNED`, `TIME_CHANGED`, or `ROUTE_CHANGED`. The diff is derived from the two
+immutable persisted plan versions, so reading it never invokes the planner or router.
+
+Each item in `GET /plans/{plan_id}` exposes stable assignment reason codes in `reasons`; examples
+are `engineer_has_required_skill`, `route_reachable` and `available_in_time_window`. The same
+response contains planner violations as `{type, request_id, details}` objects. These values are
+persisted with the plan and are never recomputed by the read endpoint.
 
 ## Errors and tracing
 

@@ -273,7 +273,10 @@ class DayEventRow(Base):
 
 class PlanningRunRow(Base):
     __tablename__ = "planning_runs"
-    __table_args__ = (Index("ix_run_scenario_date", "scenario_id", "planning_date"),)
+    __table_args__ = (
+        Index("ix_run_scenario_date", "scenario_id", "planning_date"),
+        UniqueConstraint("idempotency_key", name="uq_planning_run_idempotency"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     scenario_id: Mapped[UUID] = mapped_column(
@@ -296,6 +299,7 @@ class PlanningRunRow(Base):
     status: Mapped[str] = mapped_column(String(32))
     algorithm: Mapped[str] = mapped_column(String(128))
     input_version: Mapped[str] = mapped_column(String(64))
+    idempotency_key: Mapped[str | None] = mapped_column(String(255))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failure_code: Mapped[str | None] = mapped_column(String(128))
@@ -371,6 +375,7 @@ class AssignmentRow(Base):
     travel_seconds: Mapped[int] = mapped_column(Integer)
     distance_meters: Mapped[int] = mapped_column(Integer)
     explanation: Mapped[str] = mapped_column(Text)
+    reason_codes: Mapped[list[str]] = mapped_column(JSON_TYPE, default=list)
 
 
 class UnassignedRequestRow(Base):
@@ -425,6 +430,21 @@ class PlanMetricRow(Base):
     numeric_value: Mapped[float | None] = mapped_column(Float)
     text_value: Mapped[str | None] = mapped_column(Text)
     unit: Mapped[str | None] = mapped_column(String(32))
+
+
+class PlanViolationRow(Base):
+    __tablename__ = "plan_violations"
+    __table_args__ = (Index("ix_plan_violation_plan", "plan_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    plan_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("plans.id", ondelete="CASCADE")
+    )
+    request_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("requests.id", ondelete="RESTRICT"), nullable=True
+    )
+    violation_type: Mapped[str] = mapped_column(String(128))
+    details: Mapped[dict[str, object]] = mapped_column(JSON_TYPE, default=dict)
 
 
 class PlanApprovalRow(Base):

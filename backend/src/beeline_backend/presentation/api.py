@@ -6,7 +6,7 @@ import logging
 import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import cast
@@ -71,6 +71,7 @@ from beeline_backend.presentation.dto import (
     ManualChangeResponse,
     NewRequest,
     NewRequestResponse,
+    PlanChangesResponse,
     PlanDiffResponse,
     PlanMetricsResponse,
     PlanningRequest,
@@ -78,6 +79,7 @@ from beeline_backend.presentation.dto import (
     PlanningRunResponse,
     PlanResponse,
     PlanSummaryResponse,
+    ReplanningRequest,
     RequestDetailResponse,
     RequestListItemResponse,
     ScenarioResponse,
@@ -374,7 +376,7 @@ def _router() -> APIRouter:
     async def create_request(
         payload: NewRequest, service: BackendService = Depends(_service)
     ) -> dict[str, object]:
-        return await service.create_request_and_replan(**payload.model_dump())
+        return await service.create_request(**payload.model_dump())
 
     @router.post(
         "/requests/{request_id}/facts", response_model=FactResponse, tags=["requests"]
@@ -388,9 +390,11 @@ def _router() -> APIRouter:
 
     @router.get("/engineers", response_model=list[EngineerResponse], tags=["engineers"])
     async def engineers(
-        scenario_id: UUID, service: BackendService = Depends(_service)
+        scenario_id: UUID,
+        planning_date: date | None = None,
+        service: BackendService = Depends(_service),
     ) -> list[dict[str, object]]:
-        return await service.gateway.list_engineers(scenario_id)
+        return await service.gateway.list_engineers(scenario_id, planning_date)
 
     @router.get(
         "/engineers/{engineer_id}/route",
@@ -417,13 +421,58 @@ def _router() -> APIRouter:
             "engineer_id": engineer_id,
             "stops": assignments,
             "route": route,
+            "assigned_requests_count": len(assignments),
+            "workload_seconds": sum(
+                int(
+                    (
+                        cast(datetime, item["finish_at"])
+                        - cast(datetime, item["start_at"])
+                    ).total_seconds()
+                )
+                + cast(int, item["travel_seconds"])
+                for item in assignments
+            ),
+            "route_distance_meters": sum(
+                cast(int, item["distance_meters"]) for item in assignments
+            ),
+            "route_duration_seconds": sum(
+                cast(int, item["travel_seconds"])
+                + int(
+                    (
+                        cast(datetime, item["finish_at"])
+                        - cast(datetime, item["start_at"])
+                    ).total_seconds()
+                )
+                for item in assignments
+            ),
+            "sla_violations": sum(
+                1
+                for violation in cast(list[dict[str, object]], plan["violations"])
+                if violation["type"] == "SLA_VIOLATION"
+                and violation["request_id"]
+                in {item["request_id"] for item in assignments}
+            ),
         }
 
     @router.post("/plans/run", response_model=PlanningResultResponse, tags=["plans"])
     async def run_plan(
-        payload: PlanningRequest, service: BackendService = Depends(_service)
+        payload: PlanningRequest,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        service: BackendService = Depends(_service),
     ) -> dict[str, object]:
-        return await service.run_plan(**payload.model_dump())
+        return await service.run_plan(
+            **payload.model_dump(), idempotency_key=idempotency_key
+        )
+
+    @router.post("/plans/replan", response_model=PlanningResultResponse, tags=["plans"])
+    async def replan(
+        payload: ReplanningRequest,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        service: BackendService = Depends(_service),
+    ) -> dict[str, object]:
+        return await service.run_plan(
+            **payload.model_dump(), idempotency_key=idempotency_key
+        )
 
     @router.get(
         "/planning-runs/{run_id}", response_model=PlanningRunResponse, tags=["plans"]
@@ -448,6 +497,14 @@ def _router() -> APIRouter:
         service: BackendService = Depends(_service),
     ) -> dict[str, object]:
         return await service.gateway.diff_plans(old_plan_id, new_plan_id)
+
+    @router.get(
+        "/plans/{new_plan_id}/changes", response_model=PlanChangesResponse, tags=["plans"]
+    )
+    async def plan_changes(
+        new_plan_id: UUID, service: BackendService = Depends(_service)
+    ) -> dict[str, object]:
+        return await service.gateway.get_plan_changes(new_plan_id)
 
     @router.get("/plans/{plan_id}", response_model=PlanResponse, tags=["plans"])
     async def plan(plan_id: UUID, service: BackendService = Depends(_service)) -> dict[str, object]:

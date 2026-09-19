@@ -121,6 +121,12 @@ async def test_planner_uses_routing_time_once_and_validator_rejects_mismatch() -
     validate_candidate(snapshot, candidate)
     assignment = candidate.assignments[0]
     assert assignment.travel_seconds == 600
+    assert set(assignment.reason_codes) == {
+        "engineer_has_required_skill",
+        "route_reachable",
+        "available_in_time_window",
+        "within_engineer_shift",
+    }
     assert int((assignment.finish_at - assignment.start_at).total_seconds() / 60) == 70
 
     damaged = replace(candidate, assignments=(replace(assignment, travel_seconds=1800),))

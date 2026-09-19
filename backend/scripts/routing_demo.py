@@ -215,11 +215,24 @@ async def main(args: argparse.Namespace) -> None:
                     },
                 )
             ).json()
+            urgent_run = (
+                await request(
+                    "POST",
+                    "/api/v1/plans/replan",
+                    headers={
+                        "Idempotency-Key": f"routing-demo-replan:{planning_date}"
+                    },
+                    json={**plan_input, "base_plan_id": plan_id},
+                )
+            ).json()
+            changes = (
+                await request(
+                    "GET", f"/api/v1/plans/{urgent_run['plan_id']}/changes"
+                )
+            ).json()
             unchanged_old = (await request("GET", read_url)).json()
             assert unchanged_old["routes"] == overview["routes"]
-            runs = [first_run, second_run]
-            if urgent.get("replanning"):
-                runs.append(urgent["replanning"])
+            runs = [first_run, second_run, urgent_run]
             diagnostics = []
             async with factory() as session:
                 for run in runs:
@@ -239,6 +252,9 @@ async def main(args: argparse.Namespace) -> None:
                 "planning_date": str(planning_date),
                 "scenario_id": imported["scenario_id"],
                 "plan_id": plan_id,
+                "urgent_request_id": urgent["request_id"],
+                "replanned_plan_id": urgent_run["plan_id"],
+                "changes": changes["changes"],
                 "engineer_id": next(
                     route["engineer_id"]
                     for route in overview["routes"]

@@ -8,6 +8,7 @@ from beeline_backend.application.contracts import EngineerData, PlanningSnapshot
 from beeline_backend.domain.errors import ConflictError, DomainError
 from beeline_backend.domain.model import (
     Assignment,
+    AssignmentReasonCode,
     PlanCandidate,
     Unassigned,
     VisitWindow,
@@ -59,6 +60,7 @@ class DeterministicPlanningAlgorithm:
                 travel_seconds=cell.duration_seconds or 0,
                 distance_meters=cell.distance_meters or 0,
                 explanation="Assignment is locked because work is en route or in progress",
+                reason_codes=(AssignmentReasonCode.EXECUTION_LOCK,),
             )
             by_engineer[engineer.id].append(assignment)
             available_at[engineer.id] = locked.finish_at
@@ -123,6 +125,20 @@ class DeterministicPlanningAlgorithm:
                     explanation=(
                         "First feasible engineer in stable input order; skill, transport, window, "
                         "shift and directed travel time were checked"
+                    ),
+                    reason_codes=tuple(
+                        reason
+                        for applies, reason in (
+                            (bool(request.required_skill), AssignmentReasonCode.REQUIRED_SKILL),
+                            (
+                                bool(request.required_transport),
+                                AssignmentReasonCode.REQUIRED_TRANSPORT,
+                            ),
+                            (True, AssignmentReasonCode.REACHABLE),
+                            (True, AssignmentReasonCode.TIME_WINDOW),
+                            (True, AssignmentReasonCode.SHIFT),
+                        )
+                        if applies
                     ),
                 )
                 feasible.append((timing.finish, cell.distance_meters, engineer, candidate))
@@ -283,6 +299,16 @@ def validate_candidate(snapshot: PlanningSnapshot, candidate: PlanCandidate) -> 
                 "extra": [str(item) for item in sorted(covered - expected, key=str)],
             }
         )
+    for violation in candidate.violations:
+        if not violation.type.strip():
+            errors.append({"code": "empty_violation_type"})
+        if violation.request_id is not None and violation.request_id not in request_by_id:
+            errors.append(
+                {
+                    "code": "unknown_violation_request",
+                    "request_id": str(violation.request_id),
+                }
+            )
     locked = {item.request_id: item for item in snapshot.locked_assignments}
     actual = {item.request_id: item for item in candidate.assignments}
     for request_id, expected_assignment in locked.items():

@@ -56,6 +56,7 @@ from beeline_backend.infrastructure.models import (
     PlanningRunRow,
     PlanRouteArtifactRow,
     PlanRow,
+    PlanViolationRow,
     RequestRow,
     RequestStatusEventRow,
     RouteLegRow,
@@ -420,9 +421,16 @@ class SqlGateway:
                 "id": request.id,
                 "external_id": request.external_id,
                 "address": location.address,
+                "coordinates": [location.longitude, location.latitude],
                 "window_start": request.window_start,
                 "window_end": request.window_end,
                 "service_minutes": request.service_minutes,
+                "priority": request.priority,
+                "required_skills": [request.required_skill_code]
+                if request.required_skill_code
+                else [],
+                "required_transport": request.required_transport_code,
+                "sla_deadline": request.window_end,
                 "status": statuses[request.id].status,
                 "mapping_state": request.mapping_state,
             }
@@ -458,6 +466,12 @@ class SqlGateway:
             "window_end": request.window_end,
             "service_minutes": request.service_minutes,
             "full_normative_minutes": request.full_normative_minutes,
+            "priority": request.priority,
+            "required_skills": [request.required_skill_code]
+            if request.required_skill_code
+            else [],
+            "required_transport": request.required_transport_code,
+            "sla_deadline": request.window_end,
             "mapping_state": request.mapping_state,
             "status_history": [
                 {
@@ -473,7 +487,9 @@ class SqlGateway:
             ],
         }
 
-    async def list_engineers(self, scenario_id: UUID) -> list[dict[str, object]]:
+    async def list_engineers(
+        self, scenario_id: UUID, planning_date: date | None = None
+    ) -> list[dict[str, object]]:
         rows = (
             await self._session.scalars(
                 select(EngineerRow)
@@ -488,6 +504,15 @@ class SqlGateway:
                     select(EngineerSkillRow.skill_code).where(EngineerSkillRow.engineer_id == row.id)
                 )
             ).all()
+            shift_statement = select(ShiftRow).where(ShiftRow.engineer_id == row.id)
+            if planning_date is not None:
+                shift_statement = shift_statement.where(
+                    ShiftRow.shift_date == planning_date
+                )
+            shift = await self._session.scalar(
+                shift_statement.order_by(ShiftRow.shift_date.desc()).limit(1)
+            )
+            home = await self._session.get(LocationRow, row.home_location_id)
             result.append(
                 {
                     "id": row.id,
@@ -495,6 +520,16 @@ class SqlGateway:
                     "name": row.name,
                     "transport": row.transport_code,
                     "skills": list(skills),
+                    "work_start": shift.start_time if shift else None,
+                    "work_end": shift.end_time if shift else None,
+                    "availability": bool(shift and shift.available),
+                    "start_location": {
+                        "id": home.id,
+                        "address": home.address,
+                        "coordinates": [home.longitude, home.latitude],
+                    }
+                    if home is not None
+                    else None,
                 }
             )
         return result
@@ -596,21 +631,10 @@ class SqlGateway:
             actor=actor,
             idempotency_key=idempotency_key,
             payload={"request_id": str(request.id)},
-            processing_state="queued",
+            processing_state="recorded",
         )
         self._session.add(event)
         await self._session.flush()
-        self._session.add(
-            OutboxJobRow(
-                job_type="replan",
-                status="queued",
-                idempotency_key=f"new-request:{scenario_id}:{idempotency_key}",
-                payload={"request_id": str(request.id), "scenario_id": str(scenario_id)},
-                available_at=now,
-                attempts=0,
-                last_error=None,
-            )
-        )
         await self._audit(
             scenario_id,
             "request_created",
@@ -817,8 +841,55 @@ class SqlGateway:
         travel = TravelSnapshot.model_validate(matrix.model_dump())
         return snapshot.model_copy(update={"travel_by_profile": {matrix.profile: travel}})
 
-    async def start_run(self, snapshot: PlanningSnapshot, algorithm: str) -> UUID:
+    async def start_run(
+        self,
+        snapshot: PlanningSnapshot,
+        algorithm: str,
+        idempotency_key: str | None = None,
+    ) -> tuple[UUID, UUID | None]:
         now = self._now()
+        if idempotency_key is not None:
+            existing = await self._session.scalar(
+                select(PlanningRunRow).where(
+                    PlanningRunRow.idempotency_key == idempotency_key
+                )
+            )
+            if existing is not None:
+                same_command = (
+                    existing.scenario_id == snapshot.scenario_id
+                    and existing.planning_date == snapshot.planning_date
+                    and existing.base_plan_id == snapshot.base_plan_id
+                    and existing.algorithm == algorithm
+                    and existing.input_version == snapshot.input_version
+                )
+                if not same_command:
+                    raise ConflictError(
+                        "idempotency_key_reused",
+                        "Idempotency-Key was already used for another planning command",
+                    )
+                if existing.status == "succeeded":
+                    plan_id = await self._session.scalar(
+                        select(PlanRow.id).where(PlanRow.planning_run_id == existing.id)
+                    )
+                    if plan_id is None:
+                        raise ConflictError(
+                            "planning_result_missing",
+                            "Planning run succeeded but its plan is unavailable",
+                        )
+                    return existing.id, plan_id
+                if existing.status == "running":
+                    raise ConflictError(
+                        "planning_in_progress",
+                        "A planning run with this Idempotency-Key is already running",
+                    )
+                existing.status = "running"
+                existing.started_at = now
+                existing.finished_at = None
+                existing.failure_code = None
+                existing.failure_message = None
+                existing.diagnostics = {}
+                await self._session.commit()
+                return existing.id, None
         run = PlanningRunRow(
             scenario_id=snapshot.scenario_id,
             dataset_id=snapshot.dataset_id,
@@ -827,6 +898,7 @@ class SqlGateway:
             status="running",
             algorithm=algorithm,
             input_version=snapshot.input_version,
+            idempotency_key=idempotency_key,
             started_at=now,
             finished_at=None,
             failure_code=None,
@@ -835,7 +907,7 @@ class SqlGateway:
         )
         self._session.add(run)
         await self._session.commit()
-        return run.id
+        return run.id, None
 
     async def save_candidate(
         self,
@@ -892,6 +964,7 @@ class SqlGateway:
                     travel_seconds=item.travel_seconds,
                     distance_meters=item.distance_meters,
                     explanation=item.explanation,
+                    reason_codes=list(item.reason_codes),
                 )
             )
             self._session.add(
@@ -931,6 +1004,15 @@ class SqlGateway:
                     request_id=unassigned_item.request_id,
                     reason_code=unassigned_item.reason_code,
                     explanation=unassigned_item.explanation,
+                )
+            )
+        for violation in candidate.violations:
+            self._session.add(
+                PlanViolationRow(
+                    plan_id=plan.id,
+                    request_id=violation.request_id,
+                    violation_type=violation.type,
+                    details=violation.details,
                 )
             )
         total_requests = len(snapshot.requests)
@@ -1002,7 +1084,36 @@ class SqlGateway:
         if plan is None:
             raise NotFoundError("plan_not_found", "Plan not found")
         if plan.status != "draft":
+            previous_approval = await self._session.scalar(
+                select(PlanApprovalRow).where(PlanApprovalRow.plan_id == plan.id)
+            )
+            if (
+                previous_approval is not None
+                and previous_approval.base_plan_id == expected_base_plan_id
+            ):
+                return {
+                    "plan_id": plan.id,
+                    "status": "approved",
+                    "approved_at": _as_utc(previous_approval.approved_at),
+                }
             raise ConflictError("plan_not_draft", "Only a draft plan can be approved")
+        assignments_count = await self._session.scalar(
+            select(func.count()).select_from(AssignmentRow).where(AssignmentRow.plan_id == plan.id)
+        )
+        if not assignments_count:
+            raise ConflictError(
+                "plan_has_no_assignments", "A plan without assignments cannot be approved"
+            )
+        route_artifacts_count = await self._session.scalar(
+            select(func.count())
+            .select_from(PlanRouteArtifactRow)
+            .where(PlanRouteArtifactRow.plan_id == plan.id)
+        )
+        if not route_artifacts_count:
+            raise ConflictError(
+                "route_artifacts_unavailable",
+                "Route artifacts must be persisted before approval",
+            )
         fresh_snapshot = await self.build_snapshot(
             plan.scenario_id,
             plan.planning_date,
@@ -1114,6 +1225,11 @@ class SqlGateway:
                 select(PlanMetricRow).where(PlanMetricRow.plan_id == plan_id)
             )
         ).all()
+        violations = (
+            await self._session.scalars(
+                select(PlanViolationRow).where(PlanViolationRow.plan_id == plan_id)
+            )
+        ).all()
         route_rows = (
             await self._session.scalars(
                 select(RouteLegRow).where(
@@ -1144,6 +1260,7 @@ class SqlGateway:
                     "travel_seconds": assignment.travel_seconds,
                     "distance_meters": assignment.distance_meters,
                     "explanation": assignment.explanation,
+                    "reasons": assignment.reason_codes,
                 }
                 for assignment, request, engineer, location in assignment_rows
             ],
@@ -1162,6 +1279,14 @@ class SqlGateway:
                 else metric.text_value
                 for metric in metrics
             },
+            "violations": [
+                {
+                    "type": violation.violation_type,
+                    "request_id": violation.request_id,
+                    "details": violation.details,
+                }
+                for violation in violations
+            ],
             "routes": [
                 {
                     "engineer_id": route.engineer_id,
@@ -1520,6 +1645,49 @@ class SqlGateway:
             )
         return {"old_plan_id": old_plan_id, "new_plan_id": new_plan_id, "summary": dict(counters), "items": changes}
 
+    async def get_plan_changes(self, new_plan_id: UUID) -> dict[str, object]:
+        plan = await self._session.get(PlanRow, new_plan_id)
+        if plan is None:
+            raise NotFoundError("plan_not_found", "Plan not found")
+        if plan.base_plan_id is None:
+            raise ConflictError(
+                "plan_has_no_base",
+                "Changes are available only for a plan calculated from a base plan",
+            )
+        diff = await self.diff_plans(plan.base_plan_id, new_plan_id)
+        items = cast(list[dict[str, object]], diff["items"])
+        changes: list[dict[str, object]] = []
+        mapping = {
+            "added": "ASSIGNED",
+            "removed": "UNASSIGNED",
+            "reassigned": "REASSIGNED",
+            "rescheduled": "TIME_CHANGED",
+            "reordered": "ROUTE_CHANGED",
+            "route_changed": "ROUTE_CHANGED",
+        }
+        for item in items:
+            old = cast(dict[str, object] | None, item["old"])
+            new = cast(dict[str, object] | None, item["new"])
+            emitted: set[str] = set()
+            for flag in cast(list[str], item["changes"]):
+                change_type = mapping.get(flag)
+                if change_type is None or change_type in emitted:
+                    continue
+                emitted.add(change_type)
+                changes.append(
+                    {
+                        "request_id": item["request_id"],
+                        "type": change_type,
+                        "from_engineer_id": old.get("engineer_id") if old else None,
+                        "to_engineer_id": new.get("engineer_id") if new else None,
+                    }
+                )
+        return {
+            "base_plan_id": plan.base_plan_id,
+            "new_plan_id": new_plan_id,
+            "changes": changes,
+        }
+
     @staticmethod
     def _assignment_diff_value(row: AssignmentRow | None) -> dict[str, object] | None:
         if row is None:
@@ -1638,6 +1806,7 @@ class SqlGateway:
                             travel_seconds=original.travel_seconds,
                             distance_meters=original.distance_meters,
                             explanation=original.explanation,
+                            reason_codes=tuple(original.reason_codes),
                         )
                     )
                     previous_location = original.location_id
@@ -1674,6 +1843,7 @@ class SqlGateway:
                         travel_seconds=cell.duration_seconds,
                         distance_meters=cell.distance_meters,
                         explanation=f"Manual dispatcher change: {reason}",
+                        reason_codes=("manual_dispatcher_choice",),
                     )
                 )
                 previous_location = current.location_id

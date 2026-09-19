@@ -53,12 +53,22 @@ class BackendService:
         planning_date: date,
         base_plan_id: UUID | None,
         as_of: datetime | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, object]:
         effective_as_of = as_of or self._clock.now()
         snapshot = await self.gateway.build_snapshot(
             scenario_id, planning_date, effective_as_of, base_plan_id
         )
-        run_id = await self.gateway.start_run(snapshot, self._planner.name)
+        run_id, existing_plan_id = await self.gateway.start_run(
+            snapshot, self._planner.name, idempotency_key
+        )
+        if existing_plan_id is not None:
+            return {
+                "planning_run_id": run_id,
+                "plan_id": existing_plan_id,
+                "status": "succeeded",
+                "duplicate": True,
+            }
         try:
             coordinates = [(item.latitude, item.longitude) for item in snapshot.locations]
             matrix = await self._router.matrix(coordinates, "driving", effective_as_of)
@@ -92,9 +102,14 @@ class BackendService:
         }})
         if self._warm_routes is not None:
             await self._warm_routes(plan_id)
-        return {"planning_run_id": run_id, "plan_id": plan_id, "status": "succeeded"}
+        return {
+            "planning_run_id": run_id,
+            "plan_id": plan_id,
+            "status": "succeeded",
+            "duplicate": False,
+        }
 
-    async def create_request_and_replan(
+    async def create_request(
         self,
         *,
         scenario_id: UUID,
@@ -111,7 +126,7 @@ class BackendService:
         idempotency_key: str,
         actor: str,
     ) -> dict[str, object]:
-        created = await self.gateway.create_request(
+        return await self.gateway.create_request(
             scenario_id,
             planning_date,
             external_id,
@@ -126,16 +141,6 @@ class BackendService:
             idempotency_key,
             actor,
         )
-        plans = await self.gateway.list_plans(scenario_id, planning_date)
-        active = next((item for item in plans if item["status"] == "approved"), None)
-        if created["duplicate"]:
-            return {**created, "replanning": None}
-        replanning = await self.run_plan(
-            scenario_id,
-            planning_date,
-            active["id"] if active else None,  # type: ignore[arg-type]
-        )
-        return {**created, "replanning": replanning}
 
     async def create_event_and_replan(
         self,
@@ -180,6 +185,7 @@ class BackendService:
                 planning_date,
                 active["id"] if active else None,  # type: ignore[arg-type]
                 effective_at,
+                job_key,
             )
         except asyncio.CancelledError:
             await self.gateway.fail_event_replanning(event_id, job_key, "planning_cancelled")
@@ -226,7 +232,7 @@ class BackendService:
         prepared = await self.gateway.prepare_manual_change(
             plan_id, request_id, engineer_id, position, start_at, reason, actor,
         )
-        run_id = await self.gateway.start_run(prepared.snapshot, "manual-dispatcher-v1")
+        run_id, _ = await self.gateway.start_run(prepared.snapshot, "manual-dispatcher-v1")
         try:
             route_build = await self._route_builder.build(prepared.snapshot, prepared.candidate)
             _, new_plan_id = await self.gateway.save_candidate(

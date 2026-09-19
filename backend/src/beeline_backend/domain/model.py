@@ -44,6 +44,16 @@ class WorkCode(StrEnum):
     LOCAL = "local"
 
 
+class AssignmentReasonCode(StrEnum):
+    EXECUTION_LOCK = "execution_lock"
+    REQUIRED_SKILL = "engineer_has_required_skill"
+    REQUIRED_TRANSPORT = "required_transport_available"
+    REACHABLE = "route_reachable"
+    TIME_WINDOW = "available_in_time_window"
+    SHIFT = "within_engineer_shift"
+    MANUAL_DISPATCH = "manual_dispatcher_choice"
+
+
 ALLOWED_STATUS_TRANSITIONS: dict[RequestStatus, set[RequestStatus]] = {
     RequestStatus.NOT_SENT: {RequestStatus.SENT, RequestStatus.CANCELLED},
     RequestStatus.SENT: {
@@ -153,6 +163,7 @@ class Assignment:
     travel_seconds: int
     distance_meters: int
     explanation: str
+    reason_codes: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,10 +174,17 @@ class Unassigned:
 
 
 @dataclass(frozen=True, slots=True)
+class Violation:
+    type: str
+    request_id: UUID | None = None
+    details: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class PlanCandidate:
     schema_version: str
     input_version: str
     assignments: tuple[Assignment, ...] = field(default_factory=tuple)
     unassigned: tuple[Unassigned, ...] = field(default_factory=tuple)
+    violations: tuple[Violation, ...] = field(default_factory=tuple)
     warnings: tuple[str, ...] = field(default_factory=tuple)
-

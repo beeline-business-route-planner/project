@@ -53,15 +53,15 @@ uv run beeline-backend seed-demo 'Dataset/Восток Синтетически�
 - `POST /api/v1/imports` — импорт и построчные ошибки.
 - `GET /api/v1/scenarios`, `GET /api/v1/requests`, `GET /api/v1/requests/{id}`.
 - `GET /api/v1/engineers`, `GET /api/v1/engineers/{id}/route`.
-- `POST /api/v1/requests` — новая заявка + идемпотентное событие + предложение перепланирования.
+- `POST /api/v1/requests` — идемпотентно создать новую заявку без скрытого перепланирования.
 - `POST /api/v1/requests/{id}/facts` — append-only подтверждённый факт.
-- `POST /api/v1/plans/run`, `GET /api/v1/planning-runs/{id}`.
+- `POST /api/v1/plans/run`, `POST /api/v1/plans/replan`, `GET /api/v1/planning-runs/{id}`.
 - `GET /api/v1/plans`, `GET /api/v1/plans/{id}`, `POST /api/v1/plans/{id}/approve`.
 - `GET /api/v1/plans/{id}/routes` — лёгкий overview всех инженеров.
 - `GET /api/v1/plans/{id}/engineers/{engineer_id}/route` — сохранённый detailed выбранного инженера.
 - `POST /api/v1/events` — событие + один новый кандидат.
 - `POST /api/v1/plans/{id}/manual-change` — новый полностью пересчитанный черновик.
-- `GET /api/v1/plans/diff`, `GET /api/v1/plans/{id}/metrics`.
+- `GET /api/v1/plans/diff`, `GET /api/v1/plans/{id}/changes`, `GET /api/v1/plans/{id}/metrics`.
 - `GET /api/v1/audit`, `GET /api/v1/dashboard`.
 - `GET /api/v1/plans/{id}/reports/xlsx|pdf`.
 

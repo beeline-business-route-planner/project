@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Literal
 from uuid import UUID
 
@@ -29,6 +29,10 @@ class PlanningRequest(BaseModel):
         ):
             raise ValueError("as_of must contain a timezone offset")
         return self
+
+
+class ReplanningRequest(PlanningRequest):
+    base_plan_id: UUID
 
 
 class ApprovalRequest(BaseModel):
@@ -148,9 +152,14 @@ class RequestListItemResponse(BaseModel):
     id: UUID
     external_id: str
     address: str
+    coordinates: list[float | None]
     window_start: datetime
     window_end: datetime
     service_minutes: int | None
+    priority: str
+    required_skills: list[str]
+    required_transport: str | None = None
+    sla_deadline: datetime
     status: RequestStatus
     mapping_state: str
 
@@ -176,8 +185,18 @@ class RequestDetailResponse(BaseModel):
     window_end: datetime
     service_minutes: int | None
     full_normative_minutes: int | None
+    priority: str
+    required_skills: list[str]
+    required_transport: str | None = None
+    sla_deadline: datetime
     mapping_state: str
     status_history: list[StatusEventResponse]
+
+
+class EngineerStartLocationResponse(BaseModel):
+    id: UUID
+    address: str
+    coordinates: list[float | None]
 
 
 class EngineerResponse(BaseModel):
@@ -186,12 +205,17 @@ class EngineerResponse(BaseModel):
     name: str
     transport: str
     skills: list[str]
+    work_start: time | None = None
+    work_end: time | None = None
+    availability: bool
+    start_location: EngineerStartLocationResponse | None = None
 
 
 class PlanningResultResponse(BaseModel):
     planning_run_id: UUID
     plan_id: UUID
     status: str
+    duplicate: bool = False
 
 
 class PlanningFailureResponse(BaseModel):
@@ -232,6 +256,7 @@ class AssignmentResponse(BaseModel):
     travel_seconds: int
     distance_meters: int
     explanation: str
+    reasons: list[str]
 
 
 class UnassignedResponse(BaseModel):
@@ -239,6 +264,12 @@ class UnassignedResponse(BaseModel):
     request_external_id: str
     reason_code: str
     explanation: str
+
+
+class ViolationResponse(BaseModel):
+    type: str
+    request_id: UUID | None = None
+    details: dict[str, object] = Field(default_factory=dict)
 
 
 class GeoJsonLineStringResponse(BaseModel):
@@ -266,6 +297,7 @@ class PlanResponse(BaseModel):
     input_version: str
     assignments: list[AssignmentResponse]
     unassigned: list[UnassignedResponse]
+    violations: list[ViolationResponse]
     metrics: dict[str, MetricValue]
     routes: list[PlanRouteResponse]
     warnings: list[str]
@@ -276,6 +308,11 @@ class EngineerRouteResponse(BaseModel):
     engineer_id: UUID
     stops: list[AssignmentResponse]
     route: PlanRouteResponse | None = None
+    assigned_requests_count: int
+    workload_seconds: int
+    route_distance_meters: int
+    route_duration_seconds: int
+    sla_violations: int
 
 
 class ApprovalResponse(BaseModel):
@@ -294,7 +331,6 @@ class NewRequestResponse(BaseModel):
     request_id: UUID
     event_id: UUID
     duplicate: bool
-    replanning: PlanningResultResponse | None = None
 
 
 class DayEventResponse(BaseModel):
@@ -337,6 +373,21 @@ class PlanDiffResponse(BaseModel):
     new_plan_id: UUID
     summary: dict[str, int]
     items: list[PlanDiffItemResponse]
+
+
+class PlanChangeResponse(BaseModel):
+    request_id: UUID
+    type: Literal[
+        "ASSIGNED", "UNASSIGNED", "REASSIGNED", "TIME_CHANGED", "ROUTE_CHANGED"
+    ]
+    from_engineer_id: UUID | None = None
+    to_engineer_id: UUID | None = None
+
+
+class PlanChangesResponse(BaseModel):
+    base_plan_id: UUID
+    new_plan_id: UUID
+    changes: list[PlanChangeResponse]
 
 
 class AuditResponse(BaseModel):
