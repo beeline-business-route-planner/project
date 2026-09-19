@@ -14,16 +14,16 @@ def test_xlsx_and_pdf_accept_timezone_aware_report_model(tmp_path: Path) -> None
     report = DayReport(
         report_version="test-v1",
         plan_id=uuid4(),
-        scenario="Восток",
+        scenario="-Восток",
         planning_date=date(2026, 8, 17),
         generated_at=datetime(2026, 8, 17, 8, tzinfo=UTC),
         interim=True,
         assignments=[
             ReportAssignment(
-                engineer="Инженер 1",
+                engineer="+Инженер 1",
                 position=1,
-                request_external_id="REQ-1",
-                address="Москва",
+                request_external_id="=1+1",
+                address="@Москва",
                 planned_start=datetime(2026, 8, 17, 6, tzinfo=UTC),
                 planned_finish=datetime(2026, 8, 17, 7, tzinfo=UTC),
                 confirmed_status="NOT_SENT",
@@ -33,7 +33,7 @@ def test_xlsx_and_pdf_accept_timezone_aware_report_model(tmp_path: Path) -> None
                 distance_meters=1200,
             )
         ],
-        metrics={"assigned_count": 1},
+        metrics={"assigned_count": 1, "status": "=HYPERLINK(\"https://example.test\")"},
     )
     xlsx_path = tmp_path / "report.xlsx"
     pdf_path = tmp_path / "report.pdf"
@@ -41,8 +41,14 @@ def test_xlsx_and_pdf_accept_timezone_aware_report_model(tmp_path: Path) -> None
     XlsxReportRenderer().render(report, xlsx_path)
     PdfReportRenderer().render(report, pdf_path)
 
-    workbook = load_workbook(xlsx_path, data_only=True)
+    workbook = load_workbook(xlsx_path, data_only=False)
     sheet = workbook["Итог дня"]
+    assert sheet["B1"].value == "'-Восток"
+    assert sheet["A7"].value == "'+Инженер 1"
+    assert sheet["C7"].value == "'=1+1"
+    assert sheet["D7"].value == "'@Москва"
+    assert sheet["C7"].data_type == "s"
     assert sheet["E7"].value == datetime(2026, 8, 17, 9)
     assert sheet["H7"].value == "нет данных"
+    assert workbook["Метрики"]["B3"].value == "'=HYPERLINK(\"https://example.test\")"
     assert pdf_path.read_bytes().startswith(b"%PDF")

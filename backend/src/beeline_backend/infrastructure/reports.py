@@ -34,6 +34,16 @@ def _excel_time(value: datetime | None) -> datetime | str:
     return _local_time(value).replace(tzinfo=None)
 
 
+def _excel_text(value: str) -> str:
+    if value.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return f"'{value}"
+    return value
+
+
+def _excel_value(value: float | int | str) -> float | int | str:
+    return _excel_text(value) if isinstance(value, str) else value
+
+
 class XlsxReportRenderer:
     media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     extension = "xlsx"
@@ -42,9 +52,9 @@ class XlsxReportRenderer:
         workbook = Workbook()
         sheet = cast(Worksheet, workbook.active)
         sheet.title = "Итог дня"
-        sheet.append(["Итог дня", report.scenario])
+        sheet.append(["Итог дня", _excel_text(report.scenario)])
         sheet.append(["Дата", report.planning_date])
-        sheet.append(["Версия отчёта", report.report_version])
+        sheet.append(["Версия отчёта", _excel_text(report.report_version)])
         sheet.append(["Статус", "Промежуточный" if report.interim else "Итоговый"])
         sheet.append([])
         headers = [
@@ -64,23 +74,23 @@ class XlsxReportRenderer:
         for item in report.assignments:
             sheet.append(
                 [
-                    item.engineer,
+                    _excel_text(item.engineer),
                     item.position,
-                    item.request_external_id,
-                    item.address,
+                    _excel_text(item.request_external_id),
+                    _excel_text(item.address),
                     _excel_time(item.planned_start),
                     _excel_time(item.planned_finish),
-                    item.confirmed_status,
+                    _excel_text(item.confirmed_status),
                     _excel_time(item.actual_start),
                     _excel_time(item.actual_finish),
-                    item.fact_source if item.fact_source else "нет данных",
+                    _excel_text(item.fact_source) if item.fact_source else "нет данных",
                     item.distance_meters,
                 ]
             )
         metric_sheet = workbook.create_sheet("Метрики")
         metric_sheet.append(["Метрика", "Значение"])
         for code, value in sorted(report.metrics.items()):
-            metric_sheet.append([code, value])
+            metric_sheet.append([_excel_text(code), _excel_value(value)])
         header_fill = PatternFill("solid", fgColor="4A0072")
         for current in (sheet, metric_sheet):
             header_row = 6 if current is sheet else 1

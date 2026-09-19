@@ -81,6 +81,8 @@ PostgreSQL: после запуска Docker пользователем испо
 
 2026-09-19, P1-05: `PYTHONPATH=src .venv/bin/python -m pytest -p no:cacheprovider` — 28 passed; Ruff — passed; mypy(src) — passed. Regression covers invalid query date and reversed request window returning HTTP 422.
 
+2026-09-19, P1-11: full pytest — 28 passed; Ruff — passed; mypy(src) — passed. XLSX regression reopens the workbook with formulas enabled and confirms values beginning with formula trigger characters remain text (`data_type=s`). Formula execution was not attempted.
+
 ## Контрольные суммы
 
 Контрольные суммы обновлены при переносе проверенного backend в командный monorepo. Они фиксируют содержимое первого импортирующего коммита; локальные environment/cache/data файлы не входят.

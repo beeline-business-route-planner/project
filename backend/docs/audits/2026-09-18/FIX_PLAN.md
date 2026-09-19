@@ -32,7 +32,7 @@
 | P1-08 | Реальный planner и transport profiles | Юрий + Даниил | OPEN | Adapter подключён; coverage→day-active objective; travel соответствует профилю; limitations явны |
 | P1-09 | 2GIS длинная geometry / live scopes | Даниил | OPEN | Маршруты соблюдают points limit; реальные scopes проверены при ключе; partial provider errors диагностируются |
 | P1-10 | Redaction key в HTTPX logs | Даниил | OPEN | Synthetic-key test не находит key в логах/ошибках |
-| P1-11 | XLSX strings как текст | Даниил | OPEN | Untrusted identifiers/addresses не становятся formula |
+| P1-11 | XLSX strings как текст | Даниил | DONE | Untrusted identifiers/addresses не становятся formula |
 | P1-12 | Валидация внешнего response | Даниил | OPEN | Negative/out-of-range indices, bad shape/WKT/JSON → controlled provider error, не corrupted matrix/500 |
 | P1-13 | Day metrics и baseline | Олег semantics; Юрий objective; Даниил reporting | OPEN | Completed/current/future day-active union; eligible coverage без cancelled; сравнение на одинаковых inputs/matrices |
 | P1-14 | Demo regression suite | Олег + Юрий + Даниил по слоям | OPEN | 12 event cases + anchors/time/partition/retry проходят; PostgreSQL flow подтверждён |
@@ -40,6 +40,8 @@
 P1-02 завершён 2026-09-19: `DayEventRow` явно flush-ится до формирования outbox payload и audit row как для общего события, так и при создании новой заявки. HTTP regression подтверждает `GET /audit` 200 и совпадение audit object_id с event_id. Полный suite — 27 passed; Ruff/mypy(src) прошли.
 
 P1-05 завершён 2026-09-19: query-параметры `planning_date` типизированы как date на FastAPI boundary; validation handler возвращает только сериализуемые type/loc/msg. Invalid date и reversed request window возвращают 422 с code=validation_error. Полный suite — 28 passed; Ruff/mypy(src) прошли.
+
+P1-11 завершён 2026-09-19: XLSX renderer экранирует внешние строки, начинающиеся с `=`, `+`, `-`, `@`, tab или carriage return. Regression проверяет scenario, engineer, request ID, address и строковую metric value; ячейки сохраняются как text. Полный suite — 28 passed; Ruff/mypy(src) прошли.
 
 ## P2 — хорошо иметь
 

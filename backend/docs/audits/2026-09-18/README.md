@@ -52,5 +52,6 @@
 | 2026-09-19 | Начато P0-04 | Усилены доказуемые инварианты validator; task остаётся IN_PROGRESS до residual-state boundary | Да; 27 tests passed, Ruff/mypy passed |
 | 2026-09-19 | Завершено P1-02 | UUID события материализуется до outbox/audit; добавлена HTTP regression-проверка | Да; 27 tests passed, Ruff/mypy passed |
 | 2026-09-19 | Завершено P1-05 | Некорректные дата и окно дают контролируемый 422 | Да; 28 tests passed, Ruff/mypy passed |
+| 2026-09-19 | Завершено P1-11 | Недоверенные строки XLSX экспортируются как текст | Да; 28 tests passed, Ruff/mypy passed |
 
 Следующий предлагаемый шаг: P0-01/P0-02 — residual-контракт и спорные правила. Наличие этого предложения не запускает реализацию автоматически.
