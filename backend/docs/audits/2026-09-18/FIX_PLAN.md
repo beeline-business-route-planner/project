@@ -31,7 +31,7 @@
 | P1-07 | Combined work-type mapping | TEAM_DECISION_REQUIRED; Даниил реализует | NEEDS_DECISION | Утверждён норматив/skill для combined dataset rows; mapping tests |
 | P1-08 | Реальный planner и transport profiles | Юрий + Даниил | OPEN | Adapter подключён; coverage→day-active objective; travel соответствует профилю; limitations явны |
 | P1-09 | 2GIS длинная geometry / live scopes | Даниил | OPEN | Маршруты соблюдают points limit; реальные scopes проверены при ключе; partial provider errors диагностируются |
-| P1-10 | Redaction key в HTTPX logs | Даниил | OPEN | Synthetic-key test не находит key в логах/ошибках |
+| P1-10 | Redaction key в HTTPX logs | Даниил | DONE | Synthetic-key test не находит key в логах/ошибках |
 | P1-11 | XLSX strings как текст | Даниил | DONE | Untrusted identifiers/addresses не становятся formula |
 | P1-12 | Валидация внешнего response | Даниил | OPEN | Negative/out-of-range indices, bad shape/WKT/JSON → controlled provider error, не corrupted matrix/500 |
 | P1-13 | Day metrics и baseline | Олег semantics; Юрий objective; Даниил reporting | OPEN | Completed/current/future day-active union; eligible coverage без cancelled; сравнение на одинаковых inputs/matrices |
@@ -42,6 +42,8 @@ P1-02 завершён 2026-09-19: `DayEventRow` явно flush-ится до ф
 P1-05 завершён 2026-09-19: query-параметры `planning_date` типизированы как date на FastAPI boundary; validation handler возвращает только сериализуемые type/loc/msg. Invalid date и reversed request window возвращают 422 с code=validation_error. Полный suite — 28 passed; Ruff/mypy(src) прошли.
 
 P1-11 завершён 2026-09-19: XLSX renderer экранирует внешние строки, начинающиеся с `=`, `+`, `-`, `@`, tab или carriage return. Regression проверяет scenario, engineer, request ID, address и строковую metric value; ячейки сохраняются как text. Полный suite — 28 passed; Ruff/mypy(src) прошли.
+
+P1-10 завершён 2026-09-19: уровни логирования `httpx` и `httpcore` подняты до WARNING, поэтому INFO-запись полного request URL с query-параметром key не создаётся. Regression с синтетическим ключом подтверждает, что ключ отсутствует в captured logs. Полный suite — 29 passed; Ruff/mypy(src) прошли. Проверка не использует реальный 2GIS key.
 
 ## P2 — хорошо иметь
 

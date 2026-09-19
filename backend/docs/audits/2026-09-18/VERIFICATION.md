@@ -83,6 +83,8 @@ PostgreSQL: после запуска Docker пользователем испо
 
 2026-09-19, P1-11: full pytest — 28 passed; Ruff — passed; mypy(src) — passed. XLSX regression reopens the workbook with formulas enabled and confirms values beginning with formula trigger characters remain text (`data_type=s`). Formula execution was not attempted.
 
+2026-09-19, P1-10: full pytest — 29 passed; Ruff — passed; mypy(src) — passed. HTTPX request выполнен через MockTransport с синтетическим DGIS key; captured INFO logs не содержат key, effective logging level для `httpx` и `httpcore` — WARNING. Реальный provider/key не использовался.
+
 ## Контрольные суммы
 
 Контрольные суммы обновлены при переносе проверенного backend в командный monorepo. Они фиксируют содержимое первого импортирующего коммита; локальные environment/cache/data файлы не входят.

@@ -1,17 +1,53 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 import httpx
 import pytest
 
+from beeline_backend.config import Settings
 from beeline_backend.domain.errors import DependencyUnavailableError
 from beeline_backend.infrastructure.providers import DgisGeocoder, DgisRoutingProvider
+from beeline_backend.presentation.api import create_app
 
 
 class FixedClock:
     def now(self) -> datetime:
         return datetime(2026, 8, 17, 8, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_httpx_info_log_does_not_expose_dgis_key(caplog: pytest.LogCaptureFixture) -> None:
+    synthetic_key = "synthetic-secret-dgis-key"
+    create_app(
+        Settings(
+            app_env="test",
+            database_url="sqlite+aiosqlite:///:memory:",
+            geocoder_mode="demo",
+            routing_provider="demo",
+        )
+    )
+    provider = DgisGeocoder(
+        "https://catalog.api.2gis.test",
+        synthetic_key,
+        timeout_seconds=1,
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json={
+                    "meta": {"code": 200},
+                    "result": {"items": [{"point": {"lat": 55.757, "lon": 37.615}}]},
+                },
+            )
+        ),
+    )
+
+    caplog.set_level(logging.INFO)
+    await provider.geocode("Тверская, 1", "Москва")
+
+    assert synthetic_key not in caplog.text
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
 
 
 @pytest.mark.asyncio
