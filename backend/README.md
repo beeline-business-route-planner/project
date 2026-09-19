@@ -48,6 +48,13 @@ CLI для импорта **явно синтетического** демо-н�
 uv run beeline-backend seed-demo 'Dataset/Восток Синтетические данные.xlsx'
 ```
 
+Полный acceptance flow на уже запущенном Docker Compose — импорт, plan, approve, routes, urgent
+request, явный replan и changes:
+
+```bash
+uv run python scripts/demo.py 'Dataset/Восток Синтетические данные.xlsx'
+```
+
 ## API
 
 - `POST /api/v1/imports` — импорт и построчные ошибки.
