@@ -40,6 +40,16 @@ class Database(BaseModel):
         return f"postgresql+asyncpg://{self.postgres_username}:{self.postgres_password}@{host}:{self.postgres_port}/{self.postgres_db}"
 
 
+class S3(BaseModel):
+    endpoint_url: str = ""
+    access_key: str = ""
+    secret_key: str = ""
+    region: str = "us-east-1"
+    bucket_answers: str = "answers"
+    bucket_uploads: str = "uploads"
+    bucket_plans: str = "plans"
+
+
 class Logging(BaseModel):
     level: str = "INFO"
 
@@ -52,6 +62,7 @@ class Config(BaseSettings):
     )
 
     database: Database = Database()
+    s3: S3 = S3()
     logging: Logging = Logging()
     cors: CORS = CORS()
 

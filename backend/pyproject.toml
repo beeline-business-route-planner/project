@@ -5,6 +5,7 @@ description = "Project backend service"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "aioboto3>=15.5.0",
     "alembic>=1.18.5",
     "asyncpg>=0.31.0",
     "dishka>=1.10.1",
@@ -13,6 +14,7 @@ dependencies = [
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
     "sqlalchemy>=2.0.51",
+    "types-aioboto3[s3]>=15.5.0",
     "uvicorn>=0.51.0",
 ]
 
