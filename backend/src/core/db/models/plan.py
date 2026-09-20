@@ -47,7 +47,7 @@ class Plan(Base):
 
     __table_args__ = (
         sa.CheckConstraint(
-            "kind != 'event_replan' or triggered_by_event_id is not null",
+            "kind != 'EVENT_REPLAN' or triggered_by_event_id is not null",
             name="ck_plan_event_replan_has_event",
         ),
     )
