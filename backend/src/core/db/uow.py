@@ -1,11 +1,20 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.db.repositories import (
+    DataUploadRepository,
+    EngineerRepository,
+    RequestRepository,
+    UploadedFileRepository,
+)
+
 
 class UnitOfWork:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
-        # Когда появится первая модель и её репозиторий, подключай их сюда явно, например:
-        # self.users = UserRepository(self.session)
+        self.data_uploads = DataUploadRepository(session)
+        self.engineers = EngineerRepository(session)
+        self.requests = RequestRepository(session)
+        self.uploaded_files = UploadedFileRepository(session)
 
     async def commit(self) -> None:
         await self.session.commit()
