@@ -1,9 +1,10 @@
 from dishka import Provider, Scope, provide
 
+from src.api.planning.service import PlanningService
+from src.core.algorithm import AlgorithmService
 from src.core.db.uow import UnitOfWork
 from src.core.geocoding import GeocodingService
 from src.core.s3 import S3Storage
-from src.core.services import AlgorithmService, PlanningService
 
 
 class PlanningProvider(Provider):

@@ -2,7 +2,7 @@ import asyncio
 import logging
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -11,94 +11,30 @@ from zipfile import BadZipFile
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
-from src.config import cfg
-from src.core.algorithm import DistributionMode
-from src.core.db.dto import EngineerCreateDTO, RequestCreateDTO, UploadedFileCreateDTO
-from src.core.db.enums import (
-    ConnectionType,
-    Region,
-    RequestTypeBk,
-    RequestTypeHd,
-    Skill,
-    VehicleType,
+from src.api.planning.dto import (
+    InitialPlanningResult,
+    ParsedEngineer,
+    ParsedRequest,
+    ParsedWorkbook,
+    PlanningImportResult,
+    PlanningUploadFile,
 )
+from src.api.planning.service_exc import (
+    PlanningFileCountError,
+    PlanningFileValidationError,
+    PlanningRegionPairError,
+    RepeatedRequestError,
+)
+from src.api.planning.utils import parse_datetime, parse_type_bk, request_rules, required_string
+from src.config import cfg
+from src.core.algorithm import AlgorithmService, DistributionMode
+from src.core.db.dto import EngineerCreateDTO, RequestCreateDTO, UploadedFileCreateDTO
+from src.core.db.enums import ConnectionType, Region, RequestTypeHd, Skill, VehicleType
 from src.core.db.uow import UnitOfWork
 from src.core.geocoding import Coordinates, GeocodingService
 from src.core.s3 import S3Storage
-from src.core.services.algorithm import AlgorithmService
 
 log = logging.getLogger(__name__)
-
-
-class PlanningFileCountError(Exception):
-    pass
-
-
-class PlanningRegionPairError(Exception):
-    pass
-
-
-class PlanningFileValidationError(Exception):
-    pass
-
-
-class RepeatedRequestError(Exception):
-    pass
-
-
-@dataclass(frozen=True)
-class PlanningUploadFile:
-    filename: str
-    content_type: str
-    data: bytes
-
-
-@dataclass(frozen=True)
-class PlanningImportResult:
-    upload_id: uuid.UUID
-    region: Region
-    requests_count: int
-    engineers_count: int
-    plan_id: uuid.UUID | None = None
-
-
-@dataclass(frozen=True)
-class InitialPlanningResult:
-    status: str
-    imports: tuple[PlanningImportResult, ...]
-
-
-@dataclass(frozen=True)
-class ParsedRequest:
-    external_id: int
-    type_bk: RequestTypeBk
-    type_hd: RequestTypeHd
-    district: str
-    address: str
-    connection_type: ConnectionType | None
-    is_gigabit: bool
-    window_start: datetime
-    window_end: datetime
-    norm_minutes: int
-    norm_minutes_without_travel: int
-    priority: int
-    required_skill: Skill
-
-
-@dataclass(frozen=True)
-class ParsedEngineer:
-    name: str
-    skills: tuple[Skill, ...]
-
-
-@dataclass(frozen=True)
-class ParsedWorkbook:
-    source: PlanningUploadFile
-    region: Region
-    role: str
-    office_address: str | None
-    requests: tuple[ParsedRequest, ...]
-    engineers: tuple[ParsedEngineer, ...]
 
 
 class PlanningService:
@@ -179,10 +115,10 @@ class PlanningService:
         try:
             workbook = load_workbook(BytesIO(source.data), read_only=True, data_only=True)
             worksheet = workbook.active
-            title = self._required_string(worksheet.cell(row=1, column=1).value)
+            title = required_string(worksheet.cell(row=1, column=1).value)
             region = self._parse_region(title)
             headers = [
-                self._required_string(cell.value) if cell.value is not None else ""
+                required_string(cell.value) if cell.value is not None else ""
                 for cell in worksheet[2]
             ]
             header_indexes = {header: index for index, header in enumerate(headers) if header}
@@ -196,7 +132,7 @@ class PlanningService:
             for row in worksheet.iter_rows(min_row=3, values_only=True):
                 first_value = row[0]
                 if isinstance(first_value, str) and first_value.casefold().startswith("адрес офис"):
-                    office_address = self._required_string(row[1])
+                    office_address = required_string(row[1])
                     continue
                 if first_value is None:
                     continue
@@ -205,9 +141,9 @@ class PlanningService:
                 else:
                     engineer_name = row[header_indexes["Бригада"]]
                     if engineer_name is not None:
-                        type_bk = self._parse_type_bk(row[header_indexes["Тип заявки BK"]])
-                        engineer_skills[self._required_string(engineer_name)].add(
-                            self._request_rules(type_bk)[3]
+                        type_bk = parse_type_bk(row[header_indexes["Тип заявки BK"]])
+                        engineer_skills[required_string(engineer_name)].add(
+                            request_rules(type_bk)[3]
                         )
 
             if role == "requests" and (not requests or office_address is None):
@@ -368,24 +304,24 @@ class PlanningService:
                     extra={"s3": {"bucket": bucket, "key": key}},
                 )
 
-    def _parse_request(self, row: tuple[object, ...], indexes: dict[str, int]) -> ParsedRequest:
-        type_bk = self._parse_type_bk(row[indexes["Тип заявки BK"]])
-        norm, norm_without_travel, priority, skill = self._request_rules(type_bk)
-        window_start = self._parse_datetime(row[indexes["Начало"]])
-        window_end = self._parse_datetime(row[indexes["Окончание"]])
+    @staticmethod
+    def _parse_request(row: tuple[object, ...], indexes: dict[str, int]) -> ParsedRequest:
+        type_bk = parse_type_bk(row[indexes["Тип заявки BK"]])
+        norm, norm_without_travel, priority, skill = request_rules(type_bk)
+        window_start = parse_datetime(row[indexes["Начало"]])
+        window_end = parse_datetime(row[indexes["Окончание"]])
         if window_start >= window_end:
             raise PlanningFileValidationError
 
         connection_value = row[indexes["Подключение"]] if "Подключение" in indexes else None
         return ParsedRequest(
-            external_id=self._parse_external_id(row[indexes["Заявка"]]),
+            external_id=PlanningService._parse_external_id(row[indexes["Заявка"]]),
             type_bk=type_bk,
-            type_hd=self._parse_type_hd(row[indexes["Тип заявки HD"]]),
-            district=self._required_string(row[indexes["Район"]]),
-            address=self._required_string(row[indexes["Адрес"]]),
-            connection_type=self._parse_connection_type(connection_value),
-            is_gigabit=self._required_string(row[indexes["Гигабитное подключение"]]).casefold()
-            == "да",
+            type_hd=PlanningService._parse_type_hd(row[indexes["Тип заявки HD"]]),
+            district=required_string(row[indexes["Район"]]),
+            address=required_string(row[indexes["Адрес"]]),
+            connection_type=PlanningService._parse_connection_type(connection_value),
+            is_gigabit=required_string(row[indexes["Гигабитное подключение"]]).casefold() == "да",
             window_start=window_start,
             window_end=window_end,
             norm_minutes=norm,
@@ -394,7 +330,8 @@ class PlanningService:
             required_skill=skill,
         )
 
-    def _parse_region(self, title: str) -> Region:
+    @staticmethod
+    def _parse_region(title: str) -> Region:
         normalized = title.casefold()
         if "юго-восток" in normalized:
             return Region.YUGO_VOSTOK
@@ -404,7 +341,8 @@ class PlanningService:
             return Region.VOSTOK
         raise PlanningFileValidationError
 
-    def _validate_workbook_kind(self, title: str, role: str) -> None:
+    @staticmethod
+    def _validate_workbook_kind(title: str, role: str) -> None:
         normalized = title.casefold()
         expected_marker = (
             "синтетические данные" if role == "requests" else "контрольное распределение"
@@ -412,7 +350,8 @@ class PlanningService:
         if expected_marker not in normalized:
             raise PlanningFileValidationError
 
-    def _validate_headers(self, indexes: dict[str, int], role: str) -> None:
+    @staticmethod
+    def _validate_headers(indexes: dict[str, int], role: str) -> None:
         common = {"Заявка", "Тип заявки BK"}
         required = (
             common
@@ -430,19 +369,8 @@ class PlanningService:
         if not required.issubset(indexes):
             raise PlanningFileValidationError
 
-    def _parse_type_bk(self, value: object) -> RequestTypeBk:
-        mapping = {
-            "Глобальная проблема": RequestTypeBk.GLOBAL_PROBLEM,
-            "Дозаказ": RequestTypeBk.ADDITIONAL_ORDER,
-            "Локальная заявка": RequestTypeBk.LOCAL_REQUEST,
-            "Подключение": RequestTypeBk.CONNECTION,
-        }
-        try:
-            return mapping[self._required_string(value)]
-        except KeyError as exc:
-            raise PlanningFileValidationError from exc
-
-    def _parse_type_hd(self, value: object) -> RequestTypeHd:
+    @staticmethod
+    def _parse_type_hd(value: object) -> RequestTypeHd:
         mapping = {
             "IP-адрес 169...": RequestTypeHd.IP_ADDRESS_169,
             "TVE/ENT. Другие ошибки": RequestTypeHd.TVE_ENT_OTHER_ERRORS,
@@ -466,27 +394,21 @@ class PlanningService:
             "ТВ. Замена приставки техником": RequestTypeHd.TV_SET_TOP_BOX_REPLACEMENT,
         }
         try:
-            return mapping[self._required_string(value)]
+            return mapping[required_string(value)]
         except KeyError as exc:
             raise PlanningFileValidationError from exc
 
-    def _parse_connection_type(self, value: object) -> ConnectionType | None:
+    @staticmethod
+    def _parse_connection_type(value: object) -> ConnectionType | None:
         if value is None:
             return None
         try:
-            return ConnectionType(self._required_string(value).casefold())
+            return ConnectionType(required_string(value).casefold())
         except ValueError as exc:
             raise PlanningFileValidationError from exc
 
-    def _request_rules(self, type_bk: RequestTypeBk) -> tuple[int, int, int, Skill]:
-        return {
-            RequestTypeBk.GLOBAL_PROBLEM: (100, 80, 1, Skill.EMERGENCY_WORKS),
-            RequestTypeBk.CONNECTION: (90, 70, 2, Skill.CONNECTION_AND_ORDERS),
-            RequestTypeBk.ADDITIONAL_ORDER: (40, 20, 3, Skill.CONNECTION_AND_ORDERS),
-            RequestTypeBk.LOCAL_REQUEST: (50, 30, 3, Skill.LOCAL_WORKS),
-        }[type_bk]
-
-    def _parse_external_id(self, value: object) -> int:
+    @staticmethod
+    def _parse_external_id(value: object) -> int:
         if isinstance(value, bool) or not isinstance(value, (int, float, str)):
             raise PlanningFileValidationError
         try:
@@ -496,16 +418,3 @@ class PlanningService:
         if parsed <= 0 or isinstance(value, float) and not value.is_integer():
             raise PlanningFileValidationError
         return parsed
-
-    def _parse_datetime(self, value: object) -> datetime:
-        if isinstance(value, datetime):
-            return value
-        try:
-            return datetime.strptime(self._required_string(value), "%d.%m.%Y %H:%M")
-        except ValueError as exc:
-            raise PlanningFileValidationError from exc
-
-    def _required_string(self, value: object) -> str:
-        if not isinstance(value, str) or not value.strip():
-            raise PlanningFileValidationError
-        return value.strip()

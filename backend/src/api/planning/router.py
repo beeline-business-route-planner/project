@@ -16,21 +16,20 @@ from src.api.exc.planning import (
     RepeatedPlanningRequest,
 )
 from src.api.planning.schemas import InitialPlanningResponse, PlanningImportResponse
+from src.api.planning.service import PlanningService, PlanningUploadFile
+from src.api.planning.service_exc import (
+    PlanningFileCountError,
+    PlanningFileValidationError,
+    PlanningRegionPairError,
+    RepeatedRequestError,
+)
 from src.config import cfg
+from src.core.algorithm import MissingCoordinatesError
 from src.core.geocoding import AddressNotFoundError, GeocodingUnavailableError
 from src.core.routing import (
     InvalidRoutingResponseError,
     RoutingUnavailableError,
     UnreachablePointsError,
-)
-from src.core.services import (
-    MissingCoordinatesError,
-    PlanningFileCountError,
-    PlanningFileValidationError,
-    PlanningRegionPairError,
-    PlanningService,
-    PlanningUploadFile,
-    RepeatedRequestError,
 )
 
 router = APIRouter(prefix="/planning", tags=["planning"], route_class=DishkaRoute)
