@@ -37,14 +37,22 @@
 ```
 src/
 ├── api/                 — корневой роутер (APIRouter, prefix="/api")
-│                          доменные роутеры: src/api/<domain>/{router,schemas}.py
+│                          доменные роутеры: src/api/<domain>/{router,schemas,
+│                          service,service_exc,dto,utils}.py — бизнес-логика
+│                          домена физически живёт рядом со своим эндпоинтом,
+│                          не в core/
+│   └── exc/               — HTTP-исключения роутера, файл на домен
 ├── config/               — pydantic-settings конфиг (config.py, TOML)
 ├── core/
 │   ├── db/
 │   │   ├── models/        — SQLAlchemy ORM-модели
-│   │   ├── dto/            — датаклассы для передачи данных между слоями
+│   │   ├── dto/            — датаклассы для передачи данных между слоями (из ORM)
 │   │   ├── repositories/    — один репозиторий на модель, без бизнес-логики
 │   │   └── uow.py            — UnitOfWork, агрегирует репозитории
+│   ├── <system>/            — клиенты внешних API и переиспользуемые core-сервисы,
+│   │                          не привязанные к одному эндпоинту (s3, geocoding,
+│   │                          routing, algorithm): client.py + service.py,
+│   │                          плюс dto.py/enums.py по необходимости
 │   ├── di/                 — dishka providers
 │   ├── logging.py           — структурные JSON-логи
 │   ├── metrics.py           — Prometheus-метрики (/metrics)
@@ -55,9 +63,11 @@ agents-docs/                 — документация для агента (�
 .claude/skills/               — commit, add-migration
 ```
 
-Слоя `src/core/services/` в шаблоне пока нет — заводится, как только
-появляется первая бизнес-логика сложнее CRUD (распределение заявок,
-перепланирование, сравнение планов) — см. `agents-docs/ARCHITECTURE.md`.
+Сервис домена — всегда `src/api/<domain>/service.py`, не отдельный каталог
+на уровне приложения (`src/core/services/` как конвенция не существует).
+Заводится, как только появляется первая бизнес-логика сложнее CRUD
+(распределение заявок, перепланирование, сравнение планов) — см.
+`agents-docs/ARCHITECTURE.md`.
 
 ---
 
