@@ -13,6 +13,7 @@ dependencies = [
     "greenlet>=3.5.3",
     "httpx>=0.28.1",
     "openpyxl>=3.1.5",
+    "ortools>=9.15.6755",
     "prometheus-client>=0.25.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
