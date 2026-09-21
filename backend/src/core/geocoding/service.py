@@ -1,6 +1,5 @@
 import asyncio
 import re
-from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from time import monotonic
 
@@ -8,6 +7,7 @@ import httpx
 
 from src.config import cfg
 from src.core.geocoding.client import GeocodingClient
+from src.core.geocoding.dto import Coordinates
 
 
 class AddressNotFoundError(Exception):
@@ -18,12 +18,6 @@ class AddressNotFoundError(Exception):
 
 class GeocodingUnavailableError(Exception):
     pass
-
-
-@dataclass(frozen=True)
-class Coordinates:
-    latitude: Decimal
-    longitude: Decimal
 
 
 class GeocodingService:

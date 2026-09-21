@@ -1,13 +1,13 @@
 import math
 import uuid
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
 from decimal import Decimal
 
 import httpx
 
 from src.config import cfg
 from src.core.routing.client import RoutingClient
+from src.core.routing.dto import RoutingPoint
 
 
 class RoutingUnavailableError(Exception):
@@ -25,13 +25,6 @@ class UnreachablePointsError(Exception):
         self.from_id = from_id
         self.to_id = to_id
         super().__init__(f"Между точками нет маршрута: {from_id} -> {to_id}")
-
-
-@dataclass(frozen=True)
-class RoutingPoint:
-    id: uuid.UUID
-    latitude: Decimal
-    longitude: Decimal
 
 
 class RoutingMatrix:
