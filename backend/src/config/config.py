@@ -1,3 +1,4 @@
+from datetime import time
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -40,6 +41,34 @@ class Database(BaseModel):
         return f"postgresql+asyncpg://{self.postgres_username}:{self.postgres_password}@{host}:{self.postgres_port}/{self.postgres_db}"
 
 
+class S3(BaseModel):
+    endpoint_url: str = ""
+    access_key: str = ""
+    secret_key: str = ""
+    region: str = "us-east-1"
+    bucket_answers: str = "answers"
+    bucket_uploads: str = "uploads"
+    bucket_plans: str = "plans"
+
+
+class Geocoding(BaseModel):
+    base_url: str = "https://nominatim.openstreetmap.org"
+    user_agent: str = (
+        "beeline-business-route-planner/0.1 "
+        "(+https://github.com/beeline-business-route-planner/project)"
+    )
+    timeout_seconds: float = 15.0
+    min_request_interval_seconds: float = 1.0
+    country_codes: str = "ru"
+
+
+class Planning(BaseModel):
+    max_file_size_bytes: int = 10_000_000
+    default_shift_start: time = time(hour=9)
+    default_shift_end: time = time(hour=21)
+    default_vehicle_type: str = "public_transport"
+
+
 class Logging(BaseModel):
     level: str = "INFO"
 
@@ -52,6 +81,9 @@ class Config(BaseSettings):
     )
 
     database: Database = Database()
+    s3: S3 = S3()
+    geocoding: Geocoding = Geocoding()
+    planning: Planning = Planning()
     logging: Logging = Logging()
     cors: CORS = CORS()
 

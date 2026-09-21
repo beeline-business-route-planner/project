@@ -5,6 +5,28 @@ postgres_db = "app"
 postgres_host = "localhost"
 postgres_port = 5432
 
+[s3]
+endpoint_url = "http://localhost:9000"
+access_key = "admin"
+secret_key = "change-me-min-8-chars"
+region = "us-east-1"
+bucket_answers = "answers"
+bucket_uploads = "uploads"
+bucket_plans = "plans"
+
+[geocoding]
+base_url = "https://nominatim.openstreetmap.org"
+user_agent = "beeline-business-route-planner/0.1 (+https://github.com/beeline-business-route-planner/project)"
+timeout_seconds = 15.0
+min_request_interval_seconds = 1.0
+country_codes = "ru"
+
+[planning]
+max_file_size_bytes = 10000000
+default_shift_start = "09:00:00"
+default_shift_end = "21:00:00"
+default_vehicle_type = "public_transport"
+
 [logging]
 level = "INFO"
 
