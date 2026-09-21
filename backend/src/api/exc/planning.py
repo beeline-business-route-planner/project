@@ -29,3 +29,23 @@ class PlanningAddressNotFound(Base):
 class PlanningGeocodingUnavailable(Base):
     status_code = 502
     detail = "Сервис геокодирования временно недоступен"
+
+
+class PlanningRoutingUnavailable(Base):
+    status_code = 502
+    detail = "Сервис маршрутизации временно недоступен"
+
+
+class PlanningInvalidRoutingResponse(Base):
+    status_code = 502
+    detail = "Сервис маршрутизации вернул некорректный ответ"
+
+
+class PlanningUnreachablePoints(Base):
+    status_code = 422
+    detail = "Между двумя точками маршрута не найден путь"
+
+
+class PlanningMissingCoordinates(Base):
+    status_code = 422
+    detail = "У заявки или инженера не определены координаты"

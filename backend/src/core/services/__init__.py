@@ -1,3 +1,8 @@
+from src.core.services.algorithm import (
+    AlgorithmPlanResult,
+    AlgorithmService,
+    MissingCoordinatesError,
+)
 from src.core.services.planning import (
     InitialPlanningResult,
     PlanningFileCountError,
@@ -10,7 +15,10 @@ from src.core.services.planning import (
 )
 
 __all__ = [
+    "AlgorithmPlanResult",
+    "AlgorithmService",
     "InitialPlanningResult",
+    "MissingCoordinatesError",
     "PlanningFileCountError",
     "PlanningFileValidationError",
     "PlanningImportResult",

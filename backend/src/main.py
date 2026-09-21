@@ -11,7 +11,14 @@ from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 
 from src.api import router
 from src.config import cfg
-from src.core.di import DbProvider, GeocodingProvider, PlanningProvider, S3Provider
+from src.core.di import (
+    AlgorithmProvider,
+    DbProvider,
+    GeocodingProvider,
+    PlanningProvider,
+    RoutingProvider,
+    S3Provider,
+)
 from src.core.logging import setup_logging
 from src.core.metrics import PrometheusMiddleware, http_requests_total
 from src.core.middleware import RequestLoggingMiddleware
@@ -22,6 +29,8 @@ container = make_async_container(
     DbProvider(),
     S3Provider(),
     GeocodingProvider(),
+    RoutingProvider(),
+    AlgorithmProvider(),
     PlanningProvider(),
 )
 

@@ -10,6 +10,7 @@ class PlanningImportResponse(BaseModel):
     region: Region
     requests_count: int
     engineers_count: int
+    plan_id: uuid.UUID | None
 
 
 class InitialPlanningResponse(BaseModel):

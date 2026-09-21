@@ -9,12 +9,22 @@ from src.api.exc.planning import (
     InvalidPlanningRegionPair,
     PlanningAddressNotFound,
     PlanningGeocodingUnavailable,
+    PlanningInvalidRoutingResponse,
+    PlanningMissingCoordinates,
+    PlanningRoutingUnavailable,
+    PlanningUnreachablePoints,
     RepeatedPlanningRequest,
 )
 from src.api.planning.schemas import InitialPlanningResponse, PlanningImportResponse
 from src.config import cfg
 from src.core.geocoding import AddressNotFoundError, GeocodingUnavailableError
+from src.core.routing import (
+    InvalidRoutingResponseError,
+    RoutingUnavailableError,
+    UnreachablePointsError,
+)
 from src.core.services import (
+    MissingCoordinatesError,
     PlanningFileCountError,
     PlanningFileValidationError,
     PlanningRegionPairError,
@@ -62,6 +72,14 @@ async def import_initial_planning_data(
         raise PlanningAddressNotFound from exc
     except GeocodingUnavailableError as exc:
         raise PlanningGeocodingUnavailable from exc
+    except RoutingUnavailableError as exc:
+        raise PlanningRoutingUnavailable from exc
+    except InvalidRoutingResponseError as exc:
+        raise PlanningInvalidRoutingResponse from exc
+    except UnreachablePointsError as exc:
+        raise PlanningUnreachablePoints from exc
+    except MissingCoordinatesError as exc:
+        raise PlanningMissingCoordinates from exc
 
     return InitialPlanningResponse(
         status=result.status,
@@ -71,6 +89,7 @@ async def import_initial_planning_data(
                 region=item.region,
                 requests_count=item.requests_count,
                 engineers_count=item.engineers_count,
+                plan_id=item.plan_id,
             )
             for item in result.imports
         ],

@@ -2,7 +2,7 @@ import asyncio
 import logging
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
 from src.config import cfg
+from src.core.algorithm import DistributionMode
 from src.core.db.dto import EngineerCreateDTO, RequestCreateDTO, UploadedFileCreateDTO
 from src.core.db.enums import (
     ConnectionType,
@@ -24,6 +25,7 @@ from src.core.db.enums import (
 from src.core.db.uow import UnitOfWork
 from src.core.geocoding import Coordinates, GeocodingService
 from src.core.s3 import S3Storage
+from src.core.services.algorithm import AlgorithmService
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +59,7 @@ class PlanningImportResult:
     region: Region
     requests_count: int
     engineers_count: int
+    plan_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -106,10 +109,12 @@ class PlanningService:
         uow: UnitOfWork,
         geocoding: GeocodingService,
         storage: S3Storage,
+        algorithm: AlgorithmService,
     ) -> None:
         self._uow = uow
         self._geocoding = geocoding
         self._storage = storage
+        self._algorithm = algorithm
 
     async def import_initial_data(self, files: list[PlanningUploadFile]) -> InitialPlanningResult:
         if not files or len(files) % 2 != 0:
@@ -150,8 +155,19 @@ class PlanningService:
             await self._delete_uploaded_objects(uploaded_objects)
             raise
 
-        # TODO: вызвать алгоритм первичного планирования для созданных upload_id.
-        return InitialPlanningResult(status="imported", imports=tuple(results))
+        plans = await asyncio.gather(
+            *(
+                self._algorithm.plan_initial(
+                    result.upload_id, result.region, DistributionMode.MIN_ENGINEERS
+                )
+                for result in results
+            )
+        )
+        results_with_plans = [
+            replace(result, plan_id=plan.plan_id)
+            for result, plan in zip(results, plans, strict=True)
+        ]
+        return InitialPlanningResult(status="imported", imports=tuple(results_with_plans))
 
     def _parse_workbook(self, source: PlanningUploadFile) -> ParsedWorkbook:
         if not source.filename or Path(source.filename).suffix.casefold() != ".xlsx":
