@@ -62,6 +62,18 @@ class Geocoding(BaseModel):
     country_codes: str = "ru"
 
 
+class Routing(BaseModel):
+    base_url: str = "https://router.project-osrm.org"
+    profile: str = "driving"
+    timeout_seconds: float = 60.0
+    travel_buffer_multiplier: float = 1.10
+    # Измеренный лимит публичного demo-сервера (router.project-osrm.org):
+    # 100 точек - "200 OK", 101 - "400 TooBig". Самостоятельный инстанс
+    # (см. docs/ROUTING.md) обычно без этого лимита — значение тогда можно
+    # поднять через конфиг, не трогая код.
+    max_table_coordinates: int = 100
+
+
 class Planning(BaseModel):
     max_file_size_bytes: int = 10_000_000
     default_shift_start: time = time(hour=9)
@@ -83,6 +95,7 @@ class Config(BaseSettings):
     database: Database = Database()
     s3: S3 = S3()
     geocoding: Geocoding = Geocoding()
+    routing: Routing = Routing()
     planning: Planning = Planning()
     logging: Logging = Logging()
     cors: CORS = CORS()
