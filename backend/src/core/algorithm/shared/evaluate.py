@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 
-from src.core.algorithm.models import Route, Stop
+from src.core.algorithm.dto import Route, Stop
 from src.core.algorithm.shared.context import _Context
 
 

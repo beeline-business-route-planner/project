@@ -1,34 +1,19 @@
 import uuid
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
 
 from src.core.algorithm.contracts import PlanningAlgorithm
-from src.core.algorithm.models import (
-    DistributionMode,
+from src.core.algorithm.dto import (
+    DistributionResult,
     EngineerContext,
     EngineerPlanningContext,
     Job,
     Route,
     TravelMatrix,
+    UnassignedJob,
 )
+from src.core.algorithm.enums import DistributionMode
 from src.core.db.enums import UnassignedReason
-
-
-@dataclass(frozen=True)
-class UnassignedJob:
-    """Заявка, которую не удалось разместить ни у одного инженера, и причина."""
-
-    job_id: uuid.UUID
-    reason: UnassignedReason
-
-
-@dataclass(frozen=True)
-class DistributionResult:
-    """Результат распределения пула заявок округа между всеми его инженерами."""
-
-    routes: tuple[Route, ...]
-    unassigned: tuple[UnassignedJob, ...]
 
 
 class DistributionPlanner:

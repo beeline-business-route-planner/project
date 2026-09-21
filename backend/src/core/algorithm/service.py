@@ -1,8 +1,9 @@
 import uuid
-from dataclasses import dataclass
 from decimal import Decimal
 
-from src.core.algorithm import DistributionMode, DistributionPlanner, EngineerContext, Job
+from src.core.algorithm.distribution import DistributionPlanner
+from src.core.algorithm.dto import AlgorithmPlanResult, EngineerContext, Job
+from src.core.algorithm.enums import DistributionMode
 from src.core.algorithm.strategies import LayeredExactStateGraph
 from src.core.db.dto import PlanCreateDTO, PlanStopCreateDTO, PlanUnassignedRequestCreateDTO
 from src.core.db.enums import PlanKind, Region
@@ -13,16 +14,6 @@ from src.core.routing import RoutingPoint, RoutingService
 
 class MissingCoordinatesError(Exception):
     pass
-
-
-@dataclass(frozen=True)
-class AlgorithmPlanResult:
-    plan_id: uuid.UUID
-    region: Region
-    engineers_used_count: int
-    total_mileage_km: Decimal
-    assigned_requests_count: int
-    unassigned_requests_count: int
 
 
 class AlgorithmService:
@@ -117,7 +108,8 @@ class AlgorithmService:
             unassigned_requests_count=len(result.unassigned),
         )
 
-    def _to_job(self, request: Request) -> Job:
+    @staticmethod
+    def _to_job(request: Request) -> Job:
         if request.latitude is None or request.longitude is None:
             raise MissingCoordinatesError(f"У заявки {request.id} нет координат")
         return Job(
@@ -132,7 +124,8 @@ class AlgorithmService:
             required_vehicle_type=request.required_vehicle_type,
         )
 
-    def _to_engineer_context(self, engineer: Engineer) -> EngineerContext:
+    @staticmethod
+    def _to_engineer_context(engineer: Engineer) -> EngineerContext:
         if engineer.start_point_latitude is None or engineer.start_point_longitude is None:
             raise MissingCoordinatesError(f"У инженера {engineer.id} нет координат старта")
         return EngineerContext(

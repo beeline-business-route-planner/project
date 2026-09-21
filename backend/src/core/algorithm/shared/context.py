@@ -2,7 +2,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from src.core.algorithm.models import EngineerPlanningContext, TravelMatrix
+from src.core.algorithm.dto import EngineerPlanningContext, TravelMatrix
 
 
 def _engine_priority(db_priority: int) -> int:

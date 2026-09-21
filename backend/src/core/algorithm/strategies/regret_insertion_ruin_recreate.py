@@ -3,7 +3,7 @@ import uuid
 from typing import ClassVar
 
 from src.core.algorithm.contracts import PlanningAlgorithm
-from src.core.algorithm.models import EngineerPlanningContext, Route
+from src.core.algorithm.dto import EngineerPlanningContext, Route
 from src.core.algorithm.shared.comparison import best_route
 from src.core.algorithm.shared.context import _Context, build_context
 from src.core.algorithm.shared.evaluate import evaluate_route, materialize_route

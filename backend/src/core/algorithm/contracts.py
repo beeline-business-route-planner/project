@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import ClassVar
 
-from src.core.algorithm.models import EngineerPlanningContext, Route
+from src.core.algorithm.dto import EngineerPlanningContext, Route
 
 
 class PlanningAlgorithm(ABC):

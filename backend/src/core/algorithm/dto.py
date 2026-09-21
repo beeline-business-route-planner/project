@@ -1,18 +1,10 @@
-import enum
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 
-from src.core.db.enums import Skill, VehicleType
-
-
-class DistributionMode(enum.StrEnum):
-    """Режим сортировки инженеров в `DistributionPlanner` (см. `docs/ALGORITHM.md`)."""
-
-    MIN_ENGINEERS = "min_engineers"
-    BALANCED = "balanced"
+from src.core.db.enums import Region, Skill, UnassignedReason, VehicleType
 
 
 @dataclass(frozen=True)
@@ -103,3 +95,31 @@ class Route:
     def assigned_job_ids(self) -> frozenset[uuid.UUID]:
         """Id заявок маршрута — `DistributionPlanner` вычитает их из пулов остальных инженеров."""
         return frozenset(stop.request_id for stop in self.stops)
+
+
+@dataclass(frozen=True)
+class AlgorithmPlanResult:
+    """Результат `AlgorithmService.plan_initial` — сводка по сохранённому `Plan`."""
+
+    plan_id: uuid.UUID
+    region: Region
+    engineers_used_count: int
+    total_mileage_km: Decimal
+    assigned_requests_count: int
+    unassigned_requests_count: int
+
+
+@dataclass(frozen=True)
+class UnassignedJob:
+    """Заявка, которую не удалось разместить ни у одного инженера, и причина."""
+
+    job_id: uuid.UUID
+    reason: UnassignedReason
+
+
+@dataclass(frozen=True)
+class DistributionResult:
+    """Результат распределения пула заявок округа между всеми его инженерами."""
+
+    routes: tuple[Route, ...]
+    unassigned: tuple[UnassignedJob, ...]

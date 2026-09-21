@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from src.core.algorithm.contracts import PlanningAlgorithm
-from src.core.algorithm.models import EngineerPlanningContext, Route
+from src.core.algorithm.dto import EngineerPlanningContext, Route
 from src.core.algorithm.shared.comparison import route_key
 from src.core.algorithm.shared.context import _Context, build_context
 from src.core.algorithm.shared.evaluate import materialize_route

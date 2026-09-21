@@ -3,7 +3,7 @@ from typing import ClassVar
 from ortools.constraint_solver import routing_enums_pb2
 
 from src.core.algorithm.contracts import PlanningAlgorithm
-from src.core.algorithm.models import EngineerPlanningContext, Route
+from src.core.algorithm.dto import EngineerPlanningContext, Route
 from src.core.algorithm.shared.comparison import best_route
 from src.core.algorithm.shared.context import build_context
 from src.core.algorithm.shared.evaluate import materialize_route
