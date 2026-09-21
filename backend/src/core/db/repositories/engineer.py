@@ -1,3 +1,8 @@
+import uuid
+
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
 from src.core.db.dto import EngineerCreateDTO
 from src.core.db.models import Engineer, EngineerSkill
 from src.core.db.repositories.base import BaseRepository
@@ -5,6 +10,14 @@ from src.core.db.repositories.base import BaseRepository
 
 class EngineerRepository(BaseRepository[Engineer]):
     model = Engineer
+
+    async def get_by_upload_id(self, upload_id: uuid.UUID) -> list[Engineer]:
+        result = await self._session.scalars(
+            select(Engineer)
+            .where(Engineer.upload_id == upload_id)
+            .options(selectinload(Engineer.skills))
+        )
+        return list(result.all())
 
     def add_many(self, engineers: list[EngineerCreateDTO]) -> None:
         for engineer in engineers:

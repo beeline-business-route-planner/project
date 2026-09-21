@@ -3,6 +3,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.db.repositories import (
     DataUploadRepository,
     EngineerRepository,
+    PlanRepository,
+    PlanStopRepository,
+    PlanUnassignedRequestRepository,
     RequestRepository,
     UploadedFileRepository,
 )
@@ -15,6 +18,9 @@ class UnitOfWork:
         self.engineers = EngineerRepository(session)
         self.requests = RequestRepository(session)
         self.uploaded_files = UploadedFileRepository(session)
+        self.plans = PlanRepository(session)
+        self.plan_stops = PlanStopRepository(session)
+        self.plan_unassigned_requests = PlanUnassignedRequestRepository(session)
 
     async def commit(self) -> None:
         await self.session.commit()

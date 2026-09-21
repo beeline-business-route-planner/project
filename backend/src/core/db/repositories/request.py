@@ -1,3 +1,5 @@
+import uuid
+
 from sqlalchemy import select
 
 from src.core.db.dto import RequestCreateDTO
@@ -7,6 +9,10 @@ from src.core.db.repositories.base import BaseRepository
 
 class RequestRepository(BaseRepository[Request]):
     model = Request
+
+    async def get_by_upload_id(self, upload_id: uuid.UUID) -> list[Request]:
+        result = await self._session.scalars(select(Request).where(Request.upload_id == upload_id))
+        return list(result.all())
 
     async def get_existing_external_ids(self, external_ids: set[int]) -> set[int]:
         if not external_ids:
