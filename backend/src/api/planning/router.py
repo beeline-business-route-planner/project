@@ -3,34 +3,10 @@ from typing import Annotated
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, File, UploadFile
 
-from src.api.exc.planning import (
-    InvalidPlanningFile,
-    InvalidPlanningFileCount,
-    InvalidPlanningRegionPair,
-    PlanningAddressNotFound,
-    PlanningGeocodingUnavailable,
-    PlanningInvalidRoutingResponse,
-    PlanningMissingCoordinates,
-    PlanningRoutingUnavailable,
-    PlanningUnreachablePoints,
-    RepeatedPlanningRequest,
-)
+from src.api.planning.dto import PlanningUploadFile
 from src.api.planning.schemas import InitialPlanningResponse, PlanningImportResponse
-from src.api.planning.service import PlanningService, PlanningUploadFile
-from src.api.planning.service_exc import (
-    PlanningFileCountError,
-    PlanningFileValidationError,
-    PlanningRegionPairError,
-    RepeatedRequestError,
-)
+from src.api.planning.service import PlanningService
 from src.config import cfg
-from src.core.algorithm import MissingCoordinatesError
-from src.core.geocoding import AddressNotFoundError, GeocodingUnavailableError
-from src.core.routing import (
-    InvalidRoutingResponseError,
-    RoutingUnavailableError,
-    UnreachablePointsError,
-)
 
 router = APIRouter(prefix="/planning", tags=["planning"], route_class=DishkaRoute)
 
@@ -57,29 +33,7 @@ async def import_initial_planning_data(
         for file in files:
             await file.close()
 
-    try:
-        result = await service.import_initial_data(uploaded_files)
-    except PlanningFileCountError as exc:
-        raise InvalidPlanningFileCount from exc
-    except PlanningRegionPairError as exc:
-        raise InvalidPlanningRegionPair from exc
-    except PlanningFileValidationError as exc:
-        raise InvalidPlanningFile from exc
-    except RepeatedRequestError as exc:
-        raise RepeatedPlanningRequest from exc
-    except AddressNotFoundError as exc:
-        raise PlanningAddressNotFound from exc
-    except GeocodingUnavailableError as exc:
-        raise PlanningGeocodingUnavailable from exc
-    except RoutingUnavailableError as exc:
-        raise PlanningRoutingUnavailable from exc
-    except InvalidRoutingResponseError as exc:
-        raise PlanningInvalidRoutingResponse from exc
-    except UnreachablePointsError as exc:
-        raise PlanningUnreachablePoints from exc
-    except MissingCoordinatesError as exc:
-        raise PlanningMissingCoordinates from exc
-
+    result = await service.import_initial_data(uploaded_files)
     return InitialPlanningResponse(
         status=result.status,
         imports=[

@@ -1,7 +1,8 @@
+from dataclasses import dataclass
 from datetime import datetime
 
-from src.api.planning.service_exc import PlanningFileValidationError
-from src.core.db.enums import RequestTypeBk, Skill
+from src.api.exc.planning import PlanningFileValidationError
+from src.core.db.enums import RequestPriority, RequestTypeBk, Skill
 
 
 def required_string(value: object) -> str:
@@ -23,13 +24,61 @@ def parse_type_bk(value: object) -> RequestTypeBk:
         raise PlanningFileValidationError from exc
 
 
-def request_rules(type_bk: RequestTypeBk) -> tuple[int, int, int, Skill]:
-    return {
-        RequestTypeBk.GLOBAL_PROBLEM: (100, 80, 1, Skill.EMERGENCY_WORKS),
-        RequestTypeBk.CONNECTION: (90, 70, 2, Skill.CONNECTION_AND_ORDERS),
-        RequestTypeBk.ADDITIONAL_ORDER: (40, 20, 3, Skill.CONNECTION_AND_ORDERS),
-        RequestTypeBk.LOCAL_REQUEST: (50, 30, 3, Skill.LOCAL_WORKS),
-    }[type_bk]
+@dataclass(frozen=True)
+class WorkNorm:
+    """Норматив выполнения одного типа работы (источник — `Нормативы.xlsx`, см.
+    `TECHNICAL_CONSTRAINTS.md`, §2 "Нормативы длительности").
+
+    `total_minutes` включает фиксированную дорожную часть из исходной таблицы
+    (везде 20 мин, см. §2 "Норматив включает время дороги"); `service_minutes`
+    — то же самое за вычетом неё, чистое время работы у клиента, которое
+    используется вместе с расчётным временем маршрута вместо зашитой
+    константы.
+    """
+
+    total_minutes: int
+    travel_minutes: int
+    priority: RequestPriority
+    required_skill: Skill
+
+    @property
+    def service_minutes(self) -> int:
+        return self.total_minutes - self.travel_minutes
+
+    def minutes(self, *, with_travel: bool) -> int:
+        return self.total_minutes if with_travel else self.service_minutes
+
+
+def work_norm(type_bk: RequestTypeBk) -> WorkNorm:
+    match type_bk:
+        case RequestTypeBk.GLOBAL_PROBLEM:
+            return WorkNorm(
+                total_minutes=100,
+                travel_minutes=20,
+                priority=RequestPriority.EMERGENCY,
+                required_skill=Skill.EMERGENCY_WORKS,
+            )
+        case RequestTypeBk.CONNECTION:
+            return WorkNorm(
+                total_minutes=90,
+                travel_minutes=20,
+                priority=RequestPriority.CONNECTION,
+                required_skill=Skill.CONNECTION_AND_ORDERS,
+            )
+        case RequestTypeBk.ADDITIONAL_ORDER:
+            return WorkNorm(
+                total_minutes=40,
+                travel_minutes=20,
+                priority=RequestPriority.REPAIR,
+                required_skill=Skill.CONNECTION_AND_ORDERS,
+            )
+        case RequestTypeBk.LOCAL_REQUEST:
+            return WorkNorm(
+                total_minutes=50,
+                travel_minutes=20,
+                priority=RequestPriority.REPAIR,
+                required_skill=Skill.LOCAL_WORKS,
+            )
 
 
 def parse_datetime(value: object) -> datetime:
