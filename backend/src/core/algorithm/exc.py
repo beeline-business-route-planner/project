@@ -1,0 +1,2 @@
+class MissingCoordinatesError(Exception):
+    pass

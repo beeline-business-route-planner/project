@@ -8,23 +8,11 @@ import httpx
 from src.config import cfg
 from src.core.routing.client import RoutingClient
 from src.core.routing.dto import RoutingPoint
-
-
-class RoutingUnavailableError(Exception):
-    pass
-
-
-class InvalidRoutingResponseError(Exception):
-    pass
-
-
-class UnreachablePointsError(Exception):
-    """Между двумя точками матрицы нет маршрута (OSRM вернул `null` для этой пары)."""
-
-    def __init__(self, from_id: uuid.UUID, to_id: uuid.UUID) -> None:
-        self.from_id = from_id
-        self.to_id = to_id
-        super().__init__(f"Между точками нет маршрута: {from_id} -> {to_id}")
+from src.core.routing.exc import (
+    InvalidRoutingResponseError,
+    RoutingUnavailableError,
+    UnreachablePointsError,
+)
 
 
 class RoutingMatrix:

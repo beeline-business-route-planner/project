@@ -1,4 +1,7 @@
+from botocore.exceptions import BotoCoreError, ClientError
+
 from src.core.s3.client import S3Client
+from src.core.s3.exc import S3UnavailableError
 
 
 class S3Storage:
@@ -18,19 +21,33 @@ class S3Storage:
             data: содержимое файла.
             content_type: MIME-тип файла, если известен.
         """
-        async with self._client.get() as client:
-            if content_type:
-                await client.put_object(Bucket=bucket, Key=key, Body=data, ContentType=content_type)
-            else:
-                await client.put_object(Bucket=bucket, Key=key, Body=data)
+        try:
+            async with self._client.get() as client:
+                if content_type:
+                    await client.put_object(
+                        Bucket=bucket,
+                        Key=key,
+                        Body=data,
+                        ContentType=content_type,
+                    )
+                else:
+                    await client.put_object(Bucket=bucket, Key=key, Body=data)
+        except (BotoCoreError, ClientError, OSError) as exc:
+            raise S3UnavailableError("Не удалось загрузить объект в S3") from exc
 
     async def download_file(self, bucket: str, key: str) -> bytes:
         """Скачивает файл из бакета целиком в память."""
-        async with self._client.get() as client:
-            response = await client.get_object(Bucket=bucket, Key=key)
-            return await response["Body"].read()
+        try:
+            async with self._client.get() as client:
+                response = await client.get_object(Bucket=bucket, Key=key)
+                return await response["Body"].read()
+        except (BotoCoreError, ClientError, OSError) as exc:
+            raise S3UnavailableError("Не удалось скачать объект из S3") from exc
 
     async def delete_file(self, bucket: str, key: str) -> None:
         """Удаляет файл из бакета."""
-        async with self._client.get() as client:
-            await client.delete_object(Bucket=bucket, Key=key)
+        try:
+            async with self._client.get() as client:
+                await client.delete_object(Bucket=bucket, Key=key)
+        except (BotoCoreError, ClientError, OSError) as exc:
+            raise S3UnavailableError("Не удалось удалить объект из S3") from exc
