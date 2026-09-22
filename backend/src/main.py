@@ -10,12 +10,16 @@ from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 
 from src.api import router
+from src.api.exc.base import register_all
 from src.config import cfg
 from src.core.di import (
     AlgorithmProvider,
     DbProvider,
+    EngineersProvider,
     GeocodingProvider,
     PlanningProvider,
+    PlansProvider,
+    RequestsProvider,
     RoutingProvider,
     S3Provider,
 )
@@ -32,6 +36,9 @@ container = make_async_container(
     RoutingProvider(),
     AlgorithmProvider(),
     PlanningProvider(),
+    PlansProvider(),
+    RequestsProvider(),
+    EngineersProvider(),
 )
 
 
@@ -63,6 +70,7 @@ app.add_middleware(PrometheusMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(router)
+register_all(app)
 
 
 @app.exception_handler(Exception)

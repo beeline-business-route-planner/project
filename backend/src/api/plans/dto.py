@@ -1,0 +1,101 @@
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
+
+from src.api.plans.enums import RequestGroupKey
+from src.core.db.enums import PlanKind, Region, Skill, UnassignedReason, VehicleType
+
+
+@dataclass(frozen=True)
+class EngineerCardDTO:
+    """Мини-карточка инженера — вложена в тайл заявки (см. docs/PLANS_API.md)."""
+
+    engineer_id: uuid.UUID
+    name: str
+
+
+@dataclass(frozen=True)
+class RequestTileDTO:
+    """Один тайл заявки — что нужно на карточке плана (не полная заявка, см. `RequestDTO`).
+
+    `sequence_number` — номер остановки в маршруте `assigned_engineer` (1 =
+    первая после старта и т.д.) — нужен фронту, чтобы пронумеровать точки
+    маршрута на карте; `null` у неразмещённых заявок. Тот же тайл
+    используется и в плоском списке (`RequestGroupDTO`), и внутри
+    `EngineerTileDTO.stops` (там `stops` уже отсортирован по этому полю, но
+    само число всё равно передаётся явно, а не подразумевается по позиции в
+    массиве)."""
+
+    request_id: uuid.UUID
+    address: str
+    district: str
+    latitude: Decimal | None
+    longitude: Decimal | None
+    window_start: datetime
+    window_end: datetime
+    priority: int
+    required_skill: Skill
+    planned_start: datetime | None
+    planned_finish: datetime | None
+    sequence_number: int | None
+    assigned_engineer: EngineerCardDTO | None
+    unassigned_reason: UnassignedReason | None
+
+
+@dataclass(frozen=True)
+class RequestGroupDTO:
+    """Один сворачиваемый бокс на вкладке «Заявки» — см. docs/PLANS_API.md.
+
+    Только ключ (`group`), без текстовой подписи — подписи/иконки/цвета для
+    восьми фиксированных боксов знает фронт, бэку незачем возить русский
+    текст в API-ответе (ключи стабильны, порядок массива и есть порядок
+    отображения)."""
+
+    group: RequestGroupKey
+    requests: tuple[RequestTileDTO, ...]
+
+
+@dataclass(frozen=True)
+class EngineerTileDTO:
+    """Один тайл вкладки «Инженеры» — вместе со своим маршрутом (`stops`)."""
+
+    engineer_id: uuid.UUID
+    name: str
+    vehicle_type: VehicleType
+    shift_start: datetime
+    shift_end: datetime
+    start_latitude: Decimal | None
+    start_longitude: Decimal | None
+    assigned_requests_count: int
+    route_distance_km: Decimal
+    stops: tuple[RequestTileDTO, ...]
+
+
+@dataclass(frozen=True)
+class PlanDetailDTO:
+    """Полный ответ на `GET /api/plans/current`/`GET /api/plans/{plan_id}`."""
+
+    id: uuid.UUID
+    region: Region
+    kind: PlanKind
+    is_baseline: bool
+    created_at: datetime
+    based_on_plan_id: uuid.UUID | None
+    triggered_by_event_id: uuid.UUID | None
+    total_mileage_km: Decimal
+    engineers_used_count: int
+    request_groups: tuple[RequestGroupDTO, ...]
+    engineers: tuple[EngineerTileDTO, ...]
+
+
+@dataclass(frozen=True)
+class PlanSummaryDTO:
+    """Один элемент списка `GET /api/plans` — шапка плана без содержимого."""
+
+    id: uuid.UUID
+    kind: PlanKind
+    is_baseline: bool
+    created_at: datetime
+    engineers_used_count: int
+    total_mileage_km: Decimal
