@@ -23,13 +23,6 @@ active_requests = Gauge(
 )
 
 
-def _route_path(scope: Scope) -> str:
-    route = scope.get("route")
-    if route and hasattr(route, "path"):
-        return route.path
-    return "/unknown"
-
-
 class PrometheusMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -54,7 +47,7 @@ class PrometheusMiddleware:
             await self.app(scope, receive, send_wrapper)
             duration = time.perf_counter() - start
 
-            path = _route_path(scope)
+            path = self._route_path(scope)
 
             http_requests_total.labels(
                 method=method,
@@ -69,3 +62,10 @@ class PrometheusMiddleware:
 
         finally:
             active_requests.labels(method=method).dec()
+
+    @staticmethod
+    def _route_path(scope: Scope) -> str:
+        route = scope.get("route")
+        if route and hasattr(route, "path"):
+            return route.path
+        return "/unknown"

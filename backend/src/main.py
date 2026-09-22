@@ -67,7 +67,7 @@ app.include_router(router)
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    log.error("Unhandled exception", exc_info=exc)
+    log.error("http.unhandled_exception", exc_info=exc)
     http_requests_total.labels(method=request.method, path=request.url.path, status=500).inc()
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
