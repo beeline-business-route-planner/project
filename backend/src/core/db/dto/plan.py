@@ -25,6 +25,8 @@ class PlanStopCreateDTO:
     request_id: uuid.UUID
     sequence_number: int
     planned_arrival: datetime
+    planned_start: datetime
+    planned_finish: datetime
     travel_minutes: int
     distance_km: Decimal
     is_locked: bool

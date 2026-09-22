@@ -20,6 +20,23 @@ class VehicleType(enum.StrEnum):
     PUBLIC_TRANSPORT = "public_transport"
 
 
+class RequestPriority(enum.IntEnum):
+    """Приоритет заявки (`Request.priority`) — см. TECHNICAL_CONSTRAINTS.md, §2.
+
+    Меньше число — важнее заявка. Единственная и основная шкала приоритета
+    (не отдельная от "обычная/срочная" — та вычисляется из этого ранга, см.
+    TECHNICAL_CONSTRAINTS.md). `Request.priority` в БД остаётся `int`
+    (`ck_request_priority` уже проверяет диапазон 1-3) — этот enum не тип
+    колонки, а именованная ссылка на конкретные значения ранга везде, где
+    код должен явно сравнить приоритет с "аварией"/"подключением" и т.п.,
+    вместо голого литерала `1`/`2`/`3`.
+    """
+
+    EMERGENCY = 1
+    CONNECTION = 2
+    REPAIR = 3
+
+
 class RequestTypeBk(enum.StrEnum):
     """Тип заявки в Beekeeper (`Тип заявки BK`) — закрытый список по всем регионам датасета."""
 

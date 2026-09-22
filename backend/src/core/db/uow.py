@@ -13,7 +13,7 @@ from src.core.db.repositories import (
 
 class UnitOfWork:
     def __init__(self, session: AsyncSession) -> None:
-        self.session = session
+        self._session = session
         self.data_uploads = DataUploadRepository(session)
         self.engineers = EngineerRepository(session)
         self.requests = RequestRepository(session)
@@ -23,7 +23,7 @@ class UnitOfWork:
         self.plan_unassigned_requests = PlanUnassignedRequestRepository(session)
 
     async def commit(self) -> None:
-        await self.session.commit()
+        await self._session.commit()
 
     async def rollback(self) -> None:
-        await self.session.rollback()
+        await self._session.rollback()

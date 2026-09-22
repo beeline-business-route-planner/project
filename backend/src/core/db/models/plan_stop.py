@@ -36,6 +36,13 @@ class PlanStop(Base):
 
     sequence_number: Mapped[int] = mapped_column(sa.SmallInteger())
     planned_arrival: Mapped[datetime] = mapped_column(sa.DateTime())
+    # `planned_arrival` — когда инженер физически приехал; `planned_start` — когда
+    # он реально начал работу (`max(planned_arrival, Request.window_start)` —
+    # начать раньше окна нельзя, но приехать раньше и ждать можно, см.
+    # ALGORITHM.md). Оба замораживаются на момент построения плана, как
+    # travel_minutes/distance_km — та же причина, см. docstring класса выше.
+    planned_start: Mapped[datetime] = mapped_column(sa.DateTime())
+    planned_finish: Mapped[datetime] = mapped_column(sa.DateTime())
     travel_minutes: Mapped[int] = mapped_column(sa.SmallInteger())
     distance_km: Mapped[Decimal] = mapped_column(sa.Numeric(6, 2))
     is_locked: Mapped[bool] = mapped_column(sa.Boolean(), default=False)

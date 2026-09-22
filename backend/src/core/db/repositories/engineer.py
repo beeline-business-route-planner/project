@@ -11,6 +11,15 @@ from src.core.db.repositories.base import BaseRepository
 class EngineerRepository(BaseRepository[Engineer]):
     model = Engineer
 
+    async def get_by_id(self, id: object) -> Engineer | None:
+        """Переопределяет базовый `session.get` — тому нужен `selectinload` для
+        `skills`, иначе доступ к связи после коммита/вне сессии уронит
+        `MissingGreenlet` (async ORM не делает ленивую подгрузку неявно)."""
+        result = await self._session.scalars(
+            select(Engineer).where(Engineer.id == id).options(selectinload(Engineer.skills))
+        )
+        return result.first()
+
     async def get_by_upload_id(self, upload_id: uuid.UUID) -> list[Engineer]:
         result = await self._session.scalars(
             select(Engineer)

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Any, Self
 
 
-@dataclass
+@dataclass(frozen=True)
 class BaseDTO:
     @classmethod
     def from_orm(cls, obj: Any) -> Self:
