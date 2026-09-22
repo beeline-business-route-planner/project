@@ -1,23 +1,28 @@
 import uuid
 from collections.abc import Sequence
 
-from src.core.algorithm.shared.context import _Context
+from src.core.algorithm.shared.context import AlgorithmContext
 from src.core.algorithm.shared.evaluate import evaluate_route
 
-RouteKey = tuple[int, int, int, int]
-
-_INVALID_KEY: RouteKey = (-1, -1, -(10**9), -(10**9))
+type RouteKey = tuple[int, int, int, int]
 
 
-def route_key(ctx: _Context, route: Sequence[uuid.UUID]) -> RouteKey:
-    """Лексикографический критерий качества маршрута: заявки → приоритет → -дорога → -финиш."""
+def route_key(ctx: AlgorithmContext, route: Sequence[uuid.UUID]) -> RouteKey:
+    """Лексикографический критерий качества маршрута: приоритет → заявки → -дорога → -финиш.
+
+    Приоритет — первый критерий, не тай-брейк после числа заявок: маршрут с
+    более важными заявками (см. степенную шкалу `engine_priority`) всегда
+    предпочтительнее маршрута с большим числом менее важных, даже если
+    последний закрывает больше заявок. Число заявок — второй критерий,
+    решает только между маршрутами с одинаковой суммой приоритета.
+    """
     result = evaluate_route(ctx, route)
     if not result.valid:
-        return _INVALID_KEY
-    return (result.count, result.priority, -result.travel, -result.finish)
+        return (-1, -1, -(10**9), -(10**9))
+    return (result.priority, result.count, -result.travel, -result.finish)
 
 
-def best_route(ctx: _Context, routes: Sequence[Sequence[uuid.UUID]]) -> list[uuid.UUID]:
+def best_route(ctx: AlgorithmContext, routes: Sequence[Sequence[uuid.UUID]]) -> list[uuid.UUID]:
     """Выбирает лучший маршрут из набора кандидатов по `route_key`."""
     best = routes[0]
     best_key = route_key(ctx, best)

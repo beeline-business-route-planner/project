@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from src.core.algorithm.dto import Route, Stop
-from src.core.algorithm.shared.context import _Context
+from src.core.algorithm.shared.context import AlgorithmContext
 
 
 @dataclass(frozen=True)
@@ -37,11 +37,11 @@ class EvaluationResult:
     occupied: int
 
 
-def _format_minute(minute: int) -> str:
+def format_minute(minute: int) -> str:
     return f"{minute // 60:02d}:{minute % 60:02d}"
 
 
-def evaluate_route(ctx: _Context, route: Sequence[uuid.UUID]) -> EvaluationResult:
+def evaluate_route(ctx: AlgorithmContext, route: Sequence[uuid.UUID]) -> EvaluationResult:
     """Проходит маршрут от офиса и проверяет нарушения окна заявки/конца смены.
 
     Дословный перенос `evaluate_route` — заявка не может начаться раньше
@@ -68,10 +68,10 @@ def evaluate_route(ctx: _Context, route: Sequence[uuid.UUID]) -> EvaluationResul
         finish = start + job.service
         if start > job.window_end:
             violations.append(
-                f"late_start:{request_id}:{_format_minute(start)}>{_format_minute(job.window_end)}"
+                f"late_start:{request_id}:{format_minute(start)}>{format_minute(job.window_end)}"
             )
         if finish > ctx.shift_end:
-            violations.append(f"after_shift:{request_id}:{_format_minute(finish)}")
+            violations.append(f"after_shift:{request_id}:{format_minute(finish)}")
         stops.append(_EvaluatedStop(request_id, travel, arrival, start, finish))
         total_travel += travel
         total_service += job.service
@@ -92,7 +92,7 @@ def evaluate_route(ctx: _Context, route: Sequence[uuid.UUID]) -> EvaluationResul
     )
 
 
-def independent_audit(ctx: _Context, route: Sequence[uuid.UUID]) -> tuple[str, ...]:
+def independent_audit(ctx: AlgorithmContext, route: Sequence[uuid.UUID]) -> tuple[str, ...]:
     """Независимая проверка маршрута — пересчитывает результат другим кодом, не `evaluate_route`.
 
     Не вызывается самими стратегиями — заготовка для последующей проверки
@@ -117,11 +117,11 @@ def independent_audit(ctx: _Context, route: Sequence[uuid.UUID]) -> tuple[str, .
         finish = start + job.service
         if start < job.window_start or start > job.window_end:
             errors.append(
-                f"{request_id}: start {_format_minute(start)} outside "
-                f"{_format_minute(job.window_start)}-{_format_minute(job.window_end)}"
+                f"{request_id}: start {format_minute(start)} outside "
+                f"{format_minute(job.window_start)}-{format_minute(job.window_end)}"
             )
         if finish > ctx.shift_end:
-            errors.append(f"{request_id}: finish {_format_minute(finish)} after shift")
+            errors.append(f"{request_id}: finish {format_minute(finish)} after shift")
         if start < clock + drive:
             errors.append(f"{request_id}: impossible travel")
         clock = finish
@@ -129,7 +129,9 @@ def independent_audit(ctx: _Context, route: Sequence[uuid.UUID]) -> tuple[str, .
     return tuple(errors)
 
 
-def materialize_route(engineer_id: uuid.UUID, ctx: _Context, route: Sequence[uuid.UUID]) -> Route:
+def materialize_route(
+    engineer_id: uuid.UUID, ctx: AlgorithmContext, route: Sequence[uuid.UUID]
+) -> Route:
     """Строит публичный `Route` (реальные `datetime`/`Decimal`) из маршрута в минутах.
 
     Второй проход по тем же правилам, что и `evaluate_route`, но с реальными

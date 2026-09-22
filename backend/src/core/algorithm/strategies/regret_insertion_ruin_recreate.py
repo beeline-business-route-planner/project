@@ -2,14 +2,13 @@ import time
 import uuid
 from typing import ClassVar
 
+from src.config import cfg
 from src.core.algorithm.contracts import PlanningAlgorithm
 from src.core.algorithm.dto import EngineerPlanningContext, Route
 from src.core.algorithm.shared.comparison import best_route
-from src.core.algorithm.shared.context import _Context, build_context
+from src.core.algorithm.shared.context import AlgorithmContext, build_context
 from src.core.algorithm.shared.evaluate import evaluate_route, materialize_route
 from src.core.algorithm.shared.heuristics import efficient_completion, ruin_recreate
-
-_VARIANT_COUNT = 6
 
 
 class RegretInsertionRuinRecreate(PlanningAlgorithm):
@@ -27,14 +26,17 @@ class RegretInsertionRuinRecreate(PlanningAlgorithm):
 
     name: ClassVar[str] = "Regret-вставка + Ruin-and-Recreate"
     slug: ClassVar[str] = "regret_insertion_ruin_recreate"
-    DEFAULT_BUDGET_SECONDS: ClassVar[float] = 3.0
+
+    @property
+    def default_budget_seconds(self) -> float:
+        return cfg.algorithm.regret_budget_seconds
 
     def plan_initial(self, context: EngineerPlanningContext, budget_seconds: float) -> Route:
         started = time.perf_counter()
         ctx = build_context(context)
         insertion_deadline = started + budget_seconds * 0.6
         seeds: list[list[uuid.UUID]] = []
-        for variant in range(_VARIANT_COUNT):
+        for variant in range(cfg.algorithm.regret_variant_count):
             if time.perf_counter() >= insertion_deadline:
                 break
             seed_route = self._regret_insertion(ctx, variant, deadline=insertion_deadline)
@@ -46,7 +48,9 @@ class RegretInsertionRuinRecreate(PlanningAlgorithm):
         route = ruin_recreate(ctx, best, remaining, seed=73)
         return materialize_route(context.engineer.id, ctx, route)
 
-    def _regret_insertion(self, ctx: _Context, variant: int, deadline: float) -> list[uuid.UUID]:
+    def _regret_insertion(
+        self, ctx: AlgorithmContext, variant: int, deadline: float
+    ) -> list[uuid.UUID]:
         route: list[uuid.UUID] = []
         remaining = {job.request_id for job in ctx.jobs}
         while True:

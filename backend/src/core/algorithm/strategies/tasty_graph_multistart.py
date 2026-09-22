@@ -2,10 +2,11 @@ import time
 import uuid
 from typing import ClassVar
 
+from src.config import cfg
 from src.core.algorithm.contracts import PlanningAlgorithm
 from src.core.algorithm.dto import EngineerPlanningContext, Route
 from src.core.algorithm.shared.comparison import best_route
-from src.core.algorithm.shared.context import _Context, build_context
+from src.core.algorithm.shared.context import AlgorithmContext, build_context
 from src.core.algorithm.shared.evaluate import evaluate_route, materialize_route
 from src.core.algorithm.shared.heuristics import efficient_completion, ruin_recreate
 
@@ -30,7 +31,10 @@ class TastyGraphMultistart(PlanningAlgorithm):
 
     name: ClassVar[str] = "Мультистартовый «вкусный граф» + Ruin-and-Recreate"
     slug: ClassVar[str] = "tasty_graph_multistart"
-    DEFAULT_BUDGET_SECONDS: ClassVar[float] = 3.0
+
+    @property
+    def default_budget_seconds(self) -> float:
+        return cfg.algorithm.tasty_graph_budget_seconds
 
     def plan_initial(self, context: EngineerPlanningContext, budget_seconds: float) -> Route:
         started = time.perf_counter()
@@ -45,7 +49,7 @@ class TastyGraphMultistart(PlanningAlgorithm):
         return materialize_route(context.engineer.id, ctx, route)
 
     def _append_variant(
-        self, ctx: _Context, weights: tuple[float, float, float, float]
+        self, ctx: AlgorithmContext, weights: tuple[float, float, float, float]
     ) -> list[uuid.UUID]:
         travel_w, wait_w, service_w, priority_w = weights
         route: list[uuid.UUID] = []

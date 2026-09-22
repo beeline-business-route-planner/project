@@ -18,7 +18,11 @@ class PlanningAlgorithm(ABC):
 
     name: ClassVar[str]
     slug: ClassVar[str]
-    DEFAULT_BUDGET_SECONDS: ClassVar[float]
+
+    @property
+    @abstractmethod
+    def default_budget_seconds(self) -> float:
+        """Возвращает бюджет стратегии из единого `cfg`."""
 
     @abstractmethod
     def plan_initial(self, context: EngineerPlanningContext, budget_seconds: float) -> Route:

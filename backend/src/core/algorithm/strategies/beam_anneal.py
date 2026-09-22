@@ -3,14 +3,13 @@ import uuid
 from dataclasses import dataclass
 from typing import ClassVar
 
+from src.config import cfg
 from src.core.algorithm.contracts import PlanningAlgorithm
 from src.core.algorithm.dto import EngineerPlanningContext, Route
 from src.core.algorithm.shared.comparison import route_key
-from src.core.algorithm.shared.context import _Context, build_context
+from src.core.algorithm.shared.context import AlgorithmContext, build_context
 from src.core.algorithm.shared.evaluate import materialize_route
 from src.core.algorithm.shared.heuristics import ruin_recreate
-
-_BEAM_WIDTH = 500
 
 
 @dataclass(frozen=True)
@@ -27,7 +26,7 @@ class BeamAnneal(PlanningAlgorithm):
     """6. Приоритетный лучевой поиск (Earliest-Finish-Time-First Beam Search).
 
     Дословный перенос `my_own_beam_anneal/algorithm.py` из тестового кода.
-    Вместо одного жадного пути параллельно ведётся до `_BEAM_WIDTH` частичных
+    Вместо одного жадного пути параллельно ведётся ограниченное число частичных
     маршрутов; на каждом шаге кандидаты-продолжения ранжируются по (время
     финиша последней заявки, сумма приоритета, дорога) — раньше
     освобождаешься — больше остаётся слота под будущие заявки, при равном
@@ -38,7 +37,10 @@ class BeamAnneal(PlanningAlgorithm):
 
     name: ClassVar[str] = "Приоритетный лучевой поиск (Claude, Earliest-Finish-Time beam)"
     slug: ClassVar[str] = "beam_anneal"
-    DEFAULT_BUDGET_SECONDS: ClassVar[float] = 3.0
+
+    @property
+    def default_budget_seconds(self) -> float:
+        return cfg.algorithm.beam_budget_seconds
 
     def plan_initial(self, context: EngineerPlanningContext, budget_seconds: float) -> Route:
         ctx = build_context(context)
@@ -52,7 +54,7 @@ class BeamAnneal(PlanningAlgorithm):
                 route = polished
         return materialize_route(context.engineer.id, ctx, route)
 
-    def _beam_search(self, ctx: _Context, deadline: float) -> list[uuid.UUID]:
+    def _beam_search(self, ctx: AlgorithmContext, deadline: float) -> list[uuid.UUID]:
         beams = [_BeamNode(0, ctx.office_id, ctx.shift_start, 0, 0, ())]
         best_final = beams[0]
 
@@ -101,7 +103,7 @@ class BeamAnneal(PlanningAlgorithm):
                 return (node.finish, -node.priority, node.travel)
 
             ranked = sorted(candidates.values(), key=rank)
-            beams = ranked[:_BEAM_WIDTH]
+            beams = ranked[: cfg.algorithm.beam_width]
 
         for node in beams:
             if node.path and (
@@ -113,7 +115,7 @@ class BeamAnneal(PlanningAlgorithm):
         return list(best_final.path)
 
     def _adjacent_swap_polish(
-        self, ctx: _Context, route: list[uuid.UUID], deadline: float
+        self, ctx: AlgorithmContext, route: list[uuid.UUID], deadline: float
     ) -> list[uuid.UUID]:
         route = list(route)
         improved = True

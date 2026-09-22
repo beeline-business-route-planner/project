@@ -2,14 +2,15 @@ import random
 import time
 import uuid
 
+from src.config import cfg
 from src.core.algorithm.shared.comparison import best_route, route_key
-from src.core.algorithm.shared.context import _Context
+from src.core.algorithm.shared.context import AlgorithmContext
 from src.core.algorithm.shared.evaluate import evaluate_route
 
-_EFFICIENT_COMPLETION_MODES = range(3)
 
-
-def efficient_completion(ctx: _Context, route: list[uuid.UUID], mode: int = 0) -> list[uuid.UUID]:
+def efficient_completion(
+    ctx: AlgorithmContext, route: list[uuid.UUID], mode: int = 0
+) -> list[uuid.UUID]:
     """Добавляет оставшиеся заявки по цене дефицитного времени, а не только по приоритету."""
     route = list(route)
     while True:
@@ -38,7 +39,9 @@ def efficient_completion(ctx: _Context, route: list[uuid.UUID], mode: int = 0) -
         route = min(candidates)[-1]
 
 
-def relocate_descent(ctx: _Context, route: list[uuid.UUID], deadline: float) -> list[uuid.UUID]:
+def relocate_descent(
+    ctx: AlgorithmContext, route: list[uuid.UUID], deadline: float
+) -> list[uuid.UUID]:
     """Переставляет уже выбранные заявки местами в маршруте, сокращая путь без потери качества."""
     route = list(route)
     while time.perf_counter() < deadline:
@@ -62,7 +65,7 @@ def relocate_descent(ctx: _Context, route: list[uuid.UUID], deadline: float) -> 
 
 
 def ruin_recreate(
-    ctx: _Context, route: list[uuid.UUID], seconds: float, seed: int = 42
+    ctx: AlgorithmContext, route: list[uuid.UUID], seconds: float, seed: int = 42
 ) -> list[uuid.UUID]:
     """Детерминированный локальный поиск: удаление 1-3 заявок и повторная вставка."""
     rng = random.Random(seed)
@@ -82,7 +85,8 @@ def ruin_recreate(
             positions = rng.sample(range(len(best)), remove_count)
         ruined = [item for i, item in enumerate(best) if i not in set(positions)]
         candidates = [
-            efficient_completion(ctx, ruined, mode) for mode in _EFFICIENT_COMPLETION_MODES
+            efficient_completion(ctx, ruined, mode)
+            for mode in range(cfg.algorithm.efficient_completion_mode_count)
         ]
         candidate = best_route(ctx, candidates)
         if route_key(ctx, candidate) > route_key(ctx, best):

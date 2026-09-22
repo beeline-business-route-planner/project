@@ -2,11 +2,11 @@ import uuid
 
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
-from src.core.algorithm.shared.context import _Context
+from src.core.algorithm.shared.context import AlgorithmContext
 
 
 def tuned_ortools_route(
-    ctx: _Context,
+    ctx: AlgorithmContext,
     seconds: float,
     first_solution_strategy: int,
     initial_route: list[uuid.UUID] | None = None,

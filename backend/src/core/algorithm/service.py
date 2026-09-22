@@ -4,16 +4,13 @@ from decimal import Decimal
 from src.core.algorithm.distribution import DistributionPlanner
 from src.core.algorithm.dto import AlgorithmPlanResult, EngineerContext, Job
 from src.core.algorithm.enums import DistributionMode
+from src.core.algorithm.exc import MissingCoordinatesError
 from src.core.algorithm.strategies import LayeredExactStateGraph
 from src.core.db.dto import PlanCreateDTO, PlanStopCreateDTO, PlanUnassignedRequestCreateDTO
 from src.core.db.enums import PlanKind, Region
 from src.core.db.models import Engineer, Request
 from src.core.db.uow import UnitOfWork
 from src.core.routing import RoutingPoint, RoutingService
-
-
-class MissingCoordinatesError(Exception):
-    pass
 
 
 class AlgorithmService:
@@ -81,6 +78,8 @@ class AlgorithmService:
                     request_id=stop.request_id,
                     sequence_number=stop.sequence_number,
                     planned_arrival=stop.arrival,
+                    planned_start=stop.start,
+                    planned_finish=stop.finish,
                     travel_minutes=stop.travel_minutes,
                     distance_km=stop.distance_km,
                     is_locked=False,

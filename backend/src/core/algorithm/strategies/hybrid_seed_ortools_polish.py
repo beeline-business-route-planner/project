@@ -3,6 +3,7 @@ from typing import ClassVar
 
 from ortools.constraint_solver import routing_enums_pb2
 
+from src.config import cfg
 from src.core.algorithm.contracts import PlanningAlgorithm
 from src.core.algorithm.dto import EngineerPlanningContext, Route
 from src.core.algorithm.shared.comparison import best_route
@@ -15,9 +16,6 @@ from src.core.algorithm.strategies.regret_insertion_ruin_recreate import (
     RegretInsertionRuinRecreate,
 )
 from src.core.algorithm.strategies.tasty_graph_multistart import TastyGraphMultistart
-
-_SEED_BUDGET_SECONDS = 2.0
-_ORTOOLS_SEED_BUDGET_SECONDS = 3.0
 
 
 class HybridSeedOrtoolsPolish(PlanningAlgorithm):
@@ -41,15 +39,24 @@ class HybridSeedOrtoolsPolish(PlanningAlgorithm):
 
     name: ClassVar[str] = "Гибрид: посев (4 алгоритма) + OR-Tools GLS-полировка"
     slug: ClassVar[str] = "hybrid_seed_ortools_polish"
-    DEFAULT_BUDGET_SECONDS: ClassVar[float] = 2.0
+
+    @property
+    def default_budget_seconds(self) -> float:
+        return cfg.algorithm.hybrid_budget_seconds
 
     def plan_initial(self, context: EngineerPlanningContext, budget_seconds: float) -> Route:
         ctx = build_context(context)
         seed_routes = (
-            TastyGraphMultistart().plan_initial(context, _SEED_BUDGET_SECONDS),
-            RegretInsertionRuinRecreate().plan_initial(context, _SEED_BUDGET_SECONDS),
-            LayeredExactStateGraph().plan_initial(context, _SEED_BUDGET_SECONDS),
-            OrtoolsMultistartGls().plan_initial(context, _ORTOOLS_SEED_BUDGET_SECONDS),
+            TastyGraphMultistart().plan_initial(context, cfg.algorithm.hybrid_seed_budget_seconds),
+            RegretInsertionRuinRecreate().plan_initial(
+                context, cfg.algorithm.hybrid_seed_budget_seconds
+            ),
+            LayeredExactStateGraph().plan_initial(
+                context, cfg.algorithm.hybrid_seed_budget_seconds
+            ),
+            OrtoolsMultistartGls().plan_initial(
+                context, cfg.algorithm.hybrid_ortools_seed_budget_seconds
+            ),
         )
         seeds: list[list[uuid.UUID]] = [
             [stop.request_id for stop in route.stops] for route in seed_routes

@@ -12,7 +12,8 @@ from src.core.algorithm.dto import (
     UnassignedJob,
 )
 from src.core.algorithm.enums import DistributionMode
-from src.core.algorithm.service import AlgorithmService, MissingCoordinatesError
+from src.core.algorithm.exc import MissingCoordinatesError
+from src.core.algorithm.service import AlgorithmService
 
 __all__ = [
     "AlgorithmPlanResult",

@@ -2,9 +2,10 @@ import uuid
 from dataclasses import dataclass
 from typing import ClassVar
 
+from src.config import cfg
 from src.core.algorithm.contracts import PlanningAlgorithm
 from src.core.algorithm.dto import EngineerPlanningContext, Route
-from src.core.algorithm.shared.context import _Context, build_context
+from src.core.algorithm.shared.context import AlgorithmContext, build_context
 from src.core.algorithm.shared.evaluate import materialize_route
 
 
@@ -38,7 +39,10 @@ class LayeredExactStateGraph(PlanningAlgorithm):
 
     name: ClassVar[str] = "Послойный точный граф состояний"
     slug: ClassVar[str] = "layered_exact_state_graph"
-    DEFAULT_BUDGET_SECONDS: ClassVar[float] = 3.0
+
+    @property
+    def default_budget_seconds(self) -> float:
+        return cfg.algorithm.layered_graph_budget_seconds
 
     def plan_initial(self, context: EngineerPlanningContext, budget_seconds: float) -> Route:
         # Бюджет не расходуется — точный алгоритм, не итеративный поиск
@@ -48,7 +52,7 @@ class LayeredExactStateGraph(PlanningAlgorithm):
         route = self._bounded_state_graph(ctx)
         return materialize_route(context.engineer.id, ctx, route)
 
-    def _bounded_state_graph(self, ctx: _Context) -> list[uuid.UUID]:
+    def _bounded_state_graph(self, ctx: AlgorithmContext) -> list[uuid.UUID]:
         def add_pareto(labels: list[_BeamState], candidate: _BeamState) -> None:
             if any(
                 state.finish <= candidate.finish and state.travel <= candidate.travel
@@ -145,8 +149,12 @@ class LayeredExactStateGraph(PlanningAlgorithm):
                 )
             states = [state for group in by_last.values() for state in group]
 
+        # Приоритет — первый критерий, не тай-брейк после числа заявок (см.
+        # `engine_priority`/`shared/comparison.py::route_key`): маршрут с
+        # заявкой-аварией всегда предпочтительнее маршрута с большим числом
+        # менее важных заявок вместо неё.
         best = max(
             states,
-            key=lambda state: (len(state.path), state.priority, -state.travel, -state.finish),
+            key=lambda state: (state.priority, len(state.path), -state.travel, -state.finish),
         )
         return list(best.path)

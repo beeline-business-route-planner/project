@@ -51,7 +51,7 @@ class DistributionPlanner:
             mode: `MIN_ENGINEERS` — сначала самые загруженные пулом
                 инженеры, `BALANCED` — сначала наименее загруженные.
             budget_seconds: сколько секунд стратегия тратит на маршрут
-                одного инженера; по умолчанию — `strategy.DEFAULT_BUDGET_SECONDS`.
+                одного инженера; по умолчанию — значение стратегии из `cfg`.
 
         Returns:
             Маршруты по каждому задействованному инженеру и причины отказа
@@ -59,7 +59,9 @@ class DistributionPlanner:
         """
         pools = self._build_pools(engineers, jobs)
         ordered_engineers = self._order_engineers(engineers, pools, mode)
-        effective_budget = budget_seconds or self._strategy.DEFAULT_BUDGET_SECONDS
+        effective_budget = (
+            budget_seconds if budget_seconds is not None else self._strategy.default_budget_seconds
+        )
 
         remaining_job_ids = {job.id for job in jobs}
         routes: list[Route] = []
