@@ -1,7 +1,5 @@
 import enum
 
-import sqlalchemy as sa
-
 
 class Skill(enum.StrEnum):
     """Требуемый навык заявки / навык инженера (см. TECHNICAL_CONSTRAINTS.md, §2)."""
@@ -88,11 +86,19 @@ class RequestStatus(enum.StrEnum):
     OVERDUE = "overdue"
 
 
+class ApprovalStatus(enum.StrEnum):
+    """Статус решения диспетчера по кандидату плана или событию."""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
 class PlanKind(enum.StrEnum):
     """Тип плана — что его породило (см. три кейса планирования в SUMMARY.md)."""
 
     INITIAL = "initial"
-    MANUAL_REPLAN = "manual_replan"
+    REPLAN = "replan"
     EVENT_REPLAN = "event_replan"
 
 
@@ -105,6 +111,7 @@ class ReplanningEventType(enum.StrEnum):
     URGENT_REQUEST = "urgent_request"
     REQUEST_CANCELLED = "request_cancelled"
     ENGINEER_UNAVAILABLE = "engineer_unavailable"
+    ENGINEER_AVAILABLE = "engineer_available"
 
 
 class UnassignedReason(enum.StrEnum):
@@ -131,17 +138,3 @@ class Region(enum.StrEnum):
     VOSTOK = "vostok"
     YUGO_VOSTOK = "yugo_vostok"
     YUGOTSENTR = "yugotsentr"
-
-
-# Общие postgres ENUM-типы: заводятся один раз здесь и переиспользуются в моделях,
-# чтобы Alembic не пытался создать один и тот же тип дважды под разными объектами.
-skill_enum = sa.Enum(Skill, name="skill")
-vehicle_type_enum = sa.Enum(VehicleType, name="vehicle_type")
-request_type_bk_enum = sa.Enum(RequestTypeBk, name="request_type_bk")
-request_type_hd_enum = sa.Enum(RequestTypeHd, name="request_type_hd")
-connection_type_enum = sa.Enum(ConnectionType, name="connection_type")
-request_status_enum = sa.Enum(RequestStatus, name="request_status")
-region_enum = sa.Enum(Region, name="region")
-plan_kind_enum = sa.Enum(PlanKind, name="plan_kind")
-replanning_event_type_enum = sa.Enum(ReplanningEventType, name="replanning_event_type")
-unassigned_reason_enum = sa.Enum(UnassignedReason, name="unassigned_reason")
