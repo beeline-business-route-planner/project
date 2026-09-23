@@ -1,10 +1,18 @@
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
+from src.api.plans.diff_dto import PlanDiffDTO, PlanMetricsDTO
 from src.api.plans.enums import RequestGroupKey
-from src.core.db.enums import PlanKind, Region, Skill, UnassignedReason, VehicleType
+from src.core.db.enums import (
+    ApprovalStatus,
+    PlanKind,
+    Region,
+    Skill,
+    UnassignedReason,
+    VehicleType,
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +36,7 @@ class RequestTileDTO:
     массиве)."""
 
     request_id: uuid.UUID
+    external_id: int
     address: str
     district: str
     latitude: Decimal | None
@@ -36,9 +45,13 @@ class RequestTileDTO:
     window_end: datetime
     priority: int
     required_skill: Skill
+    planned_arrival: datetime | None
     planned_start: datetime | None
     planned_finish: datetime | None
     sequence_number: int | None
+    travel_minutes: int | None
+    distance_km: Decimal | None
+    is_locked: bool
     assigned_engineer: EngineerCardDTO | None
     unassigned_reason: UnassignedReason | None
 
@@ -69,6 +82,8 @@ class EngineerTileDTO:
     start_longitude: Decimal | None
     assigned_requests_count: int
     route_distance_km: Decimal
+    workload_without_travel: Decimal
+    workload_with_travel: Decimal
     stops: tuple[RequestTileDTO, ...]
 
 
@@ -78,15 +93,23 @@ class PlanDetailDTO:
 
     id: uuid.UUID
     region: Region
+    planning_date: date
     kind: PlanKind
-    is_baseline: bool
+    approval_status: ApprovalStatus
     created_at: datetime
+    approved_at: datetime | None
+    rejected_at: datetime | None
+    approval_deadline: datetime | None
+    is_current: bool
+    can_approve: bool
+    can_reject: bool
+    calculation_cutoff_at: datetime
     based_on_plan_id: uuid.UUID | None
     triggered_by_event_id: uuid.UUID | None
-    total_mileage_km: Decimal
-    engineers_used_count: int
+    metrics: PlanMetricsDTO
     request_groups: tuple[RequestGroupDTO, ...]
     engineers: tuple[EngineerTileDTO, ...]
+    diff: PlanDiffDTO | None
 
 
 @dataclass(frozen=True)
@@ -94,8 +117,18 @@ class PlanSummaryDTO:
     """Один элемент списка `GET /api/plans` — шапка плана без содержимого."""
 
     id: uuid.UUID
+    region: Region
+    planning_date: date
     kind: PlanKind
-    is_baseline: bool
+    approval_status: ApprovalStatus
     created_at: datetime
+    approved_at: datetime | None
+    rejected_at: datetime | None
+    approval_deadline: datetime | None
+    based_on_plan_id: uuid.UUID | None
+    triggered_by_event_id: uuid.UUID | None
+    is_current: bool
+    assigned_requests_count: int
+    unassigned_requests_count: int
     engineers_used_count: int
     total_mileage_km: Decimal
