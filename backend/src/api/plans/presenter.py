@@ -50,7 +50,7 @@ class PlanPresenter:
             id=plan.id,
             region=plan.region,
             kind=plan.kind,
-            is_baseline=plan.is_baseline,
+            is_baseline=False,
             created_at=plan.created_at,
             based_on_plan_id=plan.based_on_plan_id,
             triggered_by_event_id=plan.triggered_by_event_id,
