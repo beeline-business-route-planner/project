@@ -28,6 +28,16 @@ class EngineerRepository(BaseRepository[Engineer]):
         )
         return list(result.all())
 
+    async def get_by_ids(self, engineer_ids: set[uuid.UUID]) -> list[Engineer]:
+        if not engineer_ids:
+            return []
+        result = await self._session.scalars(
+            select(Engineer)
+            .where(Engineer.id.in_(engineer_ids))
+            .options(selectinload(Engineer.skills))
+        )
+        return list(result.all())
+
     def add_many(self, engineers: list[EngineerCreateDTO]) -> None:
         for engineer in engineers:
             model = Engineer()
