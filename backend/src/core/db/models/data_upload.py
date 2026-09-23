@@ -5,8 +5,9 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.core.db.enums import Region, region_enum
+from src.core.db.enums import Region
 from src.core.db.models.base import Base
+from src.core.db.types import region_enum
 
 
 class DataUpload(Base):
