@@ -5,8 +5,9 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.core.db.enums import UnassignedReason, unassigned_reason_enum
+from src.core.db.enums import UnassignedReason
 from src.core.db.models.base import Base
+from src.core.db.types import unassigned_reason_enum
 
 
 class PlanUnassignedRequest(Base):
