@@ -1,4 +1,6 @@
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from src.api.exc.plans import PlanNotFoundError
 from src.api.plans.dto import (
@@ -24,7 +26,8 @@ class PlanService:
         self._uow = uow
 
     async def get_current(self, region: Region) -> PlanDetailDTO:
-        plan = await self._uow.plans.get_current(region)
+        planning_date = datetime.now(ZoneInfo("Europe/Moscow")).date()
+        plan = await self._uow.plans.get_current(region, planning_date)
         if plan is None:
             raise PlanNotFoundError
         return await self._build_detail(plan)
@@ -41,7 +44,7 @@ class PlanService:
             PlanSummaryDTO(
                 id=plan.id,
                 kind=plan.kind,
-                is_baseline=plan.is_baseline,
+                is_baseline=False,
                 created_at=plan.created_at,
                 engineers_used_count=plan.engineers_used_count,
                 total_mileage_km=plan.total_mileage_km,
