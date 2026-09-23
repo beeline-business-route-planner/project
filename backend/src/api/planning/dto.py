@@ -1,8 +1,15 @@
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 
-from src.core.db.enums import ConnectionType, Region, RequestTypeBk, RequestTypeHd, Skill
+from src.core.db.enums import (
+    ConnectionType,
+    Region,
+    RequestTypeBk,
+    RequestTypeHd,
+    Skill,
+    VehicleType,
+)
 
 
 @dataclass(frozen=True)
@@ -47,7 +54,11 @@ class ParsedRequest:
 @dataclass(frozen=True)
 class ParsedEngineer:
     name: str
+    start_point_address: str
+    shift_start: time
+    shift_end: time
     skills: tuple[Skill, ...]
+    vehicle_type: VehicleType
 
 
 @dataclass(frozen=True)

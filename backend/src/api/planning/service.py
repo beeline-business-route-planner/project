@@ -27,7 +27,7 @@ from src.api.planning.parser import PlanningWorkbookParser
 from src.config import cfg
 from src.core.algorithm import AlgorithmService, DistributionMode, MissingCoordinatesError
 from src.core.db.dto import EngineerCreateDTO, RequestCreateDTO, UploadedFileCreateDTO
-from src.core.db.enums import Region, VehicleType
+from src.core.db.enums import Region
 from src.core.db.uow import UnitOfWork
 from src.core.geocoding import (
     AddressNotFoundError,
@@ -139,6 +139,7 @@ class PlanningService:
             raise PlanningFileValidationError
         addresses = [requests_workbook.office_address]
         addresses.extend(request.address for request in requests_workbook.requests)
+        addresses.extend(engineer.start_point_address for engineer in engineers_workbook.engineers)
         coordinates = {}
         for address in dict.fromkeys(addresses):
             try:
@@ -182,12 +183,9 @@ class PlanningService:
                 )
             )
 
-        office_address = requests_workbook.office_address
-        if office_address is None:
+        if requests_workbook.office_address is None:
             raise PlanningFileValidationError
-        office_coordinates = coordinates[office_address]
         planning_date = min(request.window_start for request in requests_workbook.requests).date()
-        vehicle_type = VehicleType(cfg.planning.default_vehicle_type)
 
         request_dtos = [
             RequestCreateDTO(
@@ -217,13 +215,13 @@ class PlanningService:
                 upload_id=upload_id,
                 name=engineer.name,
                 region=region,
-                start_point_address=office_address,
-                start_point_latitude=office_coordinates.latitude,
-                start_point_longitude=office_coordinates.longitude,
-                shift_start=datetime.combine(planning_date, cfg.planning.default_shift_start),
-                shift_end=datetime.combine(planning_date, cfg.planning.default_shift_end),
+                start_point_address=engineer.start_point_address,
+                start_point_latitude=coordinates[engineer.start_point_address].latitude,
+                start_point_longitude=coordinates[engineer.start_point_address].longitude,
+                shift_start=datetime.combine(planning_date, engineer.shift_start),
+                shift_end=datetime.combine(planning_date, engineer.shift_end),
                 skills=engineer.skills,
-                vehicle_type=vehicle_type,
+                vehicle_type=engineer.vehicle_type,
             )
             for engineer in engineers_workbook.engineers
         ]

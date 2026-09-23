@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import datetime, time
 from io import BytesIO
 from pathlib import Path
 from zipfile import BadZipFile
@@ -23,7 +24,7 @@ from src.api.planning.utils import (
     work_norm,
 )
 from src.config import cfg
-from src.core.db.enums import ConnectionType, Region, RequestTypeHd, Skill
+from src.core.db.enums import ConnectionType, Region, RequestTypeHd, Skill, VehicleType
 
 
 class PlanningWorkbookParser:
@@ -45,16 +46,18 @@ class PlanningWorkbookParser:
                 for cell in worksheet[2]
             ]
             header_indexes = {header: index for index, header in enumerate(headers) if header}
-            role = "engineers" if "Бригада" in header_indexes else "requests"
-            PlanningWorkbookParser._validate_workbook_kind(title, role)
-            PlanningWorkbookParser._validate_headers(header_indexes, role)
+            role = PlanningWorkbookParser._parse_role(header_indexes)
 
             office_address = None
             requests: list[ParsedRequest] = []
-            engineer_skills: dict[str, set[Skill]] = defaultdict(set)
+            engineers: list[ParsedEngineer] = []
             for row in worksheet.iter_rows(min_row=3, values_only=True):
                 first_value = row[0]
-                if isinstance(first_value, str) and first_value.casefold().startswith("адрес офис"):
+                if (
+                    role == "requests"
+                    and isinstance(first_value, str)
+                    and first_value.casefold().startswith("адрес офис")
+                ):
                     office_address = required_string(row[1])
                     continue
                 if first_value is None:
@@ -62,31 +65,22 @@ class PlanningWorkbookParser:
                 if role == "requests":
                     requests.append(PlanningWorkbookParser._parse_request(row, header_indexes))
                 else:
-                    engineer_name = row[header_indexes["Бригада"]]
-                    if engineer_name is not None:
-                        type_bk = parse_type_bk(row[header_indexes["Тип заявки BK"]])
-                        engineer_skills[required_string(engineer_name)].add(
-                            work_norm(type_bk).required_skill
-                        )
+                    engineers.append(PlanningWorkbookParser._parse_engineer(row, header_indexes))
 
             if role == "requests" and (not requests or office_address is None):
                 raise PlanningFileValidationError
-            if role == "engineers" and not engineer_skills:
+            if role == "engineers" and not engineers:
                 raise PlanningFileValidationError
-
-            engineers = tuple(
-                ParsedEngineer(
-                    name=name, skills=tuple(sorted(skills, key=lambda skill: skill.value))
-                )
-                for name, skills in sorted(engineer_skills.items())
-            )
+            engineer_names = [engineer.name for engineer in engineers]
+            if len(engineer_names) != len(set(engineer_names)):
+                raise PlanningFileValidationError
             return ParsedWorkbook(
                 source=source,
                 region=region,
                 role=role,
                 office_address=office_address,
                 requests=tuple(requests),
-                engineers=engineers,
+                engineers=tuple(engineers),
             )
         except PlanningFileValidationError:
             raise
@@ -136,6 +130,31 @@ class PlanningWorkbookParser:
         )
 
     @staticmethod
+    def _parse_engineer(row: tuple[object, ...], indexes: dict[str, int]) -> ParsedEngineer:
+        shift_start = PlanningWorkbookParser._parse_time(row[indexes["Начало смены"]])
+        shift_end = PlanningWorkbookParser._parse_time(row[indexes["Конец смены"]])
+        if shift_start >= shift_end:
+            raise PlanningFileValidationError
+
+        skill_columns = ("Навык 1", "Навык 2", "Навык 3")
+        skills = tuple(
+            PlanningWorkbookParser._parse_skill(row[indexes[column]])
+            for column in skill_columns
+            if column in indexes and row[indexes[column]] is not None
+        )
+        if not skills or len(skills) != len(set(skills)):
+            raise PlanningFileValidationError
+
+        return ParsedEngineer(
+            name=required_string(row[indexes["Инженер"]]),
+            start_point_address=required_string(row[indexes["Стартовая точка"]]),
+            shift_start=shift_start,
+            shift_end=shift_end,
+            skills=skills,
+            vehicle_type=PlanningWorkbookParser._parse_vehicle_type(row[indexes["Тип транспорта"]]),
+        )
+
+    @staticmethod
     def _parse_region(title: str) -> Region:
         normalized = title.casefold()
         if "юго-восток" in normalized:
@@ -147,32 +166,36 @@ class PlanningWorkbookParser:
         raise PlanningFileValidationError
 
     @staticmethod
-    def _validate_workbook_kind(title: str, role: str) -> None:
-        normalized = title.casefold()
-        expected_marker = (
-            "синтетические данные" if role == "requests" else "контрольное распределение"
-        )
-        if expected_marker not in normalized:
+    def _parse_role(indexes: dict[str, int]) -> str:
+        request_headers = {
+            "Заявка",
+            "Тип заявки BK",
+            "Тип заявки HD",
+            "Начало",
+            "Окончание",
+            "Район",
+            "Адрес",
+            "Гигабитное подключение",
+        }
+        engineer_headers = {
+            "Инженер",
+            "Стартовая точка",
+            "Начало смены",
+            "Конец смены",
+            "Навык 1",
+            "Тип транспорта",
+        }
+        matches = [
+            role
+            for role, required_headers in (
+                ("requests", request_headers),
+                ("engineers", engineer_headers),
+            )
+            if required_headers.issubset(indexes)
+        ]
+        if len(matches) != 1:
             raise PlanningFileValidationError
-
-    @staticmethod
-    def _validate_headers(indexes: dict[str, int], role: str) -> None:
-        common = {"Заявка", "Тип заявки BK"}
-        required = (
-            common
-            | {
-                "Тип заявки HD",
-                "Начало",
-                "Окончание",
-                "Район",
-                "Адрес",
-                "Гигабитное подключение",
-            }
-            if role == "requests"
-            else common | {"Бригада"}
-        )
-        if not required.issubset(indexes):
-            raise PlanningFileValidationError
+        return matches[0]
 
     @staticmethod
     def _parse_type_hd(value: object) -> RequestTypeHd:
@@ -209,6 +232,42 @@ class PlanningWorkbookParser:
             return None
         try:
             return ConnectionType(required_string(value).casefold())
+        except ValueError as exc:
+            raise PlanningFileValidationError from exc
+
+    @staticmethod
+    def _parse_skill(value: object) -> Skill:
+        mapping = {
+            "Локальные работы": Skill.LOCAL_WORKS,
+            "Работы на подключение и дозаказы": Skill.CONNECTION_AND_ORDERS,
+            "Аварийные работы": Skill.EMERGENCY_WORKS,
+        }
+        try:
+            return mapping[required_string(value)]
+        except KeyError as exc:
+            raise PlanningFileValidationError from exc
+
+    @staticmethod
+    def _parse_vehicle_type(value: object) -> VehicleType:
+        mapping = {
+            "Автомобиль": VehicleType.CAR,
+            "Пешеход": VehicleType.PEDESTRIAN,
+            "Велосипед": VehicleType.BICYCLE,
+            "Общественный транспорт": VehicleType.PUBLIC_TRANSPORT,
+        }
+        try:
+            return mapping[required_string(value)]
+        except KeyError as exc:
+            raise PlanningFileValidationError from exc
+
+    @staticmethod
+    def _parse_time(value: object) -> time:
+        if isinstance(value, datetime):
+            return value.time()
+        if isinstance(value, time):
+            return value
+        try:
+            return time.fromisoformat(required_string(value))
         except ValueError as exc:
             raise PlanningFileValidationError from exc
 
