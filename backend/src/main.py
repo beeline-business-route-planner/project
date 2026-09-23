@@ -9,8 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 
-from src.api import router
 from src.api.exc.base import register_all
+from src.api.router import router
 from src.config import cfg
 from src.core.di import (
     AlgorithmProvider,
