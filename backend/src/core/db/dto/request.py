@@ -7,6 +7,7 @@ from src.core.db.dto.base import BaseDTO
 from src.core.db.enums import (
     ConnectionType,
     Region,
+    RequestStatus,
     RequestTypeBk,
     RequestTypeHd,
     Skill,
@@ -37,4 +38,5 @@ class RequestDTO(BaseDTO):
     priority: int
     required_skill: Skill
     required_vehicle_type: VehicleType | None
+    status: RequestStatus
     created_at: datetime
