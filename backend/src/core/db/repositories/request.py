@@ -14,13 +14,11 @@ class RequestRepository(BaseRepository[Request]):
         result = await self._session.scalars(select(Request).where(Request.upload_id == upload_id))
         return list(result.all())
 
-    async def get_existing_external_ids(self, external_ids: set[int]) -> set[int]:
-        if not external_ids:
-            return set()
-        result = await self._session.scalars(
-            select(Request.external_id).where(Request.external_id.in_(external_ids))
-        )
-        return set(result.all())
+    async def get_by_ids(self, request_ids: set[uuid.UUID]) -> list[Request]:
+        if not request_ids:
+            return []
+        result = await self._session.scalars(select(Request).where(Request.id.in_(request_ids)))
+        return list(result.all())
 
     def add_many(self, requests: list[RequestCreateDTO]) -> None:
         for request in requests:
