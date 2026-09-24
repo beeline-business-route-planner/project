@@ -43,6 +43,7 @@ export function Planning({ planner }: { planner: PlannerController }) {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
+  const [manualRequestId, setManualRequestId] = useState<string | undefined>();
   const [eventOpen, setEventOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const selectedPlan = data.plans.find((plan) => plan.id === selectedPlanId) ?? data.plans[0];
@@ -69,6 +70,11 @@ export function Planning({ planner }: { planner: PlannerController }) {
       setSelectedPlanId(planId);
       setView(replan ? "changes" : "schedule");
     } finally { setBusy(false); }
+  };
+
+  const openManual = (requestId?: string) => {
+    setManualRequestId(requestId);
+    setManualOpen(true);
   };
 
   return (
@@ -110,7 +116,7 @@ export function Planning({ planner }: { planner: PlannerController }) {
                 <p>{selectedPlan?.input_version ?? "Данные ещё не загружены"} · расчёт 2,8 с · OSRM</p>
               </div>
               <div className="plan-actions">
-                <button className="button ghost" onClick={() => setManualOpen(true)}><PencilLine size={16} /> Изменить вручную</button>
+                <button className="button ghost" onClick={() => openManual()}><PencilLine size={16} /> Изменить вручную</button>
                 <button className="button ghost" onClick={() => void calculate(true)}><RotateCcw size={16} /> Пересчитать</button>
                 {isDraft ? <button className="button primary" onClick={() => void planner.approvePlan(selectedPlan)}><Check size={16} /> Утвердить план</button> : null}
               </div>
@@ -128,22 +134,22 @@ export function Planning({ planner }: { planner: PlannerController }) {
               <div className="view-tabs"><button className={view === "schedule" ? "active" : ""} onClick={() => setView("schedule")}><Route size={15} /> Новый маршрут</button><button className={view === "changes" ? "active" : ""} onClick={() => setView("changes")}><GitCompareArrows size={15} /> Изменения <em>{data.diff.length}</em></button></div>
             ) : null}
 
-            {view === "changes" && isDraft ? <PlanDiff planner={planner} /> : <Schedule planner={planner} />}
+            {view === "changes" && isDraft ? <PlanDiff planner={planner} /> : <Schedule planner={planner} onEditRequest={openManual} />}
 
             {unassigned.length ? (
-              <div className="unassigned-section"><div className="unassigned-title"><span><UserRoundX size={17} /></span><div><strong>Не назначены</strong><small>Причина видна для каждой заявки</small></div><em>{unassigned.length}</em></div>{unassigned.map((request) => <div className="unassigned-row" key={request.id}><span className={`priority-badge priority-${request.priority_rank}`}>{request.priority_rank}</span><div><strong>{request.external_id} · {request.bk_type}</strong><span>{request.address}</span></div><p><AlertTriangle size={14} />{request.unassigned_reason}</p><button className="button ghost small" onClick={() => setManualOpen(true)}>Назначить</button></div>)}</div>
+              <div className="unassigned-section"><div className="unassigned-title"><span><UserRoundX size={17} /></span><div><strong>Не назначены</strong><small>Причина видна для каждой заявки</small></div><em>{unassigned.length}</em></div>{unassigned.map((request) => <div className="unassigned-row" key={request.id}><span className={`priority-badge priority-${request.priority_rank}`}>{request.priority_rank}</span><div><strong>{request.external_id} · {request.bk_type}</strong><span>{request.address}</span></div><p><AlertTriangle size={14} />{request.unassigned_reason}</p><button className="button ghost small" onClick={() => openManual(request.id)}>Назначить</button></div>)}</div>
             ) : null}
           </section>
         </div>
       </div>
 
-      {manualOpen ? <ManualChangeModal planner={planner} onClose={() => setManualOpen(false)} /> : null}
+      {manualOpen ? <ManualChangeModal planner={planner} initialRequestId={manualRequestId} onClose={() => setManualOpen(false)} /> : null}
       {eventOpen ? <DayEventModal planner={planner} onClose={() => setEventOpen(false)} /> : null}
     </div>
   );
 }
 
-function Schedule({ planner }: { planner: PlannerController }) {
+function Schedule({ planner, onEditRequest }: { planner: PlannerController; onEditRequest: (requestId: string) => void }) {
   const { data } = planner;
   return (
     <div className="schedule-board">
@@ -159,7 +165,7 @@ function Schedule({ planner }: { planner: PlannerController }) {
                 const start = new Date(request.window_start).getHours() + new Date(request.window_start).getMinutes() / 60;
                 const left = Math.max(0, (start - 8) / 10 * 100);
                 const width = Math.max(8, request.full_normative_minutes / 600 * 100);
-                return <button key={request.id} className={`timeline-job priority-${request.priority_rank}`} style={{ left: `${left}%`, width: `${width}%`, borderColor: engineer.color }} title={`${request.external_id}: ${request.address}`}><strong>{request.external_id.replace("BK-", "")}</strong><span>{formatTime(request.window_start)}</span></button>;
+                return <button key={request.id} className={`timeline-job priority-${request.priority_rank}`} style={{ left: `${left}%`, width: `${width}%`, borderColor: engineer.color }} title={`${request.external_id}: ${request.address}. Нажмите для редактирования.`} onClick={() => onEditRequest(request.id)}><strong>{request.external_id.replace("BK-", "")}</strong><span>{formatTime(request.window_start)}</span></button>;
               })}
             </div>
           </div>
@@ -182,9 +188,9 @@ function PlanDiff({ planner }: { planner: PlannerController }) {
   );
 }
 
-function ManualChangeModal({ planner, onClose }: { planner: PlannerController; onClose: () => void }) {
+function ManualChangeModal({ planner, initialRequestId, onClose }: { planner: PlannerController; initialRequestId?: string; onClose: () => void }) {
   const candidates = planner.data.requests.filter((request) => request.status !== "COMPLETED" && request.status !== "CANCELLED");
-  const [requestId, setRequestId] = useState(candidates[0]?.id ?? "");
+  const [requestId, setRequestId] = useState(candidates.some((request) => request.id === initialRequestId) ? initialRequestId ?? "" : candidates[0]?.id ?? "");
   const [engineerId, setEngineerId] = useState(planner.data.engineers[0]?.id ?? "");
   const [start, setStart] = useState("15:30");
   const [saving, setSaving] = useState(false);

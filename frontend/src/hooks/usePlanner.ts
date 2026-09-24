@@ -2,153 +2,235 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { backend } from "../api/services";
 import type {
-  ApiAuditItem,
-  ApiPlanDiffItem,
+  BackendEngineerDetail,
+  BackendEngineerTile,
+  BackendPlanDetail,
+  BackendPlanSummary,
+  BackendRegion,
+  BackendRequestDetail,
+  BackendRequestTile,
   DetailedRoute,
   Engineer,
-  PlanDetails,
+  OverviewRoutesResponse,
   PlanDiffItem,
   PlanMetrics,
+  PlanStatus,
   PlanSummary,
   RequestItem,
   RequestStatus,
   Scenario,
+  Skill,
+  Transport,
   WorkspaceData,
 } from "../api/types";
 import { demoWorkspace, getDemoDetailedRoute } from "../data/demo";
 
 export type DataSource = "api" | "demo";
 
-function normalizeEngineer(engineer: Engineer, index: number): Engineer {
-  return {
-    ...engineer,
-    status: engineer.status ?? "available",
-    request_ids: engineer.request_ids ?? [],
-    load_minutes: engineer.load_minutes ?? 0,
-    distance_meters: engineer.distance_meters ?? 0,
-    color: engineer.color ?? ["#6f4cff", "#008f8c", "#e16c2b", "#2879d0"][index % 4],
-  };
-}
+const apiScenarios: Scenario[] = [
+  { id: "yugo_vostok", code: "yugo_vostok", name: "Юго-восток", timezone: "Europe/Moscow", planning_dates: [] },
+  { id: "vostok", code: "vostok", name: "Восток", timezone: "Europe/Moscow", planning_dates: [] },
+  { id: "yugotsentr", code: "yugotsentr", name: "Югоцентр", timezone: "Europe/Moscow", planning_dates: [] },
+];
 
-function normalizeRequest(request: RequestItem): RequestItem {
-  return {
-    ...request,
-    bk_type: request.bk_type ?? "Локальная",
-    hd_type: request.hd_type ?? "Service Request",
-    district: request.district ?? "—",
-    coordinates: request.coordinates ?? [37.62, 55.75],
-    full_normative_minutes: request.full_normative_minutes ?? request.service_minutes,
-    priority: request.priority ?? "normal",
-    priority_rank: request.priority_rank ?? 3,
-    required_skill: request.required_skill ?? "local",
-    required_transport: request.required_transport ?? null,
-    engineer_id: request.engineer_id ?? null,
-    engineer_name: request.engineer_name ?? null,
-    arrival_at: request.arrival_at ?? null,
-    explanation: request.explanation ?? "Результат назначения рассчитан планировщиком.",
-  };
-}
+const colors = ["#ffd400", "#28c6b7", "#ff7a59", "#54a7ff", "#8ed35f", "#ffb84d"];
 
-function numberMetric(
-  metrics: Record<string, number | string | null>,
-  ...keys: string[]
-) {
-  for (const key of keys) {
-    const value = Number(metrics[key]);
-    if (Number.isFinite(value)) return value;
-  }
-  return 0;
-}
+const skillMap: Record<string, Skill> = {
+  local_works: "local",
+  connection_and_orders: "connection",
+  emergency_works: "emergency",
+};
 
-function normalizeMetrics(
-  raw: Record<string, number | string | null>,
-  details: PlanDetails | null,
-  requests: RequestItem[],
-): PlanMetrics {
-  const assigned = numberMetric(raw, "assigned", "assigned_count") || details?.assignments.length || 0;
-  const unassigned =
-    numberMetric(raw, "unassigned", "unassigned_count") || details?.unassigned.length || 0;
-  const engineersUsed =
-    numberMetric(raw, "engineers_used") ||
-    new Set(details?.assignments.map((item) => item.engineer_id) ?? []).size;
-  const distanceMeters = numberMetric(raw, "distance_meters", "travel_distance_meters");
-  const workMinutes = numberMetric(raw, "service_time_minutes");
-  const travelMinutes = numberMetric(raw, "travel_time_seconds") / 60;
-  const coverageRatio = numberMetric(raw, "coverage_ratio");
-  return {
-    assigned,
-    unassigned,
-    completed: requests.filter((request) => request.status === "COMPLETED").length,
-    engineers_used: engineersUsed,
-    distance_meters: distanceMeters,
-    avg_load_percent:
-      numberMetric(raw, "avg_load_percent") ||
-      (engineersUsed ? Math.round(((workMinutes + travelMinutes) / (engineersUsed * 480)) * 100) : 0),
-    on_time_percent:
-      numberMetric(raw, "on_time_percent") ||
-      Math.round((coverageRatio || (requests.length ? assigned / requests.length : 0)) * 100),
-  };
-}
+const vehicleMap: Record<string, Transport> = {
+  car: "car",
+  pedestrian: "walking",
+  bicycle: "bicycle",
+  public_transport: "transit",
+};
 
-function normalizeAudit(item: ApiAuditItem) {
-  const detailText =
-    typeof item.details === "string" ? item.details : JSON.stringify(item.details);
-  return {
-    id: item.id,
-    timestamp: item.effective_at ?? item.recorded_at ?? "",
-    actor: item.actor,
-    action: item.action,
-    entity: item.object_type,
-    entity_id: item.object_id ?? "—",
-    details: item.reason ? `${item.reason} · ${detailText}` : detailText,
-  };
-}
+const statusMap: Record<string, RequestStatus> = {
+  not_sent: "NOT_SENT",
+  sent: "SENT",
+  on_the_way: "EN_ROUTE",
+  in_progress: "IN_PROGRESS",
+  done: "COMPLETED",
+  cancelled: "CANCELLED",
+  overdue: "OVERDUE",
+};
 
-function normalizeDiff(
-  items: ApiPlanDiffItem[],
-  requests: RequestItem[],
-  engineers: Engineer[],
-): PlanDiffItem[] {
-  const engineerName = (id: string | undefined) =>
-    engineers.find((engineer) => engineer.id === id)?.name ?? id ?? null;
-  return items.map((item) => {
-    const request = requests.find((candidate) => candidate.id === item.request_id);
-    return {
-      request_id: item.request_id,
-      external_id: request?.external_id ?? item.request_id,
-      changes: item.changes,
-      old_engineer: engineerName(item.old?.engineer_id),
-      new_engineer: engineerName(item.new?.engineer_id),
-      old_start: item.old?.start_at ?? null,
-      new_start: item.new?.start_at ?? null,
-      state: !item.old ? "new" : !item.new ? "removed" : "changed",
-    };
-  });
-}
+const unassignedLabels: Record<string, string> = {
+  no_matching_skill: "Нет инженера с нужной квалификацией",
+  no_matching_vehicle: "Нет подходящего транспорта",
+  no_time_slot: "Нет совместимого временного окна",
+  no_available_engineer: "Нет доступного инженера",
+};
 
-function normalizePlans(
-  plans: Array<Omit<PlanSummary, "code" | "requests_count" | "assigned_count">>,
-  requestCount: number,
-  activeDetails: PlanDetails | null,
-): PlanSummary[] {
-  return [...plans]
-    .sort((left, right) => right.created_at.localeCompare(left.created_at))
-    .map((plan, index) => ({
-      ...plan,
-      code: `${plan.status === "draft" ? "Черновик" : "План"} ${String(plans.length - index).padStart(2, "0")}`,
-      requests_count: requestCount,
-      assigned_count:
-        plan.id === activeDetails?.id
-          ? activeDetails.assignments.length
-          : Math.max(0, requestCount - (plan.status === "draft" ? 1 : 0)),
-    }));
+const workLabels: Record<string, string> = {
+  local_works: "Локальные работы",
+  connection_and_orders: "Подключение",
+  emergency_works: "Авария",
+};
+
+function number(value: number | string | null | undefined) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function errorText(error: unknown) {
-  if (error instanceof ApiError) {
-    return `${error.message} · correlation ID ${error.correlationId}`;
-  }
+  if (error instanceof ApiError) return `${error.message} · HTTP ${error.status}`;
   return error instanceof Error ? error.message : "Неизвестная ошибка";
+}
+
+function regionOf(value?: string): BackendRegion {
+  if (value === "vostok" || value === "yugotsentr" || value === "yugo_vostok") return value;
+  if (value === "scenario-east") return "vostok";
+  if (value === "scenario-south-center") return "yugotsentr";
+  return "yugo_vostok";
+}
+
+function planStatus(plan: BackendPlanSummary): PlanStatus {
+  if (plan.approval_status === "pending") return "draft";
+  if (plan.approval_status === "rejected") return "rejected";
+  return plan.is_current ? "approved" : "superseded";
+}
+
+function normalizePlans(plans: BackendPlanSummary[]): PlanSummary[] {
+  return [...plans]
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))
+    .map((plan, index) => ({
+      id: plan.id,
+      code: `PLN-${plan.planning_date.replaceAll("-", "").slice(2)}-${String(plans.length - index).padStart(2, "0")}`,
+      status: planStatus(plan),
+      parent_plan_id: plan.based_on_plan_id,
+      base_plan_id: plan.based_on_plan_id,
+      input_version: plan.id,
+      created_at: plan.created_at,
+      approved_at: plan.approved_at,
+      requests_count: plan.assigned_requests_count + plan.unassigned_requests_count,
+      assigned_count: plan.assigned_requests_count,
+    }));
+}
+
+function normalizeMetrics(plan: BackendPlanDetail, requests: RequestItem[]): PlanMetrics {
+  const raw = plan.metrics;
+  const avg = number(raw.average_workload_with_travel);
+  return {
+    assigned: raw.assigned_requests_count,
+    unassigned: raw.unassigned_requests_count,
+    completed: requests.filter((request) => request.status === "COMPLETED").length,
+    engineers_used: raw.engineers_used_count,
+    distance_meters: number(raw.total_mileage_km) * 1000,
+    avg_load_percent: Math.round(avg <= 1 ? avg * 100 : avg),
+    on_time_percent: requests.length
+      ? Math.round((raw.assigned_requests_count / requests.length) * 100)
+      : 0,
+  };
+}
+
+function requestFromBackend(
+  tile: BackendRequestTile,
+  detail: BackendRequestDetail | null,
+): RequestItem {
+  const rank = Math.min(3, Math.max(1, detail?.priority ?? tile.priority)) as 1 | 2 | 3;
+  const requiredSkill = detail?.required_skill ?? tile.required_skill;
+  const reason = tile.unassigned_reason
+    ? unassignedLabels[tile.unassigned_reason] ?? tile.unassigned_reason
+    : undefined;
+  return {
+    id: tile.request_id,
+    external_id: `BK-${detail?.external_id ?? tile.external_id}`,
+    bk_type: workLabels[requiredSkill] ?? detail?.type_bk ?? requiredSkill,
+    hd_type: detail?.type_hd ?? "Service request",
+    address: detail?.address ?? tile.address,
+    district: detail?.district ?? tile.district,
+    coordinates: [number(detail?.longitude ?? tile.longitude), number(detail?.latitude ?? tile.latitude)],
+    window_start: detail?.window_start ?? tile.window_start,
+    window_end: detail?.window_end ?? tile.window_end,
+    service_minutes: detail?.norm_minutes_without_travel ?? 90,
+    full_normative_minutes: detail?.norm_minutes ?? 90,
+    status: detail ? statusMap[detail.status] ?? "NOT_SENT" : tile.assigned_engineer ? "SENT" : "NOT_SENT",
+    mapping_state: tile.latitude != null && tile.longitude != null ? "mapped" : "unmapped",
+    priority: rank === 1 ? "urgent" : "normal",
+    priority_rank: rank,
+    required_skill: skillMap[requiredSkill] ?? "local",
+    required_transport: detail?.required_vehicle_type
+      ? vehicleMap[detail.required_vehicle_type] ?? null
+      : null,
+    engineer_id: tile.assigned_engineer?.engineer_id ?? null,
+    engineer_name: tile.assigned_engineer?.name ?? null,
+    arrival_at: tile.planned_arrival,
+    explanation: tile.assigned_engineer
+      ? "Назначение рассчитано актуальным backend с учётом квалификации, окна и загрузки."
+      : reason ?? "Заявка пока не назначена.",
+    unassigned_reason: reason,
+  };
+}
+
+function engineerFromBackend(
+  tile: BackendEngineerTile,
+  detail: BackendEngineerDetail | null,
+  index: number,
+): Engineer {
+  const load = number(tile.workload_with_travel);
+  return {
+    id: tile.engineer_id,
+    external_code: `ENG-${tile.engineer_id.slice(0, 4).toUpperCase()}`,
+    name: tile.name,
+    transport: vehicleMap[detail?.vehicle_type ?? tile.vehicle_type] ?? "car",
+    skills: (detail?.skills ?? []).map((skill) => skillMap[skill] ?? "local"),
+    status: detail?.is_available === false ? "unavailable" : tile.assigned_requests_count ? "working" : "available",
+    request_ids: tile.stops.map((stop) => stop.request_id),
+    load_minutes: Math.round(load <= 1 ? load * 480 : load * 4.8),
+    distance_meters: number(tile.route_distance_km) * 1000,
+    color: colors[index % colors.length],
+  };
+}
+
+function routesFromPlan(plan: BackendPlanDetail): OverviewRoutesResponse {
+  return {
+    plan_id: plan.id,
+    revision: plan.created_at,
+    status: plan.approval_status,
+    routes: plan.engineers.map((engineer) => {
+      const coordinates = [
+        engineer.start_longitude != null && engineer.start_latitude != null
+          ? [number(engineer.start_longitude), number(engineer.start_latitude)] as [number, number]
+          : null,
+        ...engineer.stops.map((stop) =>
+          stop.longitude != null && stop.latitude != null
+            ? [number(stop.longitude), number(stop.latitude)] as [number, number]
+            : null,
+        ),
+      ].filter((point): point is [number, number] => point !== null);
+      return {
+        engineer_id: engineer.engineer_id,
+        profile: engineer.vehicle_type,
+        route_status: coordinates.length > 1 ? "ready" as const : "empty" as const,
+        provider: "backend-plan",
+        graph_fingerprint: plan.id,
+        geometry: coordinates.length > 1 ? { type: "LineString" as const, coordinates } : null,
+        distance_meters: number(engineer.route_distance_km) * 1000,
+        duration_seconds: engineer.stops.reduce((sum, stop) => sum + (stop.travel_minutes ?? 0) * 60, 0),
+      };
+    }),
+  };
+}
+
+function diffFromPlan(plan: BackendPlanDetail, engineers: Engineer[]): PlanDiffItem[] {
+  const name = (id: string | null | undefined) =>
+    engineers.find((engineer) => engineer.id === id)?.name ?? id ?? null;
+  return (plan.diff?.requests ?? [])
+    .filter((item) => !item.changes.includes("unchanged"))
+    .map((item) => ({
+      request_id: item.request_id,
+      external_id: `BK-${item.after?.external_id ?? item.before?.external_id ?? item.request_id.slice(0, 6)}`,
+      changes: item.changes,
+      old_engineer: name(item.before?.engineer_id),
+      new_engineer: name(item.after?.engineer_id),
+      old_start: item.before?.planned_start ?? null,
+      new_start: item.after?.planned_start ?? null,
+      state: !item.before ? "new" : !item.after ? "removed" : "changed",
+    }));
 }
 
 export function usePlanner() {
@@ -159,7 +241,6 @@ export function usePlanner() {
   const [notice, setNotice] = useState<string | null>(null);
   const [detailedRoute, setDetailedRoute] = useState<DetailedRoute | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
-  const routeCache = useRef(new Map<string, DetailedRoute>());
   const noticeTimer = useRef<number | null>(null);
 
   const showNotice = useCallback((message: string) => {
@@ -172,364 +253,235 @@ export function usePlanner() {
     setLoading(true);
     setError(null);
     try {
-      await backend.health();
-      const scenarios = await backend.scenarios();
-      if (!scenarios.length) throw new Error("Backend не вернул ни одного сценария");
-      const scenario =
-        scenarios.find((item) => item.id === scenarioOverride) ?? scenarios[0];
-      const planningDate =
-        dateOverride && scenario.planning_dates.includes(dateOverride)
-          ? dateOverride
-          : scenario.planning_dates[0];
-      const [requestsRaw, engineersRaw, plansRaw] = await Promise.all([
-        backend.requests(scenario.id, planningDate),
-        backend.engineers(scenario.id),
-        backend.plans(scenario.id, planningDate),
+      const region = regionOf(scenarioOverride);
+      const summaries = await backend.plans(region);
+      if (!summaries.length) throw new Error("Для выбранного участка пока нет рассчитанных планов");
+      const availableDates = [...new Set(summaries.map((plan) => plan.planning_date))].sort().reverse();
+      const planningDate = dateOverride && availableDates.includes(dateOverride)
+        ? dateOverride
+        : summaries.find((plan) => plan.is_current)?.planning_date ?? availableDates[0];
+      const selectedSummary =
+        summaries.find((plan) => plan.is_current && plan.planning_date === planningDate) ??
+        summaries.find((plan) => plan.planning_date === planningDate) ??
+        summaries[0];
+      const plan = await backend.plan(selectedSummary.id);
+      const tiles = [...new Map(
+        plan.request_groups.flatMap((group) => group.requests).map((item) => [item.request_id, item]),
+      ).values()];
+      const [requestDetails, engineerDetails] = await Promise.all([
+        Promise.all(tiles.map((tile) => backend.request(tile.request_id).catch(() => null))),
+        Promise.all(plan.engineers.map((engineer) => backend.engineer(engineer.engineer_id).catch(() => null))),
       ]);
-      const activePlan =
-        plansRaw.find((plan) => plan.status === "approved") ?? plansRaw[0] ?? null;
-      const draftPlan = plansRaw.find((plan) => plan.status === "draft") ?? null;
-      const [planDetails, routes, metricsResponse, auditRaw, diffRaw] = activePlan
-        ? await Promise.all([
-            backend.plan(activePlan.id),
-            backend.routes(activePlan.id),
-            backend.metrics(activePlan.id).catch(() => ({ plan_id: activePlan.id, metrics: {} })),
-            backend.audit(scenario.id).catch(() => []),
-            draftPlan
-              ? backend
-                  .diff(draftPlan.base_plan_id ?? activePlan.id, draftPlan.id)
-                  .catch(() => null)
-              : Promise.resolve(null),
-          ])
-        : [
-            null,
-            { plan_id: "", revision: "empty", status: "empty", routes: [] },
-            { plan_id: "", metrics: {} },
-            await backend.audit(scenario.id).catch(() => []),
-            null,
-          ];
-
-      const assignmentByRequest = new Map(
-        planDetails?.assignments.map((assignment) => [assignment.request_id, assignment]) ?? [],
+      const requests = tiles.map((tile, index) => requestFromBackend(tile, requestDetails[index]));
+      const engineers = plan.engineers.map((engineer, index) =>
+        engineerFromBackend(engineer, engineerDetails[index], index),
       );
-      const unassignedByRequest = new Map(
-        planDetails?.unassigned.map((item) => [item.request_id, item]) ?? [],
-      );
-      const requests = requestsRaw.map(normalizeRequest).map((request) => {
-        const assignment = assignmentByRequest.get(request.id);
-        const unassigned = unassignedByRequest.get(request.id);
-        return {
-          ...request,
-          engineer_id: assignment?.engineer_id ?? request.engineer_id,
-          engineer_name: assignment?.engineer ?? request.engineer_name,
-          arrival_at: assignment?.arrival_at ?? request.arrival_at,
-          explanation: assignment?.explanation ?? unassigned?.explanation ?? request.explanation,
-          unassigned_reason: unassigned?.explanation ?? request.unassigned_reason,
-        };
-      });
-      const engineers = engineersRaw.map(normalizeEngineer).map((engineer) => {
-        const assignments =
-          planDetails?.assignments.filter((item) => item.engineer_id === engineer.id) ?? [];
-        return {
-          ...engineer,
-          request_ids: assignments.map((item) => item.request_id),
-          load_minutes: assignments.reduce(
-            (total, item) =>
-              total +
-              Math.max(0, (new Date(item.finish_at).getTime() - new Date(item.start_at).getTime()) / 60000) +
-              item.travel_seconds / 60,
-            0,
-          ),
-          distance_meters: assignments.reduce(
-            (total, item) => total + item.distance_meters,
-            0,
-          ),
-        };
-      });
-      const plans = normalizePlans(plansRaw, requests.length, planDetails);
-      const metrics = normalizeMetrics(metricsResponse.metrics, planDetails, requests);
-      const diff = diffRaw ? normalizeDiff(diffRaw.items, requests, engineers) : [];
-      routeCache.current.clear();
+      const plans = normalizePlans(summaries);
+      const scenarios = apiScenarios.map((scenario) => ({
+        ...scenario,
+        planning_dates: scenario.id === region ? availableDates : [planningDate],
+      }));
       setDetailedRoute(null);
       setData({
-        ...demoWorkspace,
         scenarios,
-        scenarioId: scenario.id,
+        scenarioId: region,
         planningDate,
-        activePlanId: activePlan?.id ?? "",
+        activePlanId: plan.id,
         requests,
         engineers,
         plans,
-        routes,
-        metrics,
-        audit: auditRaw.map(normalizeAudit),
-        diff,
+        routes: routesFromPlan(plan),
+        metrics: normalizeMetrics(plan, requests),
+        audit: plans.map((item) => ({
+          id: `audit-${item.id}`,
+          timestamp: item.created_at,
+          actor: "backend",
+          action: item.status === "approved" ? "План утверждён" : "Версия плана создана",
+          entity: "plan",
+          entity_id: item.code,
+          details: "Событие сформировано из актуального жизненного цикла плана.",
+        })),
+        diff: diffFromPlan(plan, engineers),
       });
       setSource("api");
     } catch (requestError) {
       const demoMode = import.meta.env.VITE_DEMO_MODE ?? "auto";
       if (demoMode === "false") {
         setError(errorText(requestError));
-        throw requestError;
+      } else {
+        setError(null);
+        setData(demoWorkspace);
+        setSource("demo");
       }
-      setError(null);
-      setData(demoWorkspace);
-      setSource("demo");
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    const demoMode = import.meta.env.VITE_DEMO_MODE ?? "auto";
-    if (demoMode === "true") {
+    if ((import.meta.env.VITE_DEMO_MODE ?? "auto") === "true") {
       setLoading(false);
       return;
     }
     void loadApi();
   }, [loadApi]);
 
-  const changeContext = useCallback(
-    async (scenarioId: string, planningDate: string) => {
-      setDetailedRoute(null);
-      routeCache.current.clear();
-      if (source === "api") {
-        await loadApi(scenarioId, planningDate);
-        return;
-      }
+  const apiUnavailable = useCallback((feature: string) => {
+    showNotice(`${feature}: в текущем backend endpoint ещё не опубликован`);
+  }, [showNotice]);
+
+  const changeContext = useCallback(async (scenarioId: string, planningDate: string) => {
+    setDetailedRoute(null);
+    if (source === "api") await loadApi(scenarioId, planningDate);
+    else {
       setData((current) => ({ ...current, scenarioId, planningDate }));
       showNotice("Демонстрационный сценарий обновлён");
-    },
-    [loadApi, showNotice, source],
-  );
+    }
+  }, [loadApi, showNotice, source]);
 
-  const loadDetailedRoute = useCallback(
-    async (engineerId: string | null) => {
-      if (!engineerId) {
-        setDetailedRoute(null);
+  const loadDetailedRoute = useCallback(async (engineerId: string | null) => {
+    if (!engineerId) {
+      setDetailedRoute(null);
+      return;
+    }
+    setRouteLoading(true);
+    try {
+      if (source === "demo") {
+        setDetailedRoute(getDemoDetailedRoute(engineerId));
         return;
       }
-      const key = `${data.activePlanId}:${data.routes.revision}:${engineerId}`;
-      const cached = routeCache.current.get(key);
-      if (cached) {
-        setDetailedRoute(cached);
-        return;
-      }
-      setRouteLoading(true);
-      try {
-        const route =
-          source === "api"
-            ? await backend.detailedRoute(data.activePlanId, engineerId)
-            : getDemoDetailedRoute(engineerId);
-        routeCache.current.set(key, route);
-        setDetailedRoute(route);
-      } catch (routeError) {
-        setError(errorText(routeError));
-      } finally {
-        setRouteLoading(false);
-      }
-    },
-    [data.activePlanId, data.routes.revision, source],
-  );
-
-  const updateRequestStatus = useCallback(
-    async (requestId: string, status: RequestStatus) => {
-      if (source === "api") await backend.updateStatus(requestId, status, "Изменено диспетчером");
-      setData((current) => ({
-        ...current,
-        requests: current.requests.map((request) =>
-          request.id === requestId ? { ...request, status } : request,
-        ),
-      }));
-      showNotice("Статус заявки обновлён");
-    },
-    [showNotice, source],
-  );
-
-  const importDataset = useCallback(
-    async (file: File) => {
-      if (source === "api") {
-        const imported = await backend.importDataset(file, crypto.randomUUID());
-        await loadApi(imported.scenario_id);
-      }
-      showNotice(`Файл «${file.name}» принят без ошибок`);
-    },
-    [loadApi, showNotice, source],
-  );
-
-  const runPlanning = useCallback(
-    async (isReplan: boolean) => {
-      let planId = "plan-draft";
-      if (source === "api") {
-        const started = await backend.runPlan(
-          data.scenarioId,
-          data.planningDate,
-          isReplan ? data.activePlanId : null,
-        );
-        planId = started.plan_id;
-        if (started.status === "queued" || started.status === "running") {
-          for (let attempt = 0; attempt < 24; attempt += 1) {
-            await new Promise((resolve) => window.setTimeout(resolve, 750));
-            const run = await backend.planningRun(started.planning_run_id);
-            if (run.status === "failed") {
-              throw new Error(run.failure?.message ?? run.failure?.code ?? "Расчёт завершился ошибкой");
-            }
-            if (run.status === "succeeded") {
-              planId = run.plan_id ?? planId;
-              break;
-            }
-          }
-        }
-        await loadApi(data.scenarioId, data.planningDate);
-      } else {
-        setData((current) => ({
-          ...current,
-          plans: current.plans.map((plan) =>
-            plan.id === "plan-draft" ? { ...plan, created_at: new Date().toISOString() } : plan,
-          ),
+      const route = data.routes.routes.find((item) => item.engineer_id === engineerId);
+      const stops = data.requests
+        .filter((request) => request.engineer_id === engineerId)
+        .sort((left, right) => (left.arrival_at ?? "").localeCompare(right.arrival_at ?? ""))
+        .map((request, index) => ({
+          sequence: index + 1,
+          location_id: request.id,
+          request_id: request.id,
+          coordinates: request.coordinates,
+          snapped_coordinates: request.coordinates,
         }));
-      }
-      showNotice(isReplan ? "Новый вариант рассчитан за 2,8 с" : "План рассчитан за 2,8 с");
-      return planId;
-    },
-    [data.activePlanId, data.planningDate, data.scenarioId, loadApi, showNotice, source],
-  );
+      setDetailedRoute({
+        plan_id: data.activePlanId,
+        revision: data.routes.revision,
+        status: data.routes.status,
+        engineer_id: engineerId,
+        profile: route?.profile ?? "driving",
+        route_status: route?.route_status ?? "empty",
+        provider: route?.provider ?? "backend-plan",
+        graph_fingerprint: route?.graph_fingerprint ?? data.activePlanId,
+        geometry: route?.geometry ?? null,
+        distance_meters: route?.distance_meters ?? 0,
+        duration_seconds: route?.duration_seconds ?? 0,
+        stops,
+        segments: [],
+      });
+    } finally {
+      setRouteLoading(false);
+    }
+  }, [data, source]);
 
-  const approvePlan = useCallback(
-    async (plan: PlanSummary) => {
-      if (source === "api") {
-        await backend.approvePlan(plan.id, plan.base_plan_id);
-        await loadApi(data.scenarioId, data.planningDate);
-      } else {
-        setData((current) => ({
-          ...current,
-          activePlanId: plan.id,
-          plans: current.plans.map((item) => ({
-            ...item,
-            status: item.id === plan.id ? "approved" : item.status === "approved" ? "superseded" : item.status,
-          })),
-        }));
-      }
-      showNotice(`План ${plan.code} утверждён`);
-    },
-    [data.planningDate, data.scenarioId, loadApi, showNotice, source],
-  );
+  const updateRequestStatus = useCallback(async (requestId: string, status: RequestStatus) => {
+    if (source === "api") {
+      apiUnavailable("Изменение статуса");
+      return;
+    }
+    setData((current) => ({
+      ...current,
+      requests: current.requests.map((request) => request.id === requestId ? { ...request, status } : request),
+    }));
+    showNotice("Статус заявки обновлён");
+  }, [apiUnavailable, showNotice, source]);
 
-  const createUrgentRequest = useCallback(
-    async (payload: Record<string, unknown>) => {
-      if (source === "api") {
-        await backend.createRequest({
-          ...payload,
-          scenario_id: data.scenarioId,
-          planning_date: data.planningDate,
-          priority: "urgent",
-          idempotency_key: crypto.randomUUID(),
-          actor: "dispatcher",
-        });
-        await loadApi(data.scenarioId, data.planningDate);
-      } else {
-        const engineerName = null;
-        const request: RequestItem = {
-          id: `req-${Date.now()}`,
-          external_id: String(payload.external_id ?? "URGENT-DEMO"),
-          bk_type: "Авария",
-          hd_type: "Incident",
-          address: String(payload.address ?? "Москва"),
-          district: String(payload.district ?? "ЮВАО"),
-          coordinates: [37.79, 55.69],
-          window_start: String(payload.window_start),
-          window_end: String(payload.window_end),
-          service_minutes: 100,
-          full_normative_minutes: 100,
-          status: "NOT_SENT",
-          mapping_state: "mapped",
-          priority: "urgent",
-          priority_rank: 1,
-          required_skill: "emergency",
-          required_transport: "car",
-          engineer_id: null,
-          engineer_name: engineerName,
-          arrival_at: null,
-          explanation: "Срочная заявка ожидает подтверждения нового плана.",
-        };
-        setData((current) => ({ ...current, requests: [request, ...current.requests] }));
-      }
-      showNotice("Срочная заявка создана, черновик перепланирования готов");
-    },
-    [data.planningDate, data.scenarioId, loadApi, showNotice, source],
-  );
+  const importDataset = useCallback(async (file: File) => {
+    if (source === "api") {
+      const result = await backend.importInitial([file]);
+      const imported = result.imports[0];
+      if (imported) await loadApi(imported.region);
+    }
+    showNotice(`Файл «${file.name}» принят`);
+  }, [loadApi, showNotice, source]);
 
-  const createDayEvent = useCallback(
-    async (eventType: string, payload: Record<string, unknown>) => {
-      if (source === "api") {
-        await backend.dayEvent(data.scenarioId, data.planningDate, eventType, payload);
-        await loadApi(data.scenarioId, data.planningDate);
-      }
-      showNotice("Событие принято, новый вариант плана рассчитан");
-    },
-    [data.planningDate, data.scenarioId, loadApi, showNotice, source],
-  );
+  const runPlanning = useCallback(async (isReplan: boolean) => {
+    if (source === "api") {
+      apiUnavailable(isReplan ? "Перепланирование" : "Новый расчёт");
+      return data.activePlanId;
+    }
+    showNotice(isReplan ? "Новый вариант рассчитан за 2,8 с" : "План рассчитан за 2,8 с");
+    return "plan-draft";
+  }, [apiUnavailable, data.activePlanId, showNotice, source]);
 
-  const comparePlans = useCallback(
-    async (oldPlanId: string, newPlanId: string) => {
-      if (source === "api") {
-        const response = await backend.diff(oldPlanId, newPlanId);
-        setData((current) => ({
-          ...current,
-          diff: normalizeDiff(response.items, current.requests, current.engineers),
-        }));
-      }
-      showNotice("Сравнение планов открыто в разделе планирования");
-    },
-    [showNotice, source],
-  );
+  const approvePlan = useCallback(async (plan: PlanSummary) => {
+    if (source === "api") {
+      apiUnavailable("Утверждение плана");
+      return;
+    }
+    setData((current) => ({
+      ...current,
+      activePlanId: plan.id,
+      plans: current.plans.map((item) => ({
+        ...item,
+        status: item.id === plan.id ? "approved" : item.status === "approved" ? "superseded" : item.status,
+      })),
+    }));
+    showNotice(`План ${plan.code} утверждён`);
+  }, [apiUnavailable, showNotice, source]);
 
-  const manualChange = useCallback(
-    async (requestId: string, engineerId: string, startAt: string) => {
-      if (source === "api") {
-        await backend.manualChange(data.activePlanId, {
-          request_id: requestId,
-          engineer_id: engineerId,
-          position: 1,
-          start_at: startAt,
-          reason: "Ручное изменение диспетчером",
-        });
-        await loadApi(data.scenarioId, data.planningDate);
-      } else {
-        const engineer = data.engineers.find((item) => item.id === engineerId);
-        setData((current) => ({
-          ...current,
-          requests: current.requests.map((request) =>
-            request.id === requestId
-              ? { ...request, engineer_id: engineerId, engineer_name: engineer?.name ?? null, arrival_at: startAt }
-              : request,
-          ),
-          diff: current.diff.some((item) => item.request_id === requestId)
-            ? current.diff
-            : [{ request_id: requestId, external_id: current.requests.find((item) => item.id === requestId)?.external_id ?? requestId, changes: ["engineer", "start_at"], old_engineer: current.requests.find((item) => item.id === requestId)?.engineer_name ?? null, new_engineer: engineer?.name ?? null, old_start: current.requests.find((item) => item.id === requestId)?.arrival_at ?? null, new_start: startAt, state: "changed" }, ...current.diff],
-        }));
-      }
-      showNotice("Ручное изменение сохранено в новом черновике");
-    },
-    [data.activePlanId, data.engineers, data.planningDate, data.scenarioId, loadApi, showNotice, source],
-  );
+  const createUrgentRequest = useCallback(async (payload: Record<string, unknown>) => {
+    if (source === "api") {
+      apiUnavailable("Создание срочной заявки");
+      return;
+    }
+    const request: RequestItem = {
+      id: `req-${Date.now()}`,
+      external_id: String(payload.external_id ?? "URGENT-DEMO"),
+      bk_type: "Авария",
+      hd_type: "Incident",
+      address: String(payload.address ?? "Москва"),
+      district: String(payload.district ?? "ЮВАО"),
+      coordinates: [37.79, 55.69],
+      window_start: String(payload.window_start),
+      window_end: String(payload.window_end),
+      service_minutes: 100,
+      full_normative_minutes: 100,
+      status: "NOT_SENT",
+      mapping_state: "mapped",
+      priority: "urgent",
+      priority_rank: 1,
+      required_skill: "emergency",
+      required_transport: "car",
+      engineer_id: null,
+      engineer_name: null,
+      arrival_at: null,
+      explanation: "Срочная заявка ожидает подтверждения нового плана.",
+    };
+    setData((current) => ({ ...current, requests: [request, ...current.requests] }));
+    showNotice("Срочная заявка создана");
+  }, [apiUnavailable, showNotice, source]);
 
-  const downloadReport = useCallback(
-    async (format: "xlsx" | "pdf") => {
-      if (source === "api") {
-        const result = await backend.report(data.activePlanId, format);
-        const href = URL.createObjectURL(result.blob);
-        const link = document.createElement("a");
-        link.href = href;
-        link.download = result.filename;
-        link.click();
-        URL.revokeObjectURL(href);
-      } else {
-        showNotice(`В API-режиме будет загружен ${format.toUpperCase()}-отчёт`);
-      }
-    },
-    [data.activePlanId, showNotice, source],
-  );
+  const createDayEvent = useCallback(async (_eventType: string, _payload: Record<string, unknown>) => {
+    if (source === "api") apiUnavailable("Событие рабочего дня");
+    else showNotice("Событие принято, новый вариант плана рассчитан");
+  }, [apiUnavailable, showNotice, source]);
+
+  const comparePlans = useCallback(async (_oldPlanId: string, newPlanId: string) => {
+    if (source === "api") {
+      const plan = await backend.plan(newPlanId);
+      setData((current) => ({ ...current, diff: diffFromPlan(plan, current.engineers) }));
+    }
+    showNotice("Сравнение планов открыто в разделе планирования");
+  }, [showNotice, source]);
+
+  const manualChange = useCallback(async (_requestId: string, _engineerId: string, _startAt: string) => {
+    if (source === "api") apiUnavailable("Ручное изменение плана");
+    else showNotice("Ручное изменение сохранено в новом черновике");
+  }, [apiUnavailable, showNotice, source]);
+
+  const downloadReport = useCallback(async (format: "xlsx" | "pdf") => {
+    showNotice(source === "api"
+      ? `Экспорт ${format.toUpperCase()}: endpoint ещё не опубликован`
+      : `В API-режиме будет загружен ${format.toUpperCase()}-отчёт`);
+  }, [showNotice, source]);
 
   return {
     data,

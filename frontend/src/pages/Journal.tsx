@@ -30,19 +30,52 @@ export function Journal({
   const { data } = planner;
   const [tab, setTab] = useState<"analytics" | "audit">("analytics");
   const [query, setQuery] = useState("");
+  const [actionFilter, setActionFilter] = useState("all");
+  const [typesExpanded, setTypesExpanded] = useState(true);
   const [oldPlanId, setOldPlanId] = useState(data.plans[2]?.id ?? data.plans[0]?.id);
   const [newPlanId, setNewPlanId] = useState(data.activePlanId);
   const filteredAudit = useMemo(() => {
     const term = query.toLocaleLowerCase("ru");
-    return data.audit.filter((item) => !term || [item.action, item.entity, item.entity_id, item.actor, item.details].some((value) => value.toLocaleLowerCase("ru").includes(term)));
-  }, [data.audit, query]);
+    return data.audit.filter((item) => {
+      const matchesTerm = !term || [item.action, item.entity, item.entity_id, item.actor, item.details].some((value) => value.toLocaleLowerCase("ru").includes(term));
+      return matchesTerm && (actionFilter === "all" || item.action === actionFilter);
+    });
+  }, [actionFilter, data.audit, query]);
+  const auditActions = useMemo(() => Array.from(new Set(data.audit.map((item) => item.action))), [data.audit]);
 
   const typeCounts = [
-    { label: "Локальные", count: data.requests.filter((item) => item.required_skill === "local").length, color: "#6f4cff" },
+    { label: "Локальные", count: data.requests.filter((item) => item.required_skill === "local").length, color: "#28c6b7" },
     { label: "Подключения", count: data.requests.filter((item) => item.required_skill === "connection").length, color: "#ffdb00" },
     { label: "Аварии", count: data.requests.filter((item) => item.required_skill === "emergency").length, color: "#ef6b4a" },
   ];
-  const maxType = Math.max(...typeCounts.map((item) => item.count));
+  const maxType = Math.max(1, ...typeCounts.map((item) => item.count));
+  const dateLabel = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long" }).format(new Date(`${data.planningDate}T12:00:00`));
+
+  const exportPlansCsv = () => {
+    const quote = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+    const rows = [
+      ["Версия", "Создан", "Статус", "Назначено", "Всего заявок", "Пробег, м", "Автор"],
+      ...data.plans.map((plan, index) => [
+        plan.code,
+        formatDateTime(plan.created_at),
+        plan.status,
+        plan.assigned_count,
+        plan.requests_count,
+        data.metrics.distance_meters + index * 7400,
+        index === 0 ? "planner" : "dispatcher",
+      ]),
+    ];
+    const csv = `\uFEFF${rows.map((row) => row.map(quote).join(";")).join("\r\n")}`;
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `plans-${data.planningDate}.csv`;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
 
   return (
     <div className="journal-page">
@@ -70,10 +103,10 @@ export function Journal({
               <div className="chart-axis"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
             </section>
 
-            <section className="chart-card request-types">
-              <div className="card-head"><div><h2>Типы работ</h2><p>{data.requests.length} заявок за день</p></div><button className="icon-button"><ChevronDown size={16} /></button></div>
-              <div className="type-bars">{typeCounts.map((item) => <div key={item.label}><span>{item.label}</span><div><i style={{ width: `${item.count / maxType * 100}%`, background: item.color }} /></div><b>{item.count}</b></div>)}</div>
-              <div className="priority-note"><span className="priority-medal">1</span><p><strong>Аварии обработаны первыми</strong><small>Среднее ожидание — 18 минут</small></p></div>
+            <section className={`chart-card request-types ${typesExpanded ? "" : "is-collapsed"}`}>
+              <div className="card-head"><div><h2>Типы работ</h2><p>{data.requests.length} заявок за день</p></div><button className="icon-button" onClick={() => setTypesExpanded((current) => !current)} aria-expanded={typesExpanded} aria-label={typesExpanded ? "Свернуть типы работ" : "Развернуть типы работ"} title={typesExpanded ? "Свернуть" : "Развернуть"}><ChevronDown size={16} /></button></div>
+              {typesExpanded ? <><div className="type-bars">{typeCounts.map((item) => <div key={item.label}><span>{item.label}</span><div><i style={{ width: `${item.count / maxType * 100}%`, background: item.color }} /></div><b>{item.count}</b></div>)}</div>
+              <div className="priority-note"><span className="priority-medal">1</span><p><strong>Аварии обработаны первыми</strong><small>Среднее ожидание — 18 минут</small></p></div></> : <button className="collapsed-summary" onClick={() => setTypesExpanded(true)}>{typeCounts.map((item) => <span key={item.label}><i style={{ background: item.color }} />{item.label}<b>{item.count}</b></span>)}</button>}
             </section>
 
             <section className="chart-card coverage-card">
@@ -90,14 +123,14 @@ export function Journal({
           </div>
 
           <section className="plans-table-card">
-            <div className="card-head"><div><h2>Версии плана</h2><p>Каждый расчёт сохранён и доступен для проверки</p></div><button className="button ghost"><ArrowDownToLine size={16} /> Экспорт списка</button></div>
+            <div className="card-head"><div><h2>Версии плана</h2><p>Каждый расчёт сохранён и доступен для проверки</p></div><button className="button ghost" onClick={exportPlansCsv}><ArrowDownToLine size={16} /> Экспорт списка</button></div>
             <div className="plans-table"><div className="table-head"><span>Версия</span><span>Создан</span><span>Статус</span><span>Заявки</span><span>Пробег</span><span>Автор</span></div>{data.plans.map((plan, index) => <div className="table-row" key={plan.id}><span><CircleDot size={14} className={`plan-dot ${plan.status}`} /><strong>{plan.code}</strong></span><span>{formatDateTime(plan.created_at)}</span><span><PlanStatusPill status={plan.status} /></span><span>{plan.assigned_count}/{plan.requests_count}</span><span>{formatDistance(data.metrics.distance_meters + index * 7400)}</span><span>{index === 0 ? "planner" : "dispatcher"}</span></div>)}</div>
           </section>
         </>
       ) : (
         <section className="audit-card">
-          <div className="audit-tools"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Действие, объект или автор" /></label><button className="filter-button"><CalendarDays size={15} /> 17 августа</button><button className="filter-button"><Filter size={15} /> Все действия</button></div>
-          <div className="audit-list">{filteredAudit.map((item, index) => <article key={item.id}><span className={`audit-node audit-${index % 4}`}><History size={15} /></span><div className="audit-main"><div><strong>{item.action}</strong><span>{item.entity} · {item.entity_id}</span></div><p>{item.details}</p></div><div className="audit-meta"><strong>{item.actor}</strong><span>{formatDateTime(item.timestamp)}</span></div></article>)}</div>
+          <div className="audit-tools"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Действие, объект или автор" /></label><span className="filter-button filter-chip"><CalendarDays size={15} /> {dateLabel}</span><label className="filter-button audit-select"><Filter size={15} /><select value={actionFilter} onChange={(event) => setActionFilter(event.target.value)} aria-label="Фильтр действий"><option value="all">Все действия</option>{auditActions.map((action) => <option key={action} value={action}>{action}</option>)}</select></label></div>
+          <div className="audit-list">{filteredAudit.length ? filteredAudit.map((item, index) => <article key={item.id}><span className={`audit-node audit-${index % 4}`}><History size={15} /></span><div className="audit-main"><div><strong>{item.action}</strong><span>{item.entity} · {item.entity_id}</span></div><p>{item.details}</p></div><div className="audit-meta"><strong>{item.actor}</strong><span>{formatDateTime(item.timestamp)}</span></div></article>) : <div className="empty-filter">По выбранным условиям действий не найдено.</div>}</div>
         </section>
       )}
     </div>

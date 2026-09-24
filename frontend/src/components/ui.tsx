@@ -62,7 +62,7 @@ export function SkillIcon({ skill, size = 15 }: { skill: Skill; size?: number })
   return <Wrench size={size} />;
 }
 
-export function Avatar({ name, color = "#6f4cff", small = false }: { name: string; color?: string; small?: boolean }) {
+export function Avatar({ name, color = "#ffd400", small = false }: { name: string; color?: string; small?: boolean }) {
   const initials = name
     .split(" ")
     .slice(0, 2)
