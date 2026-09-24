@@ -1,4 +1,5 @@
 from src.core.di.algorithm import AlgorithmProvider
+from src.core.di.dgis import DgisProvider
 from src.core.di.engineers import EngineersProvider
 from src.core.di.geocoding import GeocodingProvider
 from src.core.di.planning import PlanningProvider
@@ -10,6 +11,7 @@ from src.core.di.session import DbProvider
 
 __all__ = [
     "AlgorithmProvider",
+    "DgisProvider",
     "DbProvider",
     "EngineersProvider",
     "GeocodingProvider",

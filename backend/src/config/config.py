@@ -74,6 +74,14 @@ class RoutingConfig(BaseModel):
     max_table_coordinates: int = 100
 
 
+class DgisConfig(BaseModel):
+    base_url: str = "https://routing.api.2gis.com"
+    api_key: str = ""
+    api_version: str = "2.0"
+    timeout_seconds: float = 60.0
+    max_matrix_points: int = 25
+
+
 class PlanningConfig(BaseModel):
     max_file_size_bytes: int = 10_000_000
     default_shift_start: time = time(hour=10)
@@ -83,18 +91,15 @@ class PlanningConfig(BaseModel):
 
 
 class AlgorithmConfig(BaseModel):
+    emergency_response_minutes: int = 120
     priority_tier_weight: int = 1000
-    efficient_completion_mode_count: int = 3
-    regret_variant_count: int = 6
-    hybrid_seed_budget_seconds: float = 2.0
-    hybrid_ortools_seed_budget_seconds: float = 3.0
-    beam_width: int = 500
-    tasty_graph_budget_seconds: float = 3.0
-    regret_budget_seconds: float = 3.0
-    layered_graph_budget_seconds: float = 3.0
-    ortools_budget_seconds: float = 5.0
-    hybrid_budget_seconds: float = 2.0
-    beam_budget_seconds: float = 3.0
+    route_candidates_per_engineer: int = 48
+    route_candidate_improvement_rounds: int = 2
+    route_candidates_per_improvement_round: int = 4
+    alns_iterations: int = 6
+    alns_candidates_per_repair: int = 8
+    alns_cluster_fraction: float = 0.25
+    alns_random_seed: int = 20260924
 
 
 class LoggingConfig(BaseModel):
@@ -112,6 +117,7 @@ class Config(BaseSettings):
     s3: S3Config = Field(default_factory=S3Config)
     geocoding: GeocodingConfig = Field(default_factory=GeocodingConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
+    dgis: DgisConfig = Field(default_factory=DgisConfig)
     planning: PlanningConfig = Field(default_factory=PlanningConfig)
     algorithm: AlgorithmConfig = Field(default_factory=AlgorithmConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

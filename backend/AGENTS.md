@@ -82,7 +82,7 @@ src/
 │   │   └── uow.py            — UnitOfWork, агрегирует репозитории
 │   ├── <system>/            — клиенты внешних API и переиспользуемые core-сервисы,
 │   │                          не привязанные к одному эндпоинту (s3, geocoding,
-│   │                          routing, algorithm): client.py + service.py,
+│   │                          routing, dgis, algorithm): client.py + service.py,
 │   │                          плюс dto.py/enums.py по необходимости
 │   ├── di/                 — dishka providers
 │   ├── logging.py           — структурные JSON-логи

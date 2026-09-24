@@ -4,6 +4,7 @@ import uuid
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.api.exc.planning import (
     PlanningAddressNotFound,
@@ -25,20 +26,44 @@ from src.api.planning.dto import (
 )
 from src.api.planning.parser import PlanningWorkbookParser
 from src.config import cfg
-from src.core.algorithm import AlgorithmService, DistributionMode, MissingCoordinatesError
-from src.core.db.dto import EngineerCreateDTO, RequestCreateDTO, UploadedFileCreateDTO
-from src.core.db.enums import Region
+from src.core.algorithm import (
+    AlgorithmService,
+    DistributionMode,
+    EngineerSnapshot,
+    InitialPlanningSnapshot,
+    LayerMatrix,
+    MissingCoordinatesError,
+    RequestSnapshot,
+)
+from src.core.algorithm import (
+    InitialPlanningResult as AlgorithmInitialPlanningResult,
+)
+from src.core.db.dto import (
+    BaselineResultCreateDTO,
+    EngineerCreateDTO,
+    PlanCreateDTO,
+    PlanEngineerStateCreateDTO,
+    PlanStopCreateDTO,
+    PlanUnassignedRequestCreateDTO,
+    RequestCreateDTO,
+    UploadedFileCreateDTO,
+)
+from src.core.db.enums import PlanKind, Region
+from src.core.db.models import Engineer as EngineerModel
+from src.core.db.models import Request
 from src.core.db.uow import UnitOfWork
+from src.core.dgis import (
+    DgisMatrixService,
+    DgisPoint,
+    DgisUnavailableError,
+    DgisUnreachablePointsError,
+    InvalidDgisResponseError,
+)
 from src.core.geocoding import (
     AddressNotFoundError,
     Coordinates,
     GeocodingService,
     GeocodingUnavailableError,
-)
-from src.core.routing import (
-    InvalidRoutingResponseError,
-    RoutingUnavailableError,
-    UnreachablePointsError,
 )
 from src.core.s3 import S3Storage, S3UnavailableError
 
@@ -54,11 +79,13 @@ class PlanningService:
         geocoding: GeocodingService,
         storage: S3Storage,
         algorithm: AlgorithmService,
+        dgis: DgisMatrixService,
     ) -> None:
         self._uow = uow
         self._geocoding = geocoding
         self._storage = storage
         self._algorithm = algorithm
+        self._dgis = dgis
 
     async def import_initial_data(self, files: list[PlanningUploadFile]) -> InitialPlanningResult:
         if not files or len(files) % 2 != 0:
@@ -97,25 +124,176 @@ class PlanningService:
             raise
 
         try:
-            plans = [
-                await self._algorithm.plan_initial(
-                    result.upload_id, result.region, DistributionMode.MIN_ENGINEERS
+            plan_ids = [
+                await self._calculate_and_persist_initial(
+                    result.upload_id,
+                    result.region,
+                    DistributionMode.MIN_ENGINEERS,
                 )
                 for result in results
             ]
-        except RoutingUnavailableError as exc:
+        except DgisUnavailableError as exc:
             raise PlanningRoutingUnavailable from exc
-        except InvalidRoutingResponseError as exc:
+        except InvalidDgisResponseError as exc:
             raise PlanningInvalidRoutingResponse from exc
-        except UnreachablePointsError as exc:
+        except DgisUnreachablePointsError as exc:
             raise PlanningUnreachablePoints from exc
         except MissingCoordinatesError as exc:
             raise PlanningMissingCoordinates from exc
         results_with_plans = [
-            replace(result, plan_id=plan.plan_id)
-            for result, plan in zip(results, plans, strict=True)
+            replace(result, plan_id=plan_id)
+            for result, plan_id in zip(results, plan_ids, strict=True)
         ]
         return InitialPlanningResult(status="imported", imports=tuple(results_with_plans))
+
+    async def _calculate_and_persist_initial(
+        self,
+        upload_id: uuid.UUID,
+        region: Region,
+        mode: DistributionMode,
+    ) -> uuid.UUID:
+        requests = await self._uow.requests.get_by_upload_id(upload_id)
+        engineers = await self._uow.engineers.get_by_upload_id(upload_id)
+        if not requests:
+            raise PlanningFileValidationError
+        requests.sort(key=lambda request: request.id.int)
+        engineers.sort(key=lambda engineer: engineer.id.int)
+
+        draft = self._algorithm.prepare_initial(
+            InitialPlanningSnapshot(
+                region=region,
+                planning_date=min(request.window_start for request in requests).date(),
+                calculation_cutoff_at=datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None),
+                mode=mode,
+                requests=tuple(self._to_request_snapshot(request) for request in requests),
+                engineers=tuple(self._to_engineer_snapshot(engineer) for engineer in engineers),
+            )
+        )
+        points = [
+            DgisPoint(id=point.id, latitude=point.latitude, longitude=point.longitude)
+            for point in draft.points
+        ]
+        matrices = [
+            LayerMatrix(
+                request=matrix_request,
+                travel_matrix=await self._dgis.build_matrix(
+                    points,
+                    vehicle_type=matrix_request.vehicle_type,
+                    departure_at=matrix_request.traffic_reference_at,
+                    source_ids=matrix_request.source_ids,
+                    target_ids=matrix_request.target_ids,
+                ),
+            )
+            for matrix_request in draft.matrix_requests
+        ]
+        planning_input = self._algorithm.build_initial_input(draft, matrices)
+        calculated = self._algorithm.plan_initial(planning_input)
+        baseline = self._algorithm.plan_baseline(planning_input)
+        plan_id = self._persist_initial_result(upload_id, calculated, engineers)
+        self._uow.baseline_results.create(
+            BaselineResultCreateDTO(
+                initial_plan_id=plan_id,
+                assigned_requests_count=baseline.metrics.assigned_requests_count,
+                unassigned_requests_count=baseline.metrics.unassigned_requests_count,
+                engineers_used_count=baseline.metrics.engineers_used_count,
+                total_mileage_km=baseline.metrics.total_mileage_km,
+                average_workload_with_travel=baseline.metrics.average_utilization_with_travel,
+                average_workload_without_travel=(
+                    baseline.metrics.average_utilization_without_travel
+                ),
+                algorithm_version=baseline.algorithm_version,
+            )
+        )
+        await self._uow.commit()
+        return plan_id
+
+    def _persist_initial_result(
+        self,
+        upload_id: uuid.UUID,
+        calculated: AlgorithmInitialPlanningResult,
+        engineers: list[EngineerModel],
+    ) -> uuid.UUID:
+        plan_id = self._uow.plans.create(
+            PlanCreateDTO(
+                region=calculated.region,
+                planning_date=calculated.planning_date,
+                upload_id=upload_id,
+                kind=PlanKind.INITIAL,
+                based_on_plan_id=None,
+                triggered_by_event_id=None,
+                calculation_cutoff_at=calculated.calculation_cutoff_at,
+                total_mileage_km=calculated.metrics.total_mileage_km,
+                engineers_used_count=calculated.metrics.engineers_used_count,
+                assigned_requests_count=calculated.metrics.assigned_requests_count,
+                unassigned_requests_count=calculated.metrics.unassigned_requests_count,
+            )
+        )
+        self._uow.plan_engineer_states.add_many(
+            [
+                PlanEngineerStateCreateDTO(
+                    plan_id=plan_id,
+                    engineer_id=engineer.id,
+                    is_available=engineer.is_available,
+                )
+                for engineer in engineers
+            ]
+        )
+        self._uow.plan_stops.add_many(
+            [
+                PlanStopCreateDTO(
+                    plan_id=plan_id,
+                    engineer_id=route.engineer_id,
+                    request_id=stop.request_id,
+                    sequence_number=stop.sequence_number,
+                    planned_arrival=stop.arrival,
+                    planned_start=stop.start,
+                    planned_finish=stop.finish,
+                    travel_minutes=stop.travel_minutes,
+                    distance_km=stop.distance_km,
+                    is_locked=False,
+                )
+                for route in calculated.routes
+                for stop in route.stops
+            ]
+        )
+        self._uow.plan_unassigned_requests.add_many(
+            [
+                PlanUnassignedRequestCreateDTO(
+                    plan_id=plan_id,
+                    request_id=item.job_id,
+                    reason=item.reason,
+                )
+                for item in calculated.unassigned
+            ]
+        )
+        return plan_id
+
+    @staticmethod
+    def _to_request_snapshot(request: Request) -> RequestSnapshot:
+        return RequestSnapshot(
+            id=request.id,
+            latitude=request.latitude,
+            longitude=request.longitude,
+            window_start=request.window_start,
+            window_end=request.window_end,
+            service_minutes=request.norm_minutes_without_travel,
+            priority=request.priority,
+            required_skill=request.required_skill,
+            required_vehicle_type=request.required_vehicle_type,
+        )
+
+    @staticmethod
+    def _to_engineer_snapshot(engineer: EngineerModel) -> EngineerSnapshot:
+        return EngineerSnapshot(
+            id=engineer.id,
+            start_latitude=engineer.start_point_latitude,
+            start_longitude=engineer.start_point_longitude,
+            shift_start=engineer.shift_start,
+            shift_end=engineer.shift_end,
+            skills=frozenset(skill.skill for skill in engineer.skills),
+            vehicle_type=engineer.vehicle_type,
+            is_available=engineer.is_available,
+        )
 
     async def _prepare_region(
         self,

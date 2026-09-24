@@ -21,12 +21,37 @@ timeout_seconds = 15.0
 min_request_interval_seconds = 1.0
 country_codes = "ru"
 
+[routing]
+base_url = "https://router.project-osrm.org"
+profile = "driving"
+timeout_seconds = 60.0
+travel_buffer_multiplier = 1.10
+max_table_coordinates = 100
+
+[dgis]
+base_url = "https://routing.api.2gis.com"
+api_key = ""
+api_version = "2.0"
+timeout_seconds = 60.0
+max_matrix_points = 25
+
 [planning]
 max_file_size_bytes = 10000000
-default_shift_start = "09:00:00"
-default_shift_end = "21:00:00"
+default_shift_start = "10:00:00"
+default_shift_end = "22:00:00"
 default_vehicle_type = "public_transport"
 approval_ttl_minutes = 10
+
+[algorithm]
+emergency_response_minutes = 120
+priority_tier_weight = 1000
+route_candidates_per_engineer = 48
+route_candidate_improvement_rounds = 2
+route_candidates_per_improvement_round = 4
+alns_iterations = 6
+alns_candidates_per_repair = 8
+alns_cluster_fraction = 0.25
+alns_random_seed = 20260924
 
 [logging]
 level = "INFO"
