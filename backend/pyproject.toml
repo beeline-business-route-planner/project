@@ -35,7 +35,10 @@ src = ["src"]
 include = ["src/**/*.py"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W", "B", "C4", "UP", "SIM"]
+select = ["E", "F", "I", "W", "B", "C4", "C90", "UP", "SIM"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 13
 
 [tool.ruff.format]
 quote-style = "double"
