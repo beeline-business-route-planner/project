@@ -32,3 +32,15 @@ async def list_plans(service: FromDishka[PlanService], region: Region) -> list[P
 async def get_plan(service: FromDishka[PlanService], plan_id: uuid.UUID) -> PlanDetailResponse:
     plan = await service.get_by_id(plan_id)
     return PlanDetailResponse.model_validate(plan)
+
+
+@router.post("/{plan_id}/approve", response_model=PlanSummaryResponse)
+async def approve_plan(service: FromDishka[PlanService], plan_id: uuid.UUID) -> PlanSummaryResponse:
+    plan = await service.approve(plan_id)
+    return PlanSummaryResponse.model_validate(plan)
+
+
+@router.post("/{plan_id}/reject", response_model=PlanSummaryResponse)
+async def reject_plan(service: FromDishka[PlanService], plan_id: uuid.UUID) -> PlanSummaryResponse:
+    plan = await service.reject(plan_id)
+    return PlanSummaryResponse.model_validate(plan)
