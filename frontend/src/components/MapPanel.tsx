@@ -110,7 +110,7 @@ export function MapPanel(props: MapPanelProps) {
               key={`${route.engineer_id}-${"stops" in route ? "detailed" : "overview"}`}
               positions={routeLatLngs(route.geometry.coordinates)}
               pathOptions={{
-                color: engineer?.color ?? "#6f4cff",
+                color: engineer?.color ?? "#ffd400",
                 weight: isSelected ? 6 : 3,
                 opacity: props.selectedEngineerId && !isSelected ? 0.18 : isSelected ? 0.95 : 0.62,
                 lineCap: "round",

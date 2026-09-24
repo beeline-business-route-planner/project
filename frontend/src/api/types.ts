@@ -262,3 +262,150 @@ export interface WorkspaceData {
   audit: AuditItem[];
   diff: PlanDiffItem[];
 }
+
+export type BackendRegion = "vostok" | "yugo_vostok" | "yugotsentr";
+export type BackendSkill =
+  | "local_works"
+  | "connection_and_orders"
+  | "emergency_works";
+export type BackendVehicle = "car" | "pedestrian" | "bicycle" | "public_transport";
+
+export interface BackendRequestTile {
+  request_id: string;
+  external_id: number;
+  address: string;
+  district: string;
+  latitude: number | string | null;
+  longitude: number | string | null;
+  window_start: string;
+  window_end: string;
+  priority: number;
+  required_skill: BackendSkill;
+  planned_arrival: string | null;
+  planned_start: string | null;
+  planned_finish: string | null;
+  sequence_number: number | null;
+  travel_minutes: number | null;
+  distance_km: number | string | null;
+  is_locked: boolean;
+  assigned_engineer: { engineer_id: string; name: string } | null;
+  engineer_id?: string | null;
+  unassigned_reason: string | null;
+}
+
+export interface BackendPlanMetrics {
+  assigned_requests_count: number;
+  unassigned_requests_count: number;
+  engineers_used_count: number;
+  available_engineers_count: number;
+  total_mileage_km: number | string;
+  total_work_minutes: number;
+  total_travel_minutes: number;
+  average_workload_without_travel: number | string;
+  average_workload_with_travel: number | string;
+  average_used_workload_without_travel: number | string;
+  average_used_workload_with_travel: number | string;
+  min_workload_with_travel: number | string;
+  max_workload_with_travel: number | string;
+}
+
+export interface BackendEngineerTile {
+  engineer_id: string;
+  name: string;
+  vehicle_type: BackendVehicle;
+  shift_start: string;
+  shift_end: string;
+  start_latitude: number | string | null;
+  start_longitude: number | string | null;
+  assigned_requests_count: number;
+  route_distance_km: number | string;
+  workload_without_travel: number | string;
+  workload_with_travel: number | string;
+  stops: BackendRequestTile[];
+}
+
+export interface BackendPlanDiff {
+  requests: Array<{
+    request_id: string;
+    changes: string[];
+    before: BackendRequestTile | null;
+    after: BackendRequestTile | null;
+  }>;
+}
+
+export interface BackendPlanDetail {
+  id: string;
+  region: BackendRegion;
+  planning_date: string;
+  kind: "initial" | "replan" | "event_replan";
+  approval_status: "pending" | "approved" | "rejected";
+  created_at: string;
+  approved_at: string | null;
+  rejected_at: string | null;
+  approval_deadline: string | null;
+  is_current: boolean;
+  can_approve: boolean;
+  can_reject: boolean;
+  calculation_cutoff_at: string;
+  based_on_plan_id: string | null;
+  triggered_by_event_id: string | null;
+  metrics: BackendPlanMetrics;
+  request_groups: Array<{ group: string; requests: BackendRequestTile[] }>;
+  engineers: BackendEngineerTile[];
+  diff: BackendPlanDiff | null;
+}
+
+export interface BackendPlanSummary {
+  id: string;
+  region: BackendRegion;
+  planning_date: string;
+  kind: "initial" | "replan" | "event_replan";
+  approval_status: "pending" | "approved" | "rejected";
+  created_at: string;
+  approved_at: string | null;
+  rejected_at: string | null;
+  approval_deadline: string | null;
+  based_on_plan_id: string | null;
+  triggered_by_event_id: string | null;
+  is_current: boolean;
+  assigned_requests_count: number;
+  unassigned_requests_count: number;
+  engineers_used_count: number;
+  total_mileage_km: number | string;
+}
+
+export interface BackendEngineerDetail {
+  id: string;
+  name: string;
+  region: BackendRegion;
+  start_point_address: string;
+  start_point_latitude: number | string | null;
+  start_point_longitude: number | string | null;
+  shift_start: string;
+  shift_end: string;
+  skills: BackendSkill[];
+  vehicle_type: BackendVehicle;
+  is_available: boolean;
+  created_at: string;
+}
+
+export interface BackendRequestDetail {
+  id: string;
+  external_id: number;
+  type_bk: string;
+  type_hd: string;
+  region: BackendRegion;
+  district: string;
+  address: string;
+  latitude: number | string | null;
+  longitude: number | string | null;
+  window_start: string;
+  window_end: string;
+  norm_minutes: number;
+  norm_minutes_without_travel: number;
+  priority: number;
+  required_skill: BackendSkill;
+  required_vehicle_type: BackendVehicle | null;
+  status: "not_sent" | "sent" | "on_the_way" | "in_progress" | "done" | "cancelled" | "overdue";
+  created_at: string;
+}

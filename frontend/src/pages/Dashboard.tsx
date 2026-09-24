@@ -40,6 +40,7 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>("req-02");
   const [selectedEngineerId, setSelectedEngineerId] = useState<string | null>("eng-01");
   const [urgentOpen, setUrgentOpen] = useState(false);
+  const [availableOnly, setAvailableOnly] = useState(false);
 
   const selectedRequest = data.requests.find((item) => item.id === selectedRequestId) ?? null;
   const selectedEngineer = data.engineers.find((item) => item.id === selectedEngineerId) ?? null;
@@ -53,9 +54,12 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
   }, [data.requests, search, statusFilter]);
   const filteredEngineers = useMemo(() => {
     const term = search.trim().toLocaleLowerCase("ru");
-    return data.engineers.filter((engineer) => !term || [engineer.name, engineer.external_code]
-      .some((value) => value.toLocaleLowerCase("ru").includes(term)));
-  }, [data.engineers, search]);
+    return data.engineers.filter((engineer) => {
+      const matchesSearch = !term || [engineer.name, engineer.external_code]
+        .some((value) => value.toLocaleLowerCase("ru").includes(term));
+      return matchesSearch && (!availableOnly || engineer.status !== "unavailable");
+    });
+  }, [availableOnly, data.engineers, search]);
 
   const selectRequest = (requestId: string) => {
     const request = data.requests.find((item) => item.id === requestId);
@@ -106,7 +110,7 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
             <label className="search-field"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={tab === "requests" ? "ID, адрес или район" : "Имя или код"} /></label>
             {tab === "requests" ? (
               <label className="filter-button"><Filter size={15} /><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as RequestStatus | "all")}><option value="all">Все</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            ) : <button className="filter-button"><SlidersHorizontal size={15} /></button>}
+            ) : <button className={`filter-button ${availableOnly ? "active" : ""}`} onClick={() => setAvailableOnly((current) => !current)} aria-pressed={availableOnly} title={availableOnly ? "Показать всех инженеров" : "Показать только доступных инженеров"}><SlidersHorizontal size={15} /><span>{availableOnly ? "Доступные" : "Все"}</span></button>}
           </div>
 
           <div className="scroll-list">
@@ -122,7 +126,7 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
             )) : filteredEngineers.map((engineer) => (
               <button key={engineer.id} className={`engineer-row ${selectedEngineerId === engineer.id ? "selected" : ""}`} onClick={() => selectEngineer(engineer.id)}>
                 <Avatar name={engineer.name} color={engineer.color} />
-                <div><strong>{engineer.name}</strong><span>{engineer.external_code} · {transportLabels[engineer.transport]}</span><div className="skill-dots">{engineer.skills.map((skill) => <i key={skill} title={skillLabels[skill]}><SkillIcon skill={skill} size={12} /></i>)}</div></div>
+                <div><strong>{engineer.name}</strong><span>{engineer.external_code} · {transportLabels[engineer.transport]}</span><div className="skill-dots">{engineer.skills.map((skill) => <i key={skill} data-tooltip={skillLabels[skill]} aria-label={`Квалификация: ${skillLabels[skill]}`}><SkillIcon skill={skill} size={12} /></i>)}</div></div>
                 <aside><b>{engineer.request_ids.length}</b><span>заявок</span><em>{Math.round(engineer.load_minutes / 480 * 100)}%</em></aside>
               </button>
             ))}

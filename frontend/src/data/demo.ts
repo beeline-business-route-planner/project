@@ -48,7 +48,7 @@ export const demoEngineers: Engineer[] = [
     request_ids: ["req-01", "req-02", "req-03"],
     load_minutes: 336,
     distance_meters: 27800,
-    color: "#6f4cff",
+    color: "#ffd400",
   },
   {
     id: "eng-02",
