@@ -1,12 +1,19 @@
 import uuid
+from datetime import datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from src.core.algorithm.distribution import DistributionPlanner
 from src.core.algorithm.dto import AlgorithmPlanResult, EngineerContext, Job
 from src.core.algorithm.enums import DistributionMode
 from src.core.algorithm.exc import MissingCoordinatesError
 from src.core.algorithm.strategies import LayeredExactStateGraph
-from src.core.db.dto import PlanCreateDTO, PlanStopCreateDTO, PlanUnassignedRequestCreateDTO
+from src.core.db.dto import (
+    PlanCreateDTO,
+    PlanEngineerStateCreateDTO,
+    PlanStopCreateDTO,
+    PlanUnassignedRequestCreateDTO,
+)
 from src.core.db.enums import PlanKind, Region
 from src.core.db.models import Engineer, Request
 from src.core.db.uow import UnitOfWork
@@ -57,17 +64,34 @@ class AlgorithmService:
             (stop.distance_km for route in result.routes for stop in route.stops),
             start=Decimal("0"),
         )
+        assigned_requests_count = sum(len(route.stops) for route in result.routes)
+        planning_date = min(request.window_start for request in requests).date()
+        calculation_cutoff_at = datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
         plan_id = self._uow.plans.create(
             PlanCreateDTO(
                 region=region,
+                planning_date=planning_date,
                 upload_id=upload_id,
                 kind=PlanKind.INITIAL,
-                is_baseline=False,
                 based_on_plan_id=None,
                 triggered_by_event_id=None,
+                calculation_cutoff_at=calculation_cutoff_at,
                 total_mileage_km=total_mileage_km,
                 engineers_used_count=len(result.routes),
+                assigned_requests_count=assigned_requests_count,
+                unassigned_requests_count=len(result.unassigned),
             )
+        )
+
+        self._uow.plan_engineer_states.add_many(
+            [
+                PlanEngineerStateCreateDTO(
+                    plan_id=plan_id,
+                    engineer_id=engineer.id,
+                    is_available=engineer.is_available,
+                )
+                for engineer in engineers
+            ]
         )
 
         self._uow.plan_stops.add_many(
@@ -103,7 +127,7 @@ class AlgorithmService:
             region=region,
             engineers_used_count=len(result.routes),
             total_mileage_km=total_mileage_km,
-            assigned_requests_count=sum(len(route.stops) for route in result.routes),
+            assigned_requests_count=assigned_requests_count,
             unassigned_requests_count=len(result.unassigned),
         )
 

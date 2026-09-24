@@ -68,17 +68,10 @@ class PlanningService:
             *(asyncio.to_thread(PlanningWorkbookParser.parse, file) for file in files)
         )
         region_pairs = PlanningWorkbookParser.build_region_pairs(parsed_workbooks)
-        all_external_ids = [
-            request.external_id
-            for pair in region_pairs.values()
-            for request in pair["requests"].requests
-        ]
-        if len(all_external_ids) != len(set(all_external_ids)):
-            raise RepeatedRequestError
-
-        existing_ids = await self._uow.requests.get_existing_external_ids(set(all_external_ids))
-        if existing_ids:
-            raise RepeatedRequestError
+        for pair in region_pairs.values():
+            external_ids = [request.external_id for request in pair["requests"].requests]
+            if len(external_ids) != len(set(external_ids)):
+                raise RepeatedRequestError
 
         prepared_regions = []
         for region in sorted(region_pairs, key=lambda item: item.value):

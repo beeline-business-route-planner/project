@@ -4,8 +4,9 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.core.db.enums import Skill, skill_enum
+from src.core.db.enums import Skill
 from src.core.db.models.base import Base
+from src.core.db.types import skill_enum
 
 
 class EngineerSkill(Base):

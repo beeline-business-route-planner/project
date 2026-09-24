@@ -20,4 +20,5 @@ class EngineerDetailResponse(BaseModel):
     shift_end: datetime
     skills: tuple[Skill, ...]
     vehicle_type: VehicleType
+    is_available: bool
     created_at: datetime

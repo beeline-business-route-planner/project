@@ -79,6 +79,7 @@ class PlanningConfig(BaseModel):
     default_shift_start: time = time(hour=10)
     default_shift_end: time = time(hour=22)
     default_vehicle_type: str = "public_transport"
+    approval_ttl_minutes: int = 10
 
 
 class AlgorithmConfig(BaseModel):

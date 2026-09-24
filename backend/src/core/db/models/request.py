@@ -9,18 +9,22 @@ from sqlalchemy.orm import Mapped, mapped_column
 from src.core.db.enums import (
     ConnectionType,
     Region,
+    RequestStatus,
     RequestTypeBk,
     RequestTypeHd,
     Skill,
     VehicleType,
+)
+from src.core.db.models.base import Base
+from src.core.db.types import (
     connection_type_enum,
     region_enum,
+    request_status_enum,
     request_type_bk_enum,
     request_type_hd_enum,
     skill_enum,
     vehicle_type_enum,
 )
-from src.core.db.models.base import Base
 
 
 class Request(Base):
@@ -48,7 +52,7 @@ class Request(Base):
     upload_id: Mapped[uuid.UUID | None] = mapped_column(
         postgresql.UUID(as_uuid=True), sa.ForeignKey("dataupload.id", ondelete="SET NULL")
     )
-    external_id: Mapped[int] = mapped_column(sa.BigInteger(), unique=True)
+    external_id: Mapped[int] = mapped_column(sa.BigInteger())
 
     type_bk: Mapped[RequestTypeBk] = mapped_column(request_type_bk_enum)
     type_hd: Mapped[RequestTypeHd] = mapped_column(request_type_hd_enum)
@@ -72,10 +76,16 @@ class Request(Base):
 
     required_skill: Mapped[Skill] = mapped_column(skill_enum)
     required_vehicle_type: Mapped[VehicleType | None] = mapped_column(vehicle_type_enum)
+    status: Mapped[RequestStatus] = mapped_column(
+        request_status_enum, default=RequestStatus.NOT_SENT
+    )
 
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(), server_default=sa.func.now())
     updated_at: Mapped[datetime] = mapped_column(
         sa.DateTime(), server_default=sa.func.now(), onupdate=sa.func.now()
     )
 
-    __table_args__ = (sa.CheckConstraint("priority between 1 and 3", name="ck_request_priority"),)
+    __table_args__ = (
+        sa.CheckConstraint("priority between 1 and 3", name="ck_request_priority"),
+        sa.UniqueConstraint("upload_id", "external_id", name="uq_request_upload_external_id"),
+    )

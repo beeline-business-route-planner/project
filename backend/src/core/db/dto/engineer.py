@@ -29,6 +29,7 @@ class EngineerDTO(BaseDTO):
     shift_end: datetime
     skills: tuple[Skill, ...]
     vehicle_type: VehicleType
+    is_available: bool
     created_at: datetime
 
     @classmethod
@@ -44,5 +45,6 @@ class EngineerDTO(BaseDTO):
             shift_end=obj.shift_end,
             skills=tuple(sorted((s.skill for s in obj.skills), key=lambda skill: skill.value)),
             vehicle_type=obj.vehicle_type,
+            is_available=obj.is_available,
             created_at=obj.created_at,
         )

@@ -6,9 +6,10 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.core.db.enums import Region, VehicleType, region_enum, vehicle_type_enum
+from src.core.db.enums import Region, VehicleType
 from src.core.db.models.base import Base
 from src.core.db.models.engineer_skill import EngineerSkill
+from src.core.db.types import region_enum, vehicle_type_enum
 
 
 class Engineer(Base):
@@ -32,6 +33,7 @@ class Engineer(Base):
 
     skills: Mapped[list[EngineerSkill]] = relationship(cascade="all, delete-orphan")
     vehicle_type: Mapped[VehicleType] = mapped_column(vehicle_type_enum)
+    is_available: Mapped[bool] = mapped_column(sa.Boolean(), default=True)
 
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(), server_default=sa.func.now())
     updated_at: Mapped[datetime] = mapped_column(
