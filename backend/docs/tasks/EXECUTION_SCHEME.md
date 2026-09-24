@@ -23,8 +23,8 @@ BACKEND A                    BACKEND B                    ALGORITHM
                                  |
 ======================= ВОЛНА 1: ПАРАЛЛЕЛЬНО =========================
     |                            |                            |
-    | T01                       | T02                        | A01
-    | lifecycle persistence     | pure diff engine           | initial + cutoff
+    | T01                       | T02                        | A00 -> A01
+    | lifecycle persistence     | pure diff engine           | foundation, initial
     |                            |                            |
     |                            |                            | A02
     |                            |                            | baseline
@@ -110,6 +110,7 @@ sequenceDiagram
     and Backend B
         BB->>BB: T02: pure diff engine
     and Algorithm
+        ALG->>ALG: A00: pure foundation
         ALG->>ALG: A01: initial + cutoff
         ALG->>ALG: A02: baseline
     end
@@ -181,7 +182,7 @@ sequenceDiagram
 | Этап | Backend A | Backend B | Algorithm | Условие перехода |
 |---|---|---|---|---|
 | Старт | Выполняет `T00` | Ревьюит и повторяет smoke | Ждёт | `T00` в общей ветке |
-| Волна 1 | `T01` persistence | `T02` diff | `A01 → A02` | Backend-задачи независимы; Algorithm полностью отдельно |
+| Волна 1 | `T01` persistence | `T02` diff | `A00 → A01 → A02` | Backend-задачи независимы; Algorithm полностью отдельно |
 | `G01` | Интегрирует | Ревьюит | Продолжает без остановки | T01+T02 совместимы, backend DTO зафиксированы |
 | Волна 2 | `T03` initial | `T04` decisions/read | Заканчивает A01/A02, начинает A03 | Три параллельных потока |
 | `G02` | Интегрирует initial | Проверяет lifecycle | Передаёт A01/A02 | Полный initial E2E работает |
