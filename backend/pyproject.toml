@@ -19,6 +19,7 @@ dependencies = [
     "python-multipart>=0.0.32",
     "sqlalchemy>=2.0.51",
     "types-aioboto3[s3]>=15.5.0",
+    "tzdata>=2026.4",
     "uvicorn>=0.51.0",
 ]
 
