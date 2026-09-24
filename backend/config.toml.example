@@ -21,6 +21,13 @@ timeout_seconds = 15.0
 min_request_interval_seconds = 1.0
 country_codes = "ru"
 
+[dgis]
+base_url = "https://routing.api.2gis.com"
+api_key = ""
+api_version = "2.0"
+timeout_seconds = 60.0
+max_matrix_points = 25
+
 [planning]
 max_file_size_bytes = 10000000
 default_shift_start = "09:00:00"

@@ -74,6 +74,14 @@ class RoutingConfig(BaseModel):
     max_table_coordinates: int = 100
 
 
+class DgisConfig(BaseModel):
+    base_url: str = "https://routing.api.2gis.com"
+    api_key: str = ""
+    api_version: str = "2.0"
+    timeout_seconds: float = 60.0
+    max_matrix_points: int = 25
+
+
 class PlanningConfig(BaseModel):
     max_file_size_bytes: int = 10_000_000
     default_shift_start: time = time(hour=10)
@@ -112,6 +120,7 @@ class Config(BaseSettings):
     s3: S3Config = Field(default_factory=S3Config)
     geocoding: GeocodingConfig = Field(default_factory=GeocodingConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
+    dgis: DgisConfig = Field(default_factory=DgisConfig)
     planning: PlanningConfig = Field(default_factory=PlanningConfig)
     algorithm: AlgorithmConfig = Field(default_factory=AlgorithmConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

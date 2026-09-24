@@ -15,6 +15,7 @@ from src.config import cfg
 from src.core.di import (
     AlgorithmProvider,
     DbProvider,
+    DgisProvider,
     EngineersProvider,
     GeocodingProvider,
     PlanningProvider,
@@ -34,6 +35,7 @@ container = make_async_container(
     S3Provider(),
     GeocodingProvider(),
     RoutingProvider(),
+    DgisProvider(),
     AlgorithmProvider(),
     PlanningProvider(),
     PlansProvider(),
