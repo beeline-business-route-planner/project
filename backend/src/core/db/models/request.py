@@ -82,7 +82,7 @@ class Request(Base):
 
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(), server_default=sa.func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(), server_default=sa.func.now(), onupdate=sa.func.now()
+        sa.DateTime(), server_default=sa.func.now(), onupdate=sa.func.clock_timestamp()
     )
 
     __table_args__ = (

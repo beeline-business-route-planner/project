@@ -31,5 +31,8 @@ class UnitOfWork:
     async def commit(self) -> None:
         await self._session.commit()
 
+    async def flush(self) -> None:
+        await self._session.flush()
+
     async def rollback(self) -> None:
         await self._session.rollback()

@@ -10,6 +10,7 @@ from src.api.plans.diff_dto import (
     SnapshotRequestDTO,
 )
 from src.api.plans.dto import (
+    BaselineMetricsDTO,
     EngineerCardDTO,
     EngineerTileDTO,
     PlanDetailDTO,
@@ -29,6 +30,7 @@ class PlanPresenter:
         is_current: bool,
         approval_deadline: datetime | None,
         diff: PlanDiffDTO | None,
+        baseline_metrics: BaselineMetricsDTO | None,
         default_shift_start: time,
         default_shift_end: time,
     ) -> PlanDetailDTO:
@@ -55,6 +57,7 @@ class PlanPresenter:
             based_on_plan_id=snapshot.based_on_plan_id,
             triggered_by_event_id=snapshot.triggered_by_event_id,
             metrics=snapshot.metrics,
+            baseline_metrics=baseline_metrics,
             request_groups=PlanPresenter._group_requests(
                 tiles, default_shift_start, default_shift_end
             ),

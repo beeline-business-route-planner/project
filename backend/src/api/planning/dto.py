@@ -1,6 +1,8 @@
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import date, datetime, time
+from decimal import Decimal
+from typing import Literal
 
 from src.core.db.enums import (
     ConnectionType,
@@ -20,18 +22,31 @@ class PlanningUploadFile:
 
 
 @dataclass(frozen=True)
-class PlanningImportResult:
-    upload_id: uuid.UUID
+class InitialPlanSummary:
+    id: uuid.UUID
     region: Region
-    requests_count: int
-    engineers_count: int
-    plan_id: uuid.UUID | None = None
+    planning_date: date
+    created_at: datetime
+    approval_deadline: datetime
+    assigned_requests_count: int
+    unassigned_requests_count: int
+    engineers_used_count: int
+    total_mileage_km: Decimal
+
+
+@dataclass(frozen=True)
+class PlanningRegionResult:
+    region: Region
+    status: Literal["success", "error"]
+    plan_summary: InitialPlanSummary | None = None
+    error_code: str | None = None
+    error_detail: str | None = None
 
 
 @dataclass(frozen=True)
 class InitialPlanningResult:
-    status: str
-    imports: tuple[PlanningImportResult, ...]
+    status: Literal["success", "partial_success", "error"]
+    regions: tuple[PlanningRegionResult, ...]
 
 
 @dataclass(frozen=True)

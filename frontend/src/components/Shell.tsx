@@ -8,8 +8,6 @@ import {
   History,
   LayoutDashboard,
   Menu,
-  PanelLeftClose,
-  PanelLeftOpen,
   RefreshCw,
   Route,
   Settings,
@@ -46,9 +44,11 @@ function ConnectionBadge({ source }: { source: DataSource }) {
 
 export function Shell({ page, onPageChange, planner, children }: ShellProps) {
   const { data } = planner;
-  const [sidebarPinned, setSidebarPinned] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [sidebarDismissed, setSidebarDismissed] = useState(false);
   const [utilityPanel, setUtilityPanel] = useState<UtilityPanel | null>(null);
   const [notificationsRead, setNotificationsRead] = useState(false);
+  const [pushVisible, setPushVisible] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(() => localStorage.getItem("planner-reduced-motion") === "true");
   const [largeUi, setLargeUi] = useState(() => localStorage.getItem("planner-large-ui") !== "false");
   const scenario = data.scenarios.find((item) => item.id === data.scenarioId) ?? data.scenarios[0];
@@ -73,24 +73,28 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [utilityPanel]);
 
+  useEffect(() => {
+    if (!notificationCount) return;
+    const showTimer = window.setTimeout(() => setPushVisible(true), 650);
+    const hideTimer = window.setTimeout(() => setPushVisible(false), 4650);
+    return () => {
+      window.clearTimeout(showTimer);
+      window.clearTimeout(hideTimer);
+    };
+  }, [notificationCount]);
+
   const openUtility = (panel: UtilityPanel) => {
+    setPushVisible(false);
+    setSidebarDismissed(true);
     setUtilityPanel(panel);
     if (panel === "notifications") setNotificationsRead(true);
   };
 
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${sidebarPinned ? "expanded pinned" : ""}`}>
+      <aside className={`sidebar ${mobileSidebarOpen ? "mobile-open" : ""} ${sidebarDismissed ? "dismissed" : ""}`} onMouseLeave={() => { setMobileSidebarOpen(false); setSidebarDismissed(false); }}>
         <div className="brand">
           <BeelineLogo />
-          <button
-            className="sidebar-toggle"
-            onClick={() => setSidebarPinned((current) => !current)}
-            aria-label={sidebarPinned ? "Свернуть меню" : "Развернуть меню"}
-            title={sidebarPinned ? "Свернуть меню" : "Развернуть меню"}
-          >
-            {sidebarPinned ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}
-          </button>
         </div>
 
         <nav className="main-nav" aria-label="Основная навигация">
@@ -98,7 +102,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
           {nav.map((item) => {
             const Icon = item.icon;
             return (
-              <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => onPageChange(item.id)}>
+              <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => { onPageChange(item.id); setMobileSidebarOpen(false); setSidebarDismissed(true); }}>
                 <Icon size={18} />
                 <span className="nav-label">{item.label}</span>
                 {item.id === "planning" && data.plans.some((plan) => plan.status === "draft") ? <em>1</em> : null}
@@ -120,7 +124,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
 
       <div className="app-main">
         <header className="topbar">
-          <button className="icon-button mobile-menu" aria-label="Открыть меню" onClick={() => setSidebarPinned(true)}><Menu size={20} /></button>
+          <button className="icon-button mobile-menu" aria-label="Открыть меню" onClick={() => setMobileSidebarOpen((current) => !current)}><Menu size={20} /></button>
           <div className="context-selects">
             <label>
               <span>Участок</span>
@@ -167,6 +171,18 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
         </div>
       ) : null}
       {planner.notice ? <div className="toast"><span className="toast-check">✓</span>{planner.notice}</div> : null}
+
+      {pushVisible && !utilityPanel ? (
+        <div className="push-notification" role="status" aria-live="polite">
+          <span className="push-icon"><Bell size={18} /></span>
+          <button className="push-main" onClick={() => openUtility("notifications")}>
+            <strong>Есть события рабочего дня</strong>
+            <span>{overdueCount ? `${overdueCount} просрочена · ` : ""}{unassignedCount ? `${unassignedCount} без назначения` : `${draftCount} черновик плана`}</span>
+          </button>
+          <button className="push-close" onClick={() => setPushVisible(false)} aria-label="Закрыть уведомление"><X size={16} /></button>
+          <i className="push-progress" />
+        </div>
+      ) : null}
 
       {utilityPanel ? (
         <div className="utility-layer" onMouseDown={() => setUtilityPanel(null)}>

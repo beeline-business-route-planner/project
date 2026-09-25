@@ -38,7 +38,20 @@ class EngineerRepository(BaseRepository[Engineer]):
         )
         return list(result.all())
 
-    def add_many(self, engineers: list[EngineerCreateDTO]) -> None:
+    async def get_by_ids_for_update(self, engineer_ids: set[uuid.UUID]) -> list[Engineer]:
+        if not engineer_ids:
+            return []
+        result = await self._session.scalars(
+            select(Engineer)
+            .where(Engineer.id.in_(engineer_ids))
+            .order_by(Engineer.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return list(result.all())
+
+    def add_many(self, engineers: list[EngineerCreateDTO]) -> list[Engineer]:
+        models: list[Engineer] = []
         for engineer in engineers:
             model = Engineer()
             model.upload_id = engineer.upload_id
@@ -56,3 +69,5 @@ class EngineerRepository(BaseRepository[Engineer]):
                 model.skills.append(engineer_skill)
             model.vehicle_type = engineer.vehicle_type
             self.add(model)
+            models.append(model)
+        return models
