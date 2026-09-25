@@ -2,6 +2,7 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -272,10 +273,12 @@ class PlanningService:
                 unassigned_requests_count=baseline.metrics.unassigned_requests_count,
                 engineers_used_count=baseline.metrics.engineers_used_count,
                 total_mileage_km=baseline.metrics.total_mileage_km,
-                average_workload_with_travel=baseline.metrics.average_utilization_with_travel,
+                average_workload_with_travel=(
+                    baseline.metrics.average_utilization_with_travel * Decimal("100")
+                ).quantize(Decimal("0.01")),
                 average_workload_without_travel=(
-                    baseline.metrics.average_utilization_without_travel
-                ),
+                    baseline.metrics.average_utilization_without_travel * Decimal("100")
+                ).quantize(Decimal("0.01")),
                 algorithm_version=baseline.algorithm_version,
             )
         )
