@@ -222,17 +222,18 @@ class PlanService:
         baseline_metrics = None
         if plan.kind == PlanKind.INITIAL:
             baseline = await self._uow.baseline_results.get_by_initial_plan_id(plan.id)
-            if baseline is None:
+            if baseline is None and plan.approval_status != ApprovalStatus.APPROVED:
                 raise ValueError("У initial-кандидата отсутствует BaselineResult")
-            baseline_metrics = BaselineMetricsDTO(
-                assigned_requests_count=baseline.assigned_requests_count,
-                unassigned_requests_count=baseline.unassigned_requests_count,
-                engineers_used_count=baseline.engineers_used_count,
-                total_mileage_km=baseline.total_mileage_km,
-                average_workload_with_travel=baseline.average_workload_with_travel,
-                average_workload_without_travel=baseline.average_workload_without_travel,
-                algorithm_version=baseline.algorithm_version,
-            )
+            if baseline is not None:
+                baseline_metrics = BaselineMetricsDTO(
+                    assigned_requests_count=baseline.assigned_requests_count,
+                    unassigned_requests_count=baseline.unassigned_requests_count,
+                    engineers_used_count=baseline.engineers_used_count,
+                    total_mileage_km=baseline.total_mileage_km,
+                    average_workload_with_travel=baseline.average_workload_with_travel,
+                    average_workload_without_travel=baseline.average_workload_without_travel,
+                    algorithm_version=baseline.algorithm_version,
+                )
         if plan.kind != PlanKind.INITIAL:
             if plan.based_on_plan_id is None:
                 raise ValueError("Replan must reference its immutable base plan")
