@@ -233,6 +233,14 @@ class InitialEndToEndTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending.baseline_metrics.algorithm_version, "baseline-v2")
         self.assertEqual(pending.baseline_metrics.assigned_requests_count, 1)
         self.assertEqual(pending.metrics.assigned_requests_count, 1)
+        self.assertEqual(
+            pending.baseline_metrics.average_workload_with_travel,
+            pending.metrics.average_workload_with_travel,
+        )
+        self.assertEqual(
+            pending.baseline_metrics.average_workload_without_travel,
+            pending.metrics.average_workload_without_travel,
+        )
         self.assertEqual(pending.planning_date, today)
         self.assertGreater(pending.calculation_cutoff_at.time(), time(0))
         stops = [stop for engineer in pending.engineers for stop in engineer.stops]
@@ -324,3 +332,14 @@ class InitialEndToEndTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 await session.scalar(select(func.count()).select_from(BaselineResult)), 7
             )
+
+        # T01 migration kept older approved initial plans without baseline rows.
+        async with self.sessions() as session:
+            baseline = await session.scalar(
+                select(BaselineResult).where(BaselineResult.initial_plan_id == east_second)
+            )
+            self.assertIsNotNone(baseline)
+            await session.delete(baseline)
+            await session.commit()
+        self.assertIsNone((await self.detail(east_second)).baseline_metrics)
+        self.assertIsNone((await self.current(Region.VOSTOK, today)).baseline_metrics)
