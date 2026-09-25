@@ -88,6 +88,17 @@ class EngineerTileDTO:
 
 
 @dataclass(frozen=True)
+class BaselineMetricsDTO:
+    assigned_requests_count: int
+    unassigned_requests_count: int
+    engineers_used_count: int
+    total_mileage_km: Decimal
+    average_workload_with_travel: Decimal
+    average_workload_without_travel: Decimal
+    algorithm_version: str
+
+
+@dataclass(frozen=True)
 class PlanDetailDTO:
     """Полный ответ на `GET /api/plans/current`/`GET /api/plans/{plan_id}`."""
 
@@ -107,6 +118,7 @@ class PlanDetailDTO:
     based_on_plan_id: uuid.UUID | None
     triggered_by_event_id: uuid.UUID | None
     metrics: PlanMetricsDTO
+    baseline_metrics: BaselineMetricsDTO | None
     request_groups: tuple[RequestGroupDTO, ...]
     engineers: tuple[EngineerTileDTO, ...]
     diff: PlanDiffDTO | None

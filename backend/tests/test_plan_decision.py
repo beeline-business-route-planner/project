@@ -5,20 +5,21 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from src.api.exc.plans import PlanStopAlreadyStartedError
-from src.api.plans.approval_policy import InitialApprovalPolicy
 from src.api.plans.service import PlanService
 from src.config import cfg
+from src.core.utils.initial_approval import InitialApprovalPolicy
 
 
 class InitialApprovalPolicyTest(unittest.TestCase):
     def test_deadline_is_inclusive_and_uses_config(self) -> None:
         created_at = datetime(2026, 9, 24, 10)
-        plan = SimpleNamespace(created_at=created_at)
         deadline = created_at + timedelta(minutes=cfg.planning.approval_ttl_minutes)
 
-        self.assertEqual(InitialApprovalPolicy.deadline(plan), deadline)
-        self.assertTrue(InitialApprovalPolicy.is_valid(plan, deadline))
-        self.assertFalse(InitialApprovalPolicy.is_valid(plan, deadline + timedelta(microseconds=1)))
+        self.assertEqual(InitialApprovalPolicy.deadline(created_at), deadline)
+        self.assertTrue(InitialApprovalPolicy.is_valid(created_at, deadline))
+        self.assertFalse(
+            InitialApprovalPolicy.is_valid(created_at, deadline + timedelta(microseconds=1))
+        )
 
     def test_moscow_cutoff_is_compared_to_utc_database_timestamps(self) -> None:
         self.assertEqual(

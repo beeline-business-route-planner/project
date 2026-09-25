@@ -166,6 +166,16 @@ class PlanDiff(ApiModel):
     requests: list[RequestDiff]
 
 
+class BaselineMetrics(ApiModel):
+    assigned_requests_count: int
+    unassigned_requests_count: int
+    engineers_used_count: int
+    total_mileage_km: Decimal
+    average_workload_with_travel: Decimal
+    average_workload_without_travel: Decimal
+    algorithm_version: str
+
+
 class PlanDetailResponse(ApiModel):
     id: uuid.UUID
     region: Region
@@ -183,6 +193,7 @@ class PlanDetailResponse(ApiModel):
     based_on_plan_id: uuid.UUID | None
     triggered_by_event_id: uuid.UUID | None
     metrics: PlanMetrics
+    baseline_metrics: BaselineMetrics | None
     request_groups: list[RequestGroup]
     engineers: list[EngineerTile]
     diff: PlanDiff | None
