@@ -146,8 +146,7 @@ class PlanPresenter:
             return RequestGroupKey.UNASSIGNED
         if tile.priority == RequestPriority.EMERGENCY:
             return RequestGroupKey.EMERGENCY
-        earliest_bucket_start = default_shift_start.hour
-        latest_bucket_start = default_shift_end.hour - 2
+        del default_shift_start, default_shift_end
         bucket_start = tile.planned_start.hour - tile.planned_start.hour % 2
-        bucket_start = max(earliest_bucket_start, min(latest_bucket_start, bucket_start))
+        bucket_start = max(10, min(20, bucket_start))
         return RequestGroupKey(f"{bucket_start}-{bucket_start + 2}")

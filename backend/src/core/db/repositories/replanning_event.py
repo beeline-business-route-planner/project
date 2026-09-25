@@ -12,6 +12,12 @@ from src.core.db.repositories.base import BaseRepository
 class ReplanningEventRepository(BaseRepository[ReplanningEvent]):
     model = ReplanningEvent
 
+    async def get_by_request_id(self, request_id: uuid.UUID) -> ReplanningEvent | None:
+        result = await self._session.scalars(
+            select(ReplanningEvent).where(ReplanningEvent.request_id == request_id).limit(1)
+        )
+        return result.first()
+
     async def get_pending(self, region: Region, planning_date: date) -> ReplanningEvent | None:
         result = await self._session.scalars(
             select(ReplanningEvent)

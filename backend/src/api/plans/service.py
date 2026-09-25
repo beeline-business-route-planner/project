@@ -151,8 +151,22 @@ class PlanService:
             {state.engineer_id for state in states}
         )
         available_by_id = {engineer.id: engineer.is_available for engineer in engineers}
+        event_id = getattr(plan, "triggered_by_event_id", None)
+        event = await self._get_event(event_id) if event_id is not None else None
         if len(available_by_id) != len(states) or any(
-            available_by_id[state.engineer_id] != state.is_available for state in states
+            available_by_id[state.engineer_id]
+            != (
+                not state.is_available
+                if event is not None
+                and event.engineer_id == state.engineer_id
+                and event.event_type
+                in (
+                    ReplanningEventType.ENGINEER_UNAVAILABLE,
+                    ReplanningEventType.ENGINEER_AVAILABLE,
+                )
+                else state.is_available
+            )
+            for state in states
         ):
             raise PlanStateChangedError
 

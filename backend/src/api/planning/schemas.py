@@ -3,9 +3,19 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from src.core.db.enums import ApprovalStatus, PlanKind, Region
+from src.core.db.enums import (
+    ApprovalStatus,
+    ConnectionType,
+    PlanKind,
+    Region,
+    ReplanningEventType,
+    RequestTypeBk,
+    RequestTypeHd,
+    Skill,
+    VehicleType,
+)
 from src.core.utils.time import as_utc
 
 
@@ -84,3 +94,80 @@ class ReplanRegionResponse(BaseModel):
 class ReplanPlanningResponse(BaseModel):
     status: Literal["success", "partial_success", "error"]
     regions: list[ReplanRegionResponse]
+
+
+class UrgentRequestPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    external_id: int = Field(gt=0)
+    type_bk: RequestTypeBk
+    type_hd: RequestTypeHd
+    district: str = Field(min_length=1, max_length=255)
+    address: str = Field(min_length=1, max_length=512)
+    connection_type: ConnectionType | None = None
+    is_gigabit: bool
+    window_start: datetime
+    window_end: datetime
+    norm_minutes: int = Field(gt=0, le=32767)
+    norm_minutes_without_travel: int = Field(gt=0, le=32767)
+    priority: Literal[1]
+    required_skill: Skill
+    required_vehicle_type: VehicleType | None = None
+
+    @model_validator(mode="after")
+    def validate_window(self) -> UrgentRequestPayload:
+        if self.window_start.tzinfo or self.window_end.tzinfo:
+            raise ValueError("Окно заявки должно быть локальным временем Москвы без timezone")
+        if self.window_end <= self.window_start:
+            raise ValueError("Конец окна должен быть позже начала")
+        if self.norm_minutes_without_travel > self.norm_minutes:
+            raise ValueError("Время работы не может превышать полный норматив")
+        return self
+
+
+class EventPlanningRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    region: Region
+    event_type: ReplanningEventType
+    request_id: uuid.UUID | None = None
+    engineer_id: uuid.UUID | None = None
+    urgent_request: UrgentRequestPayload | None = None
+
+    @model_validator(mode="after")
+    def validate_target(self) -> EventPlanningRequest:
+        if self.event_type == ReplanningEventType.URGENT_REQUEST:
+            valid = (
+                self.urgent_request is not None
+                and self.request_id is None
+                and self.engineer_id is None
+            )
+        elif self.event_type == ReplanningEventType.REQUEST_CANCELLED:
+            valid = (
+                self.request_id is not None
+                and self.engineer_id is None
+                and self.urgent_request is None
+            )
+        else:
+            valid = (
+                self.engineer_id is not None
+                and self.request_id is None
+                and self.urgent_request is None
+            )
+        if not valid:
+            raise ValueError("Укажите ровно один payload для типа события")
+        return self
+
+
+class EventPlanningResponse(BaseModel):
+    event_id: uuid.UUID
+    event_type: ReplanningEventType
+    request_id: uuid.UUID | None
+    engineer_id: uuid.UUID | None
+    occurred_at: datetime
+    plan: ReplanPlanSummaryResponse
+
+    @field_validator("occurred_at")
+    @classmethod
+    def attach_utc(cls, value: datetime) -> datetime:
+        return as_utc(value)
