@@ -20,6 +20,18 @@ class RequestRepository(BaseRepository[Request]):
         result = await self._session.scalars(select(Request).where(Request.id.in_(request_ids)))
         return list(result.all())
 
+    async def get_by_ids_for_update(self, request_ids: set[uuid.UUID]) -> list[Request]:
+        if not request_ids:
+            return []
+        result = await self._session.scalars(
+            select(Request)
+            .where(Request.id.in_(request_ids))
+            .order_by(Request.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return list(result.all())
+
     def add_many(self, requests: list[RequestCreateDTO]) -> list[Request]:
         models: list[Request] = []
         for request in requests:

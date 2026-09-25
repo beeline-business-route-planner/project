@@ -13,6 +13,7 @@ class PlanRepository(BaseRepository[Plan]):
     model = Plan
 
     async def lock_region_day(self, region: Region, planning_date: date) -> None:
+        """Сериализует решения по всем кандидатам одного округа и дня."""
         await self._session.execute(
             text("SELECT pg_advisory_xact_lock(hashtext(:region), :planning_day)"),
             {"region": region.value, "planning_day": planning_date.toordinal()},
@@ -42,7 +43,10 @@ class PlanRepository(BaseRepository[Plan]):
 
     async def get_with_lock(self, plan_id: uuid.UUID) -> Plan | None:
         result = await self._session.scalars(
-            select(Plan).where(Plan.id == plan_id).with_for_update()
+            select(Plan)
+            .where(Plan.id == plan_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return result.first()
 
