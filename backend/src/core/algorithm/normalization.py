@@ -26,6 +26,7 @@ from src.core.algorithm.dto import (
 )
 from src.core.algorithm.exc import AlgorithmInputError, MissingCoordinatesError
 from src.core.db.enums import RequestPriority, RequestStatus
+from src.core.utils.plan_time import latest_departure_at
 
 
 class InitialInputNormalizer:
@@ -220,9 +221,8 @@ class ReplanNormalizer:
     """Делит утверждённый план на неизменяемую историю и вход для пересчёта будущего хвоста.
 
     Остановка фиксируется, если заявка уже в пути, в работе или выполнена либо если
-    инженер по плану к cutoff уже едет к ней: даже при самом позднем выезде
-    (`planned_start - travel`) движение началось раньше cutoff. Это покрывает и правило
-    «плановое начало раньше cutoff». Вместе с ней фиксируются все более ранние остановки того же
+    инженер к cutoff уже должен был выехать к ней даже при самом позднем выезде
+    (`start - travel`). Вместе с ней фиксируются все более ранние остановки того же
     инженера: прожитая история — всегда префикс маршрута. Хвост инженера начинается из
     точки последней зафиксированной остановки не раньше её окончания и cutoff; у инженера
     без истории — из его стартовой точки. Отменённая незафиксированная заявка в хвост не
@@ -332,7 +332,7 @@ class ReplanNormalizer:
                 (
                     index + 1
                     for index, stop in enumerate(stops)
-                    if stop.start - timedelta(minutes=stop.travel_minutes)
+                    if latest_departure_at(stop.start, stop.travel_minutes)
                     < snapshot.calculation_cutoff_at
                     or requests_by_id[stop.request_id].status in started_statuses
                 ),
