@@ -48,10 +48,7 @@ priority_tier_weight = 1000
 route_candidates_per_engineer = 48
 route_candidate_improvement_rounds = 2
 route_candidates_per_improvement_round = 4
-alns_iterations = 6
-alns_candidates_per_repair = 8
-alns_cluster_fraction = 0.25
-alns_random_seed = 20260924
+selection_node_budget = 5000
 
 [logging]
 level = "INFO"

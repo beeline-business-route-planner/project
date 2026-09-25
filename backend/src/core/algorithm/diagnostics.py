@@ -4,8 +4,6 @@ from datetime import datetime
 from time import perf_counter_ns
 
 from src.core.algorithm.dto import (
-    AdaptiveSearchDiagnostics,
-    EjectionSearchDiagnostics,
     LayerDiagnostics,
     SelectionDiagnostics,
     StrategyDiagnostics,
@@ -29,8 +27,6 @@ class AlgorithmDiagnostics:
         self._selection_conflict_prunes_count = 0
         self._selection_bound_prunes_count = 0
         self._graph_runs_count = 0
-        self._ejection_search: EjectionSearchDiagnostics | None = None
-        self._adaptive_search: AdaptiveSearchDiagnostics | None = None
         self._layers: list[LayerDiagnostics] = []
 
     def start(self) -> None:
@@ -77,40 +73,6 @@ class AlgorithmDiagnostics:
         self._selection_visited_nodes_count += visited_nodes_count
         self._selection_conflict_prunes_count += conflict_prunes_count
         self._selection_bound_prunes_count += bound_prunes_count
-
-    def record_adaptive_search(
-        self,
-        *,
-        iterations_count: int,
-        improvements_count: int,
-        generated_candidates_count: int,
-        cache_hits_count: int,
-        cache_misses_count: int,
-        operator_uses: tuple[tuple[str, int], ...],
-    ) -> None:
-        self._adaptive_search = AdaptiveSearchDiagnostics(
-            iterations_count=iterations_count,
-            improvements_count=improvements_count,
-            generated_candidates_count=generated_candidates_count,
-            cache_hits_count=cache_hits_count,
-            cache_misses_count=cache_misses_count,
-            operator_uses=operator_uses,
-        )
-
-    def record_ejection_search(
-        self,
-        *,
-        attempts_count: int,
-        unique_solutions_count: int,
-        added_candidates_count: int,
-        improved: bool,
-    ) -> None:
-        self._ejection_search = EjectionSearchDiagnostics(
-            attempts_count=attempts_count,
-            unique_solutions_count=unique_solutions_count,
-            added_candidates_count=added_candidates_count,
-            improved=improved,
-        )
 
     def add_layer(
         self,
@@ -169,8 +131,6 @@ class AlgorithmDiagnostics:
             total_ms=self._milliseconds(total_ns),
             route_generation_ms=self._milliseconds(self._assignment_ns - self._selection_ns),
             selection=selection,
-            ejection_search=self._ejection_search,
-            adaptive_search=self._adaptive_search,
             layers=tuple(self._layers),
         )
 

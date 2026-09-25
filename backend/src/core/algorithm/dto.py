@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol
 
-from src.core.algorithm.enums import DestroyOperator, DistributionMode
+from src.core.algorithm.enums import DistributionMode
 from src.core.db.enums import Region, Skill, UnassignedReason, VehicleType
 
 
@@ -247,37 +247,6 @@ class CandidateSelectionResult:
 
 
 @dataclass(frozen=True)
-class ImprovementContext:
-    engineers: tuple[Engineer, ...]
-    jobs: tuple[Job, ...]
-    job_positions: dict[uuid.UUID, int]
-    mode: DistributionMode
-
-
-@dataclass(frozen=True)
-class AdaptiveSearchStats:
-    iterations_count: int
-    improvements_count: int
-    generated_candidates_count: int
-    cache_hits_count: int
-    cache_misses_count: int
-    operator_uses: tuple[tuple[DestroyOperator, int], ...]
-
-
-@dataclass(frozen=True)
-class AdaptiveSearchResult:
-    selection: CandidateSelectionResult
-    candidate_groups: tuple[tuple[RouteCandidate, ...], ...]
-    stats: AdaptiveSearchStats
-
-
-@dataclass(frozen=True)
-class EjectionSearchResult:
-    solutions: tuple[dict[uuid.UUID, tuple[uuid.UUID, ...]], ...]
-    attempts_count: int
-
-
-@dataclass(frozen=True)
 class LayerDiagnostics:
     """Агрегаты поиска по графу для одного инженера и одного слоя."""
 
@@ -310,24 +279,6 @@ class SelectionDiagnostics:
 
 
 @dataclass(frozen=True)
-class AdaptiveSearchDiagnostics:
-    iterations_count: int
-    improvements_count: int
-    generated_candidates_count: int
-    cache_hits_count: int
-    cache_misses_count: int
-    operator_uses: tuple[tuple[str, int], ...]
-
-
-@dataclass(frozen=True)
-class EjectionSearchDiagnostics:
-    attempts_count: int
-    unique_solutions_count: int
-    added_candidates_count: int
-    improved: bool
-
-
-@dataclass(frozen=True)
 class StrategyDiagnostics:
     """Отчёт о времени и объёме поиска, создаётся только диагностическим прогоном."""
 
@@ -337,8 +288,6 @@ class StrategyDiagnostics:
     total_ms: float
     route_generation_ms: float
     selection: SelectionDiagnostics | None
-    ejection_search: EjectionSearchDiagnostics | None
-    adaptive_search: AdaptiveSearchDiagnostics | None
     layers: tuple[LayerDiagnostics, ...]
 
 

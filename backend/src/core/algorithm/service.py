@@ -4,7 +4,6 @@ from decimal import Decimal
 
 from src.core.algorithm.audit import ResultAuditor
 from src.core.algorithm.diagnostics import AlgorithmDiagnostics
-from src.core.algorithm.distribution import DistributionPlanner
 from src.core.algorithm.dto import (
     DiagnosedPlanningResult,
     Engineer,
@@ -22,9 +21,12 @@ from src.core.algorithm.dto import (
 )
 from src.core.algorithm.enums import AlgorithmVariant
 from src.core.algorithm.exc import AlgorithmAuditError
-from src.core.algorithm.graph import LayeredGraphPlanner
 from src.core.algorithm.materialization import ScheduleMaterializer
 from src.core.algorithm.normalization import InitialInputNormalizer
+from src.core.algorithm.rules import PlanningRules
+from src.core.algorithm.strategies.baseline import BaselinePlanner
+from src.core.algorithm.strategies.graph import LayeredGraphPlanner
+from src.core.algorithm.strategies.greedy import GreedyPlanner
 from src.core.db.enums import UnassignedReason
 
 
@@ -33,7 +35,6 @@ class AlgorithmService:
 
     def __init__(self) -> None:
         self._normalizer = InitialInputNormalizer()
-        self._planner = DistributionPlanner()
         self._materializer = ScheduleMaterializer()
         self._auditor = ResultAuditor()
 
@@ -95,7 +96,7 @@ class AlgorithmService:
             diagnostics.finish_assignment()
         jobs_by_id = {job.id: job for job in planning_input.jobs}
         engineers_by_id = {engineer.id: engineer for engineer in planning_input.engineers}
-        layers_by_request = self._planner.index_layers(planning_input.layers, jobs_by_id)
+        layers_by_request = PlanningRules.index_layers(planning_input.layers, jobs_by_id)
         routes = tuple(
             self._build_route(
                 engineers_by_id[engineer_id],
@@ -144,28 +145,13 @@ class AlgorithmService:
         variant: AlgorithmVariant,
         diagnostics: AlgorithmDiagnostics | None,
     ) -> dict[uuid.UUID, tuple[uuid.UUID, ...]]:
-        if variant == AlgorithmVariant.LAYERED_GRAPH:
-            return LayeredGraphPlanner(
-                greedy_completion=False,
-                adaptive_improvement=False,
-                diagnostics=diagnostics,
-            ).assign(planning_input)
-        if variant == AlgorithmVariant.LAYERED_GRAPH_ALNS:
-            return LayeredGraphPlanner(
-                greedy_completion=False,
-                adaptive_improvement=True,
-                diagnostics=diagnostics,
-            ).assign(planning_input)
-        if variant == AlgorithmVariant.LAYERED_GRAPH_GREEDY:
-            return LayeredGraphPlanner(
-                greedy_completion=True,
-                adaptive_improvement=False,
-                diagnostics=diagnostics,
-            ).assign(planning_input)
-        if variant == AlgorithmVariant.GREEDY:
-            return self._planner.assign(planning_input)
-        if variant == AlgorithmVariant.BASELINE:
-            return self._planner.assign_baseline(planning_input)
+        match variant:
+            case AlgorithmVariant.LAYERED_GRAPH:
+                return LayeredGraphPlanner(diagnostics).assign(planning_input)
+            case AlgorithmVariant.GREEDY:
+                return GreedyPlanner().assign(planning_input)
+            case AlgorithmVariant.BASELINE:
+                return BaselinePlanner().assign(planning_input)
         raise ValueError(f"Неизвестный вариант алгоритма: {variant}")
 
     def _materialize_final_route(

@@ -96,10 +96,7 @@ class AlgorithmConfig(BaseModel):
     route_candidates_per_engineer: int = 48
     route_candidate_improvement_rounds: int = 2
     route_candidates_per_improvement_round: int = 4
-    alns_iterations: int = 6
-    alns_candidates_per_repair: int = 8
-    alns_cluster_fraction: float = 0.25
-    alns_random_seed: int = 20260924
+    selection_node_budget: int = 5000
 
 
 class LoggingConfig(BaseModel):

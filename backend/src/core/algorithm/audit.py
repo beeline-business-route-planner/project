@@ -2,7 +2,6 @@ import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from src.core.algorithm.distribution import DistributionPlanner
 from src.core.algorithm.dto import (
     Engineer,
     InitialPlanningInput,
@@ -13,13 +12,11 @@ from src.core.algorithm.dto import (
     Stop,
 )
 from src.core.algorithm.exc import AlgorithmAuditError
+from src.core.algorithm.rules import PlanningRules
 
 
 class ResultAuditor:
     """Независимо проверяет жёсткие инварианты материализованного результата."""
-
-    def __init__(self) -> None:
-        self._eligibility = DistributionPlanner()
 
     def audit(self, planning_input: InitialPlanningInput, result: InitialPlanningResult) -> None:
         jobs_by_id = {job.id: job for job in planning_input.jobs}
@@ -102,7 +99,7 @@ class ResultAuditor:
             raise AlgorithmAuditError("Маршрут ссылается на неизвестную заявку")
         if stop.sequence_number != expected_sequence:
             raise AlgorithmAuditError("Нарушена непрерывность sequence_number")
-        if not self._eligibility.eligible(engineer, job):
+        if not PlanningRules.eligible(engineer, job):
             raise AlgorithmAuditError("Нарушено ограничение навыка или транспорта")
         layer = layers_by_request[job.id]
         matching_matrices = [

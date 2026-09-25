@@ -4,8 +4,8 @@ from dataclasses import dataclass
 
 from src.core.algorithm.dto import Engineer, InitialPlanningInput, Job, PlanningLayer, Stop
 from src.core.algorithm.enums import DistributionMode
-from src.core.algorithm.exc import AlgorithmInputError
 from src.core.algorithm.materialization import ScheduleMaterializer
+from src.core.algorithm.rules import PlanningRules
 
 
 @dataclass(frozen=True)
@@ -18,8 +18,8 @@ class _InsertionCandidate:
     projected_service_minutes: int
 
 
-class DistributionPlanner:
-    """Строит маршруты детерминированной вставкой и выполняет greedy completion."""
+class GreedyPlanner:
+    """Жадная вставка: строит маршруты и дозаполняет чужие маршруты остатками."""
 
     def __init__(self) -> None:
         self._materializer = ScheduleMaterializer()
@@ -29,7 +29,7 @@ class DistributionPlanner:
     ) -> dict[uuid.UUID, tuple[uuid.UUID, ...]]:
         jobs_by_id = {job.id: job for job in planning_input.jobs}
         engineers_by_id = {engineer.id: engineer for engineer in planning_input.engineers}
-        layers_by_request = self.index_layers(planning_input.layers, jobs_by_id)
+        layers_by_request = PlanningRules.index_layers(planning_input.layers, jobs_by_id)
         layer_ranks = self._layer_ranks(planning_input.layers)
         routes: dict[uuid.UUID, tuple[uuid.UUID, ...]] = {
             engineer.id: () for engineer in planning_input.engineers
@@ -57,38 +57,6 @@ class DistributionPlanner:
             engineer_id: request_ids for engineer_id, request_ids in routes.items() if request_ids
         }
 
-    def assign_baseline(
-        self, planning_input: InitialPlanningInput
-    ) -> dict[uuid.UUID, tuple[uuid.UUID, ...]]:
-        """Официальный baseline: входной порядок, первый подходящий инженер, только в конец."""
-
-        jobs_by_id = {job.id: job for job in planning_input.jobs}
-        layers_by_request = self.index_layers(planning_input.layers, jobs_by_id)
-        routes: dict[uuid.UUID, tuple[uuid.UUID, ...]] = {
-            engineer.id: () for engineer in planning_input.engineers
-        }
-        for job in planning_input.jobs:
-            for engineer in planning_input.engineers:
-                if not self.eligible(engineer, job):
-                    continue
-                proposed_ids = (*routes[engineer.id], job.id)
-                if (
-                    self._materializer.materialize(
-                        engineer,
-                        proposed_ids,
-                        jobs_by_id,
-                        layers_by_request,
-                        planning_input.calculation_cutoff_at,
-                    )
-                    is None
-                ):
-                    continue
-                routes[engineer.id] = proposed_ids
-                break
-        return {
-            engineer_id: request_ids for engineer_id, request_ids in routes.items() if request_ids
-        }
-
     def assign_priority_append_seed(
         self, planning_input: InitialPlanningInput
     ) -> dict[uuid.UUID, tuple[uuid.UUID, ...]]:
@@ -96,7 +64,7 @@ class DistributionPlanner:
 
         jobs_by_id = {job.id: job for job in planning_input.jobs}
         engineers_by_id = {engineer.id: engineer for engineer in planning_input.engineers}
-        layers_by_request = self.index_layers(planning_input.layers, jobs_by_id)
+        layers_by_request = PlanningRules.index_layers(planning_input.layers, jobs_by_id)
         layer_ranks = self._layer_ranks(planning_input.layers)
         routes: dict[uuid.UUID, tuple[uuid.UUID, ...]] = {
             engineer.id: () for engineer in planning_input.engineers
@@ -128,7 +96,7 @@ class DistributionPlanner:
 
         jobs_by_id = {job.id: job for job in planning_input.jobs}
         engineers_by_id = {engineer.id: engineer for engineer in planning_input.engineers}
-        layers_by_request = self.index_layers(planning_input.layers, jobs_by_id)
+        layers_by_request = PlanningRules.index_layers(planning_input.layers, jobs_by_id)
         self._complete_greedily(
             self._ordered_jobs(jobs),
             routes,
@@ -138,36 +106,6 @@ class DistributionPlanner:
             self._layer_ranks(planning_input.layers),
             planning_input,
         )
-
-    def eligible(self, engineer: Engineer, job: Job) -> bool:
-        if not engineer.is_available:
-            return False
-        if job.required_skill not in engineer.skills:
-            return False
-        return (
-            job.required_vehicle_type is None or job.required_vehicle_type == engineer.vehicle_type
-        )
-
-    def index_layers(
-        self,
-        layers: Sequence[PlanningLayer],
-        jobs_by_id: dict[uuid.UUID, Job],
-    ) -> dict[uuid.UUID, PlanningLayer]:
-        indexed: dict[uuid.UUID, PlanningLayer] = {}
-        for layer in layers:
-            midpoint = layer.window_start + (layer.window_end - layer.window_start) / 2
-            if layer.traffic_reference_at != midpoint:
-                raise AlgorithmInputError("traffic_reference_at должен быть серединой окна")
-            vehicle_types = [item.vehicle_type for item in layer.matrices]
-            if len(vehicle_types) != len(set(vehicle_types)):
-                raise AlgorithmInputError("В слое повторяется матрица одного типа транспорта")
-            for request_id in layer.request_ids:
-                if request_id not in jobs_by_id or request_id in indexed:
-                    raise AlgorithmInputError("Слои содержат неизвестную или повторную заявку")
-                indexed[request_id] = layer
-        if set(indexed) != set(jobs_by_id):
-            raise AlgorithmInputError("Каждая заявка должна принадлежать ровно одному слою")
-        return indexed
 
     def _construct_layered_routes(
         self,
@@ -242,7 +180,7 @@ class DistributionPlanner:
     ) -> _InsertionCandidate | None:
         candidates: list[_InsertionCandidate] = []
         for engineer in engineers_by_id.values():
-            if not self.eligible(engineer, job):
+            if not PlanningRules.eligible(engineer, job):
                 continue
             current_ids = routes[engineer.id]
             current_stops = self._materializer.materialize(
