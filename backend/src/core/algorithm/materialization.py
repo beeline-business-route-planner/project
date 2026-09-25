@@ -19,10 +19,15 @@ class ScheduleMaterializer:
     ) -> tuple[Stop, ...] | None:
         previous_id = engineer.id
         previous_finish = max(engineer.available_from, cutoff_at)
+        previous_window_start: datetime | None = None
         stops: list[Stop] = []
         for sequence_number, request_id in enumerate(request_ids, start=1):
             job = jobs_by_id[request_id]
             layer = layers_by_request[request_id]
+            # Переход в более ранний слой невыполним по времени, и матрица слоя его не содержит.
+            if previous_window_start is not None and layer.window_start < previous_window_start:
+                return None
+            previous_window_start = layer.window_start
             matching_matrices = [
                 item.travel_matrix
                 for item in layer.matrices

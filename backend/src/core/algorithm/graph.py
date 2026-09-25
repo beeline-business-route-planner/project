@@ -149,7 +149,10 @@ class LayeredGraphPlanner:
                 layers_by_request,
                 job_positions,
             )
-        routes = selection.routes
+        routes = {
+            engineer.id: selection.routes.get(engineer.id, ())
+            for engineer in planning_input.engineers
+        }
         remaining_ids = {job.id for job in planning_input.jobs} - {
             request_id for request_ids in routes.values() for request_id in request_ids
         }

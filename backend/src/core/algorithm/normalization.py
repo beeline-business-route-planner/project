@@ -28,7 +28,11 @@ class InitialInputNormalizer:
         operational_start = datetime.combine(
             snapshot.planning_date, cfg.planning.default_shift_start
         )
-        jobs = tuple(self._to_job(request, operational_start) for request in snapshot.requests)
+        operational_end = datetime.combine(snapshot.planning_date, cfg.planning.default_shift_end)
+        jobs = tuple(
+            self._to_job(request, operational_start, operational_end)
+            for request in snapshot.requests
+        )
         engineers = tuple(
             self._to_engineer(engineer, snapshot.calculation_cutoff_at)
             for engineer in snapshot.engineers
@@ -145,18 +149,34 @@ class InitialInputNormalizer:
         return tuple(requests)
 
     @staticmethod
-    def _to_job(request: RequestSnapshot, operational_start: datetime) -> Job:
-        """Нормализует окно начала работ; авария initial получает SLA 120 минут."""
+    def _to_job(
+        request: RequestSnapshot,
+        operational_start: datetime,
+        operational_end: datetime,
+    ) -> Job:
+        """Нормализует окно начала работ с SLA аварии 120 минут.
+
+        Техническое окно аварии на весь день (`00:01–23:59`) отсчитывается от начала
+        операционного дня. Авария с обычным клиентским окном не может начаться раньше
+        этого окна, поэтому SLA отсчитывается от его начала и не выходит за его конец.
+        """
 
         if request.latitude is None or request.longitude is None:
             raise MissingCoordinatesError(f"У заявки {request.id} нет координат")
         is_emergency = request.priority == RequestPriority.EMERGENCY
-        release_at = operational_start if is_emergency else request.window_start
-        latest_start_at = (
-            operational_start + timedelta(minutes=cfg.algorithm.emergency_response_minutes)
-            if is_emergency
-            else request.window_end
-        )
+        release_at = request.window_start
+        latest_start_at = request.window_end
+        if is_emergency:
+            response = timedelta(minutes=cfg.algorithm.emergency_response_minutes)
+            covers_whole_day = (
+                request.window_start <= operational_start and request.window_end >= operational_end
+            )
+            release_at = operational_start if covers_whole_day else request.window_start
+            latest_start_at = (
+                release_at + response
+                if covers_whole_day
+                else min(request.window_end, release_at + response)
+            )
         return Job(
             id=request.id,
             latitude=request.latitude,
