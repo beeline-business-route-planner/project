@@ -120,6 +120,12 @@ class PlanSnapshotAssembler:
             distance_km=stop.distance_km if stop is not None else None,
             is_locked=stop.is_locked if stop is not None else False,
             unassigned_reason=reason,
+            upload_id=request.upload_id,
+            type_bk=request.type_bk,
+            type_hd=request.type_hd,
+            connection_type=request.connection_type,
+            is_gigabit=request.is_gigabit,
+            norm_minutes=request.norm_minutes,
         )
 
     @staticmethod

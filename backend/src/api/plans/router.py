@@ -4,8 +4,8 @@ from datetime import date
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter
 
-from src.api.plans.schemas import PlanDetailResponse, PlanSummaryResponse
-from src.api.plans.service import PlanService
+from src.api.plans.schemas import PlanDetailResponse, PlanExportResponse, PlanSummaryResponse
+from src.api.plans.service import PlanExportService, PlanService
 from src.core.db.enums import Region
 
 router = APIRouter(prefix="/plans", tags=["plans"], route_class=DishkaRoute)
@@ -32,6 +32,14 @@ async def list_plans(service: FromDishka[PlanService], region: Region) -> list[P
 async def get_plan(service: FromDishka[PlanService], plan_id: uuid.UUID) -> PlanDetailResponse:
     plan = await service.get_by_id(plan_id)
     return PlanDetailResponse.model_validate(plan)
+
+
+@router.get("/{plan_id}/export", response_model=PlanExportResponse)
+async def export_plan(
+    service: FromDishka[PlanExportService], plan_id: uuid.UUID
+) -> PlanExportResponse:
+    result = await service.export(plan_id)
+    return PlanExportResponse.model_validate(result, from_attributes=True)
 
 
 @router.post("/{plan_id}/approve", response_model=PlanSummaryResponse)

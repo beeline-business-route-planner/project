@@ -34,3 +34,13 @@ class PlanStateChangedError(Exception):
 @http_error(status_code=409, detail="Изменяемая остановка уже началась")
 class PlanStopAlreadyStartedError(Exception):
     pass
+
+
+@http_error(status_code=500, detail="Не удалось сформировать экспорт плана")
+class PlanExportGenerationError(Exception):
+    pass
+
+
+@http_error(status_code=502, detail="Хранилище экспорта недоступно")
+class PlanExportStorageError(Exception):
+    pass
