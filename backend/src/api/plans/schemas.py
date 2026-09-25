@@ -20,6 +20,11 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PlanExportResponse(BaseModel):
+    url: str
+    expires_at: datetime
+
+
 class EngineerCard(ApiModel):
     engineer_id: uuid.UUID
     name: str
