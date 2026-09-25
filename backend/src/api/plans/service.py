@@ -11,16 +11,16 @@ from src.api.exc.plans import (
     PlanStopAlreadyStartedError,
     PlanWrongDayError,
 )
-from src.api.plans.approval_policy import InitialApprovalPolicy
 from src.api.plans.diff import PlanDiffEngine
 from src.api.plans.diff_dto import PlanSnapshotDTO
-from src.api.plans.dto import PlanDetailDTO, PlanSummaryDTO
+from src.api.plans.dto import BaselineMetricsDTO, PlanDetailDTO, PlanSummaryDTO
 from src.api.plans.presenter import PlanPresenter
 from src.api.plans.snapshot import PlanSnapshotAssembler
 from src.config import cfg
 from src.core.db.enums import ApprovalStatus, PlanKind, Region, ReplanningEventType, RequestStatus
 from src.core.db.models import Plan, PlanStop, ReplanningEvent
 from src.core.db.uow import UnitOfWork
+from src.core.utils.initial_approval import InitialApprovalPolicy
 
 
 class PlanService:
@@ -100,7 +100,7 @@ class PlanService:
         if plan.kind == PlanKind.INITIAL:
             if await self._uow.plans.has_approved_initial(plan.region, plan.planning_date):
                 raise PlanBaseChangedError
-            if not InitialApprovalPolicy.is_valid(plan, decided_at):
+            if not InitialApprovalPolicy.is_valid(plan.created_at, decided_at):
                 raise InitialPlanExpiredError
         elif current is None or current.id != plan.based_on_plan_id:
             raise PlanBaseChangedError
@@ -219,6 +219,21 @@ class PlanService:
     async def _build_detail(self, plan: Plan, is_current: bool) -> PlanDetailDTO:
         snapshot = await self._load_snapshot(plan)
         diff = None
+        baseline_metrics = None
+        if plan.kind == PlanKind.INITIAL:
+            baseline = await self._uow.baseline_results.get_by_initial_plan_id(plan.id)
+            if baseline is None and plan.approval_status != ApprovalStatus.APPROVED:
+                raise ValueError("У initial-кандидата отсутствует BaselineResult")
+            if baseline is not None:
+                baseline_metrics = BaselineMetricsDTO(
+                    assigned_requests_count=baseline.assigned_requests_count,
+                    unassigned_requests_count=baseline.unassigned_requests_count,
+                    engineers_used_count=baseline.engineers_used_count,
+                    total_mileage_km=baseline.total_mileage_km,
+                    average_workload_with_travel=baseline.average_workload_with_travel,
+                    average_workload_without_travel=baseline.average_workload_without_travel,
+                    algorithm_version=baseline.algorithm_version,
+                )
         if plan.kind != PlanKind.INITIAL:
             if plan.based_on_plan_id is None:
                 raise ValueError("Replan must reference its immutable base plan")
@@ -231,6 +246,7 @@ class PlanService:
             is_current=is_current,
             approval_deadline=self._approval_deadline(plan),
             diff=diff,
+            baseline_metrics=baseline_metrics,
             default_shift_start=cfg.planning.default_shift_start,
             default_shift_end=cfg.planning.default_shift_end,
         )
@@ -279,7 +295,7 @@ class PlanService:
     def _approval_deadline(plan: Plan) -> datetime | None:
         if plan.approval_status != ApprovalStatus.PENDING or plan.kind != PlanKind.INITIAL:
             return None
-        return InitialApprovalPolicy.deadline(plan)
+        return InitialApprovalPolicy.deadline(plan.created_at)
 
     @staticmethod
     def _current_ids(plans: list[Plan]) -> set[uuid.UUID]:

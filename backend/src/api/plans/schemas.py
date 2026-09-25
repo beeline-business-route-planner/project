@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from src.api.plans.enums import EngineerChange, RequestChange, RequestGroupKey
 from src.core.db.enums import (
@@ -13,6 +13,7 @@ from src.core.db.enums import (
     UnassignedReason,
     VehicleType,
 )
+from src.core.utils.time import as_utc
 
 
 class ApiModel(BaseModel):
@@ -166,7 +167,26 @@ class PlanDiff(ApiModel):
     requests: list[RequestDiff]
 
 
-class PlanDetailResponse(ApiModel):
+class BaselineMetrics(ApiModel):
+    assigned_requests_count: int
+    unassigned_requests_count: int
+    engineers_used_count: int
+    total_mileage_km: Decimal
+    average_workload_with_travel: Decimal
+    average_workload_without_travel: Decimal
+    algorithm_version: str
+
+
+class PlanLifecycleResponse(ApiModel):
+    @field_validator(
+        "created_at", "approved_at", "rejected_at", "approval_deadline", check_fields=False
+    )
+    @classmethod
+    def attach_utc(cls, value: datetime | None) -> datetime | None:
+        return as_utc(value)
+
+
+class PlanDetailResponse(PlanLifecycleResponse):
     id: uuid.UUID
     region: Region
     planning_date: date
@@ -183,12 +203,13 @@ class PlanDetailResponse(ApiModel):
     based_on_plan_id: uuid.UUID | None
     triggered_by_event_id: uuid.UUID | None
     metrics: PlanMetrics
+    baseline_metrics: BaselineMetrics | None
     request_groups: list[RequestGroup]
     engineers: list[EngineerTile]
     diff: PlanDiff | None
 
 
-class PlanSummaryResponse(ApiModel):
+class PlanSummaryResponse(PlanLifecycleResponse):
     id: uuid.UUID
     region: Region
     planning_date: date

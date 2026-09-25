@@ -1,7 +1,8 @@
 import asyncio
 import logging
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -63,6 +64,7 @@ from src.core.geocoding import (
     GeocodingUnavailableError,
 )
 from src.core.s3 import S3Storage, S3UnavailableError
+from src.core.utils.initial_approval import InitialApprovalPolicy
 
 log = logging.getLogger(__name__)
 
@@ -177,8 +179,7 @@ class PlanningService:
                 region=plan.region,
                 planning_date=plan.planning_date,
                 created_at=plan.created_at,
-                approval_deadline=plan.created_at
-                + timedelta(minutes=cfg.planning.approval_ttl_minutes),
+                approval_deadline=InitialApprovalPolicy.deadline(plan.created_at),
                 assigned_requests_count=plan.assigned_requests_count,
                 unassigned_requests_count=plan.unassigned_requests_count,
                 engineers_used_count=plan.engineers_used_count,
@@ -264,7 +265,7 @@ class PlanningService:
         planning_input = self._algorithm.build_initial_input(draft, matrices)
         calculated = self._algorithm.plan_initial(planning_input)
         baseline = self._algorithm.plan_baseline(planning_input)
-        plan_id = self._persist_initial_result(upload_id, calculated, engineers)
+        plan_id = await self._persist_initial_result(upload_id, calculated, engineers)
         self._uow.baseline_results.create(
             BaselineResultCreateDTO(
                 initial_plan_id=plan_id,
@@ -272,16 +273,18 @@ class PlanningService:
                 unassigned_requests_count=baseline.metrics.unassigned_requests_count,
                 engineers_used_count=baseline.metrics.engineers_used_count,
                 total_mileage_km=baseline.metrics.total_mileage_km,
-                average_workload_with_travel=baseline.metrics.average_utilization_with_travel,
+                average_workload_with_travel=(
+                    baseline.metrics.average_utilization_with_travel * Decimal("100")
+                ).quantize(Decimal("0.01")),
                 average_workload_without_travel=(
-                    baseline.metrics.average_utilization_without_travel
-                ),
+                    baseline.metrics.average_utilization_without_travel * Decimal("100")
+                ).quantize(Decimal("0.01")),
                 algorithm_version=baseline.algorithm_version,
             )
         )
         return plan_id
 
-    def _persist_initial_result(
+    async def _persist_initial_result(
         self,
         upload_id: uuid.UUID,
         calculated: AlgorithmInitialPlanningResult,
@@ -300,9 +303,11 @@ class PlanningService:
                 engineers_used_count=calculated.metrics.engineers_used_count,
                 assigned_requests_count=calculated.metrics.assigned_requests_count,
                 unassigned_requests_count=calculated.metrics.unassigned_requests_count,
-                created_at=datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None),
+                created_at=datetime.now(UTC).replace(tzinfo=None),
             )
         )
+        # UUID-связи без ORM relationships не задают порядок INSERT при flush.
+        await self._uow.flush()
         self._uow.plan_engineer_states.add_many(
             [
                 PlanEngineerStateCreateDTO(
