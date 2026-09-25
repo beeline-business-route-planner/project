@@ -51,3 +51,14 @@ class S3Storage:
                 await client.delete_object(Bucket=bucket, Key=key)
         except (BotoCoreError, ClientError, OSError) as exc:
             raise S3UnavailableError("Не удалось удалить объект из S3") from exc
+
+    async def presigned_download_url(self, bucket: str, key: str, expires_in: int) -> str:
+        try:
+            async with self._client.get() as client:
+                return await client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": bucket, "Key": key},
+                    ExpiresIn=expires_in,
+                )
+        except (BotoCoreError, ClientError, OSError) as exc:
+            raise S3UnavailableError("Не удалось создать ссылку на объект S3") from exc
