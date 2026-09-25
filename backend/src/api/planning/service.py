@@ -68,7 +68,7 @@ log = logging.getLogger(__name__)
 
 
 class PlanningService:
-    """Импортирует исходные таблицы для первичного планирования."""
+    """Создаёт независимые initial-кандидаты для округов из Excel-пар."""
 
     def __init__(
         self,
@@ -135,7 +135,6 @@ class PlanningService:
     ) -> PlanningRegionResult:
         uploaded_objects: list[tuple[str, str]] = []
         planning_date = min(request.window_start for request in requests_workbook.requests).date()
-        cutoff_at = datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
         try:
             await self._uow.plans.lock_region_day(region, planning_date)
             if await self._uow.plans.has_approved_initial(region, planning_date):
@@ -154,11 +153,12 @@ class PlanningService:
                 for request in requests_workbook.requests
             ):
                 raise PlanningFileValidationError
-            coordinates = await self._prepare_region(region, requests_workbook, engineers_workbook)
+            coordinates = await self._prepare_region(requests_workbook, engineers_workbook)
             upload_id, requests, engineers = await self._persist_region(
                 region, requests_workbook, engineers_workbook, coordinates, uploaded_objects
             )
             await self._uow.flush()
+            cutoff_at = datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
             plan_id = await self._calculate_and_persist_initial(
                 upload_id,
                 region,
@@ -187,11 +187,16 @@ class PlanningService:
             await self._uow.commit()
             return PlanningRegionResult(region=region, status="success", plan_summary=summary)
         except Exception as exc:
-            await self._uow.rollback()
-            await self._delete_uploaded_objects(uploaded_objects)
+            try:
+                await self._uow.rollback()
+            finally:
+                cleaned = await self._delete_uploaded_objects(uploaded_objects)
             code, detail = self._region_error(exc)
             if code == "internal_error":
                 log.exception("planning.initial_region_failed", extra={"region": region.value})
+            if not cleaned:
+                code = "storage_cleanup_failed"
+                detail = "Не удалось очистить файлы неуспешного округа"
             return PlanningRegionResult(
                 region=region, status="error", error_code=code, error_detail=detail
             )
@@ -367,7 +372,6 @@ class PlanningService:
 
     async def _prepare_region(
         self,
-        region: Region,
         requests_workbook: ParsedWorkbook,
         engineers_workbook: ParsedWorkbook,
     ) -> dict[str, Coordinates]:
@@ -466,13 +470,21 @@ class PlanningService:
         engineers = self._uow.engineers.add_many(engineer_dtos)
         return upload_id, requests, engineers
 
-    async def _delete_uploaded_objects(self, objects: list[tuple[str, str]]) -> None:
+    async def _delete_uploaded_objects(self, objects: list[tuple[str, str]]) -> bool:
+        cleaned = True
         for bucket, key in objects:
-            try:
-                await self._storage.delete_file(bucket, key)
-            except S3UnavailableError as exc:
-                log.error(
-                    "planning.s3_cleanup_failed",
-                    exc_info=exc,
-                    extra={"s3": {"bucket": bucket, "key": key}},
-                )
+            for attempt in range(3):
+                try:
+                    await self._storage.delete_file(bucket, key)
+                    break
+                except S3UnavailableError as exc:
+                    if attempt < 2:
+                        await asyncio.sleep(0.1 * (attempt + 1))
+                        continue
+                    cleaned = False
+                    log.error(
+                        "planning.s3_cleanup_failed",
+                        exc_info=exc,
+                        extra={"s3": {"bucket": bucket, "upload_id": key.split("/", 2)[1]}},
+                    )
+        return cleaned

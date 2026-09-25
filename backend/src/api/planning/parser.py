@@ -1,7 +1,6 @@
 from collections import defaultdict
 from datetime import datetime, time
 from io import BytesIO
-from pathlib import Path
 from zipfile import BadZipFile
 
 from openpyxl import load_workbook
@@ -29,12 +28,14 @@ from src.core.db.enums import ConnectionType, Region, RequestTypeHd, Skill, Vehi
 
 class PlanningWorkbookParser:
     @staticmethod
-    def identify_region(source: PlanningUploadFile) -> Region:
-        """Читает только заголовок, чтобы ошибка книги затронула её округ."""
-        if not source.filename or Path(source.filename).suffix.casefold() != ".xlsx":
-            raise PlanningFileValidationError
+    def _validate_source(source: PlanningUploadFile) -> None:
         if not source.data or len(source.data) > cfg.planning.max_file_size_bytes:
             raise PlanningFileValidationError
+
+    @staticmethod
+    def identify_region(source: PlanningUploadFile) -> Region:
+        """Читает только заголовок, чтобы ошибка книги затронула её округ."""
+        PlanningWorkbookParser._validate_source(source)
         workbook = None
         try:
             workbook = load_workbook(BytesIO(source.data), read_only=True, data_only=True)
@@ -50,10 +51,7 @@ class PlanningWorkbookParser:
 
     @staticmethod
     def parse(source: PlanningUploadFile) -> ParsedWorkbook:
-        if not source.filename or Path(source.filename).suffix.casefold() != ".xlsx":
-            raise PlanningFileValidationError
-        if not source.data or len(source.data) > cfg.planning.max_file_size_bytes:
-            raise PlanningFileValidationError
+        PlanningWorkbookParser._validate_source(source)
 
         workbook = None
         try:
