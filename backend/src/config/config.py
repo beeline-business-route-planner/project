@@ -49,6 +49,9 @@ class S3Config(BaseModel):
     bucket_answers: str = "answers"
     bucket_uploads: str = "uploads"
     bucket_plans: str = "plans"
+    export_prefix: str = "exports"
+    export_url_ttl_seconds: int = Field(default=900, gt=0)
+    max_export_size_bytes: int = Field(default=10_000_000, gt=0)
 
 
 class GeocodingConfig(BaseModel):
