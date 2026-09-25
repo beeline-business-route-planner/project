@@ -3,9 +3,10 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from src.core.db.enums import ApprovalStatus, PlanKind, Region
+from src.core.utils.time import as_utc
 
 
 class InitialPlanSummaryResponse(BaseModel):
@@ -20,6 +21,11 @@ class InitialPlanSummaryResponse(BaseModel):
     unassigned_requests_count: int
     engineers_used_count: int
     total_mileage_km: Decimal
+
+    @field_validator("created_at", "approval_deadline")
+    @classmethod
+    def attach_utc(cls, value: datetime) -> datetime:
+        return as_utc(value)
 
 
 class PlanningRegionErrorResponse(BaseModel):
