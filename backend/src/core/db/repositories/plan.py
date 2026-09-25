@@ -121,5 +121,7 @@ class PlanRepository(BaseRepository[Plan]):
         model.engineers_used_count = plan.engineers_used_count
         model.assigned_requests_count = plan.assigned_requests_count
         model.unassigned_requests_count = plan.unassigned_requests_count
+        if plan.created_at is not None:
+            model.created_at = plan.created_at
         self.add(model)
         return plan_id
