@@ -1,6 +1,7 @@
 import { apiRequest } from "./client";
 import type {
   BackendEngineerDetail,
+  BackendInitialPlanningResponse,
   BackendPlanDetail,
   BackendPlanSummary,
   BackendRegion,
@@ -23,6 +24,10 @@ export const backend = {
       `/plans/current?${query({ region, planning_date: planningDate })}`,
     ),
   plan: (planId: string) => apiRequest<BackendPlanDetail>(`/plans/${planId}`),
+  approvePlan: (planId: string) =>
+    apiRequest<BackendPlanSummary>(`/plans/${planId}/approve`, { method: "POST" }),
+  rejectPlan: (planId: string) =>
+    apiRequest<BackendPlanSummary>(`/plans/${planId}/reject`, { method: "POST" }),
   engineer: (engineerId: string) =>
     apiRequest<BackendEngineerDetail>(`/engineers/${engineerId}`),
   request: (requestId: string) =>
@@ -30,15 +35,9 @@ export const backend = {
   importInitial: (files: File[]) => {
     const form = new FormData();
     files.forEach((file) => form.append("files", file));
-    return apiRequest<{
-      status: string;
-      imports: Array<{
-        upload_id: string;
-        region: BackendRegion;
-        requests_count: number;
-        engineers_count: number;
-        plan_id: string | null;
-      }>;
-    }>("/planning/initial", { method: "POST", rawBody: form });
+    return apiRequest<BackendInitialPlanningResponse>("/planning/initial", {
+      method: "POST",
+      rawBody: form,
+    });
   },
 };

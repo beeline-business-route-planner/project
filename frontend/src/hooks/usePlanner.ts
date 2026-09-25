@@ -396,8 +396,12 @@ export function usePlanner() {
   const importDataset = useCallback(async (file: File) => {
     if (source === "api") {
       const result = await backend.importInitial([file]);
-      const imported = result.imports[0];
-      if (imported) await loadApi(imported.region);
+      const imported = result.regions.find((item) => item.status === "success" && item.plan_summary);
+      if (!imported) {
+        const reason = result.regions.find((item) => item.error)?.error?.detail;
+        throw new Error(reason ?? "Backend не создал план ни для одного региона");
+      }
+      await loadApi(imported.region, imported.plan_summary?.planning_date);
     }
     showNotice(`Файл «${file.name}» принят`);
   }, [loadApi, showNotice, source]);
@@ -413,7 +417,9 @@ export function usePlanner() {
 
   const approvePlan = useCallback(async (plan: PlanSummary) => {
     if (source === "api") {
-      apiUnavailable("Утверждение плана");
+      await backend.approvePlan(plan.id);
+      await loadApi(data.scenarioId, data.planningDate);
+      showNotice(`План ${plan.code} утверждён`);
       return;
     }
     setData((current) => ({
@@ -425,7 +431,7 @@ export function usePlanner() {
       })),
     }));
     showNotice(`План ${plan.code} утверждён`);
-  }, [apiUnavailable, showNotice, source]);
+  }, [data.planningDate, data.scenarioId, loadApi, showNotice, source]);
 
   const createUrgentRequest = useCallback(async (payload: Record<string, unknown>) => {
     if (source === "api") {

@@ -882,6 +882,10 @@ body { background: #181818; color: var(--ink); }
 .mapgl-controls button { width: 38px; height: 38px; border: 0; border-bottom: 1px solid rgba(255,255,255,.1); background: transparent; color: #f3f4f6; display: grid; place-items: center; }
 .mapgl-controls button:last-child { border-bottom: 0; }
 .mapgl-controls button:hover { background: #303136; color: var(--yellow); }
+.mapgl-controls button.is-active { color: var(--yellow); background: rgba(255,212,0,.08); }
+.mapgl-controls button[aria-label="Вернуться в 2D"] { position: relative; }
+.mapgl-controls button[aria-label="Вернуться в 2D"] span { position: absolute; right: 3px; bottom: 2px; padding: 1px 2px; border-radius: 3px; background: #18191c; color: var(--yellow); font-size: 6px; font-weight: 800; line-height: 1; }
+.mapgl-controls button svg { transition: transform .25s ease, color .16s ease; }
 .map-provider-badge {
   position: absolute;
   z-index: 410;
@@ -897,9 +901,17 @@ body { background: #181818; color: var(--ink); }
   backdrop-filter: blur(10px);
 }
 .map-provider-badge span { color: var(--yellow); margin-right: 4px; }
-.map-provider-state { position: absolute; z-index: 430; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: #181818; color: #c8cbd1; }
+.map-provider-state { position: absolute; z-index: 430; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; overflow: hidden; background: radial-gradient(circle at 50% 44%, rgba(255,212,0,.09), transparent 25%), linear-gradient(115deg, #181818 20%, #222326 48%, #181818 76%); background-size: 100% 100%, 240% 100%; color: #e7e8eb; pointer-events: none; animation: mapLoadingSweep 1.8s ease-in-out infinite; }
+.map-provider-state::before { content: ""; position: absolute; inset: 0; opacity: .2; background-image: linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px); background-size: 54px 54px; mask-image: radial-gradient(circle, #000 10%, transparent 67%); }
+.map-provider-state strong, .map-provider-state small, .map-loading-orbit { position: relative; z-index: 1; }
+.map-provider-state small { color: #92969e; font-size: 9px; }
+.map-loading-orbit { width: 38px; height: 38px; border: 1px solid rgba(255,212,0,.28); border-radius: 50%; animation: mapOrbitRing 1.2s linear infinite; }
+.map-loading-orbit i { position: absolute; top: -4px; left: 50%; width: 8px; height: 8px; border-radius: 50%; background: var(--yellow); box-shadow: 0 0 18px rgba(255,212,0,.7); transform: translateX(-50%); }
+.map-provider-state.error { pointer-events: auto; animation: none; }
 .map-provider-state.error strong { color: #ffad9b; }
 .map-provider-state.error span { max-width: 330px; color: var(--muted); font-size: 11px; text-align: center; }
+@keyframes mapLoadingSweep { 50% { background-position: 0 0, 100% 0; } }
+@keyframes mapOrbitRing { to { transform: rotate(360deg); } }
 .map-key { background: rgba(24,25,27,.9); border-color: rgba(255,255,255,.12); color: #eceef1; backdrop-filter: blur(12px); }
 .map-route-caption {
   background: rgba(24,25,27,.92);
@@ -959,6 +971,7 @@ body { background: #181818; color: var(--ink); }
 @keyframes selectedMarkerPulse { 50% { box-shadow: 0 0 0 9px rgba(255,212,0,0), 0 7px 20px rgba(0,0,0,.4); } }
 .mapgl-request-tooltip {
   position: absolute;
+  z-index: 10000;
   left: 50%;
   bottom: calc(100% + 11px);
   width: max-content;

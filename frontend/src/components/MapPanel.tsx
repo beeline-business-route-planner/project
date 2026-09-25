@@ -1,6 +1,6 @@
 import { load } from "@2gis/mapgl";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { LocateFixed, Minus, Plus } from "lucide-react";
+import { Compass, LocateFixed, Map as MapIcon, Minus, Plus } from "lucide-react";
 import type { DetailedRoute, Engineer, OverviewRoutesResponse, RequestItem } from "../api/types";
 import { formatTime, statusLabels } from "./ui";
 
@@ -21,6 +21,9 @@ type Destructible = { destroy: () => void };
 type PointCluster = { key: string; center: [number, number]; requests: RequestItem[] };
 
 const MAP_KEY = import.meta.env.VITE_2GIS_KEY?.trim() ?? "";
+// Start fetching the MapGL runtime as soon as this module is evaluated instead
+// of waiting for the map component effect. The loader caches this promise.
+const mapApiPromise = MAP_KEY ? load() : null;
 
 function centerFromRequests(requests: RequestItem[]): [number, number] {
   if (!requests.length) return [37.72, 55.7];
@@ -107,8 +110,11 @@ export function MapPanel(props: MapPanelProps) {
   const mapRef = useRef<MapInstance | null>(null);
   const initialCenter = useRef(centerFromRequests(props.requests));
   const [mapApi, setMapApi] = useState<MapGlApi | null>(null);
+  const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(11);
+  const [rotation, setRotation] = useState(0);
+  const [pitch, setPitch] = useState(0);
 
   const selectedEngineer = props.engineers.find((item) => item.id === props.selectedEngineerId);
   const displayedRoutes = useMemo(() => {
@@ -126,15 +132,21 @@ export function MapPanel(props: MapPanelProps) {
     let disposed = false;
     let map: MapInstance | null = null;
     setMapError(null);
-    void load().then((api) => {
+    void mapApiPromise?.then((api) => {
       if (disposed || !containerRef.current) return;
       map = new api.Map(containerRef.current, {
         key: MAP_KEY,
         center: initialCenter.current,
         zoom: 11,
+        zoomControl: false,
         enableTrackResize: true,
         defaultBackgroundColor: "#181818",
       });
+      const handleFirstIdle = () => {
+        if (!disposed) setMapReady(true);
+        map?.off("idle", handleFirstIdle);
+      };
+      map.on("idle", handleFirstIdle);
       mapRef.current = map;
       setMapApi(api);
     }).catch(() => {
@@ -143,6 +155,7 @@ export function MapPanel(props: MapPanelProps) {
     return () => {
       disposed = true;
       setMapApi(null);
+      setMapReady(false);
       map?.destroy();
       if (mapRef.current === map) mapRef.current = null;
     };
@@ -151,9 +164,13 @@ export function MapPanel(props: MapPanelProps) {
   useEffect(() => {
     const map = mapRef.current;
     if (!mapApi || !map) return;
-    const updateZoom = () => setZoom(map.getZoom());
-    map.on("zoomend", updateZoom);
-    return () => { map.off("zoomend", updateZoom); };
+    const updateView = () => {
+      setZoom(map.getZoom());
+      setRotation(map.getRotation());
+      setPitch(map.getPitch());
+    };
+    map.on("moveend", updateView);
+    return () => { map.off("moveend", updateView); };
   }, [mapApi]);
 
   useEffect(() => {
@@ -196,13 +213,21 @@ export function MapPanel(props: MapPanelProps) {
     clusters.forEach((cluster) => {
       const content = createMarkerContent(cluster, props.selectedRequestId, props.onSelectRequest);
       const size = cluster.requests.length > 1 ? 34 : cluster.requests.some((item) => item.id === props.selectedRequestId) ? 24 : 20;
-      objects.push(new mapApi.HtmlMarker(map, {
+      const baseZIndex = cluster.requests.some((item) => item.id === props.selectedRequestId) ? 30 : 20;
+      const htmlMarker = new mapApi.HtmlMarker(map, {
         coordinates: cluster.center,
         html: content,
         anchor: [size / 2, size / 2],
         interactive: true,
-        zIndex: cluster.requests.some((item) => item.id === props.selectedRequestId) ? 30 : 20,
-      }));
+        zIndex: baseZIndex,
+      });
+      const bringToFront = () => htmlMarker.setZIndex(1000);
+      const restoreLayer = () => htmlMarker.setZIndex(baseZIndex);
+      content.addEventListener("mouseenter", bringToFront);
+      content.addEventListener("mouseleave", restoreLayer);
+      content.addEventListener("focusin", bringToFront);
+      content.addEventListener("focusout", restoreLayer);
+      objects.push(htmlMarker);
     });
 
     return () => objects.forEach((object) => object.destroy());
@@ -218,16 +243,34 @@ export function MapPanel(props: MapPanelProps) {
     });
   };
 
+  const resetNorth = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.setRotation(0, { duration: 350 });
+    setRotation(0);
+  };
+
+  const reset2D = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.setPitch(0, { duration: 350 });
+    map.setRotation(0, { duration: 350 });
+    setPitch(0);
+    setRotation(0);
+  };
+
   return (
     <div className="map-panel mapgl-panel">
       <div ref={containerRef} className="mapgl-map" aria-label="Карта заявок 2ГИС" />
-      {!mapApi && !mapError ? <div className="map-provider-state"><span className="spinner" /><strong>Загружаем карту 2ГИС</strong></div> : null}
+      {!mapReady && !mapError ? <div className="map-provider-state"><span className="map-loading-orbit"><i /></span><strong>Загружаем карту 2ГИС</strong><small>Подготавливаем районы и маршруты</small></div> : null}
       {mapError ? <div className="map-provider-state error"><strong>Карта недоступна</strong><span>{mapError}</span></div> : null}
 
       <div className="mapgl-controls" aria-label="Масштаб карты">
         <button onClick={() => mapRef.current?.setZoom((mapRef.current?.getZoom() ?? 11) + 1, { duration: 250 })} aria-label="Приблизить"><Plus size={18} /></button>
         <button onClick={() => mapRef.current?.setZoom((mapRef.current?.getZoom() ?? 11) - 1, { duration: 250 })} aria-label="Отдалить"><Minus size={18} /></button>
         <button onClick={fitAll} aria-label="Показать все"><LocateFixed size={17} /></button>
+        <button onClick={resetNorth} aria-label="Компас: повернуть на север" title="Повернуть на север"><Compass size={18} style={{ transform: `rotate(${-rotation}deg)` }} /></button>
+        <button className={pitch > .5 || Math.abs(rotation) > .5 ? "is-active" : ""} onClick={reset2D} aria-label="Вернуться в 2D" title="Вернуться в 2D"><MapIcon size={17} /><span>2D</span></button>
       </div>
 
       <div className="map-provider-badge"><span>2ГИС</span> MapGL</div>

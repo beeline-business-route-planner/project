@@ -270,6 +270,28 @@ export type BackendSkill =
   | "emergency_works";
 export type BackendVehicle = "car" | "pedestrian" | "bicycle" | "public_transport";
 
+export interface BackendInitialPlanningResponse {
+  status: "success" | "partial_success" | "error";
+  regions: Array<{
+    region: BackendRegion;
+    status: "success" | "error";
+    plan_summary: {
+      id: string;
+      region: BackendRegion;
+      kind: "initial";
+      approval_status: "pending";
+      planning_date: string;
+      created_at: string;
+      approval_deadline: string;
+      assigned_requests_count: number;
+      unassigned_requests_count: number;
+      engineers_used_count: number;
+      total_mileage_km: number | string;
+    } | null;
+    error: { code: string; detail: string } | null;
+  }>;
+}
+
 export interface BackendRequestTile {
   request_id: string;
   external_id: number;
@@ -350,6 +372,15 @@ export interface BackendPlanDetail {
   based_on_plan_id: string | null;
   triggered_by_event_id: string | null;
   metrics: BackendPlanMetrics;
+  baseline_metrics?: {
+    assigned_requests_count: number;
+    unassigned_requests_count: number;
+    engineers_used_count: number;
+    total_mileage_km: number | string;
+    average_workload_with_travel: number | string;
+    average_workload_without_travel: number | string;
+    algorithm_version: string;
+  } | null;
   request_groups: Array<{ group: string; requests: BackendRequestTile[] }>;
   engineers: BackendEngineerTile[];
   diff: BackendPlanDiff | null;
