@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from src.api.exc.planning import (
     PlanningAddressNotFound,
+    PlanningCurrentPlanMissing,
     PlanningFileCountError,
     PlanningFileValidationError,
     PlanningGeocodingUnavailable,
@@ -21,6 +22,10 @@ from src.api.planning.dto import (
     ParsedWorkbook,
     PlanningRegionResult,
     PlanningUploadFile,
+    ReplanBaseSnapshot,
+    ReplanEngineerState,
+    ReplanStop,
+    ReplanUnassigned,
 )
 from src.api.planning.parser import PlanningWorkbookParser
 from src.config import cfg
@@ -39,11 +44,13 @@ from src.core.algorithm import (
 from src.core.db.dto import (
     BaselineResultCreateDTO,
     EngineerCreateDTO,
+    EngineerDTO,
     PlanCreateDTO,
     PlanEngineerStateCreateDTO,
     PlanStopCreateDTO,
     PlanUnassignedRequestCreateDTO,
     RequestCreateDTO,
+    RequestDTO,
     UploadedFileCreateDTO,
 )
 from src.core.db.enums import PlanKind, Region
@@ -85,6 +92,77 @@ class PlanningService:
         self._storage = storage
         self._algorithm = algorithm
         self._dgis = dgis
+
+    async def prepare_replan_base(
+        self, region: Region, cutoff_at: datetime | None = None
+    ) -> ReplanBaseSnapshot:
+        """Фиксирует current и полный вход округа для будущего расчёта A03."""
+        cutoff = cutoff_at or datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
+        planning_date = cutoff.date()
+        current = await self._uow.plans.get_current(region, planning_date)
+        if current is None or not await self._uow.plans.has_approved_initial(region, planning_date):
+            raise PlanningCurrentPlanMissing
+
+        stops = await self._uow.plan_stops.get_by_plan_id(current.id)
+        unassigned = await self._uow.plan_unassigned_requests.get_by_plan_id(current.id)
+        engineer_states = await self._uow.plan_engineer_states.get_by_plan_id(current.id)
+        request_ids = {stop.request_id for stop in stops} | {item.request_id for item in unassigned}
+        engineer_ids = {item.engineer_id for item in engineer_states} | {
+            stop.engineer_id for stop in stops
+        }
+        requests = await self._uow.requests.get_by_ids(request_ids)
+        engineers = await self._uow.engineers.get_by_ids(engineer_ids)
+
+        if (
+            len(requests) != len(request_ids)
+            or {item.id for item in requests} != request_ids
+            or len(engineers) != len(engineer_ids)
+            or {item.id for item in engineers} != engineer_ids
+            or len(stops) + len(unassigned) != len(request_ids)
+            or len(engineer_states) != len(engineer_ids)
+            or {item.engineer_id for item in engineer_states} != engineer_ids
+        ):
+            raise ValueError("Current plan is not a complete snapshot")
+
+        return ReplanBaseSnapshot(
+            base_plan_id=current.id,
+            upload_id=current.upload_id,
+            region=region,
+            planning_date=planning_date,
+            calculation_cutoff_at=cutoff,
+            requests=tuple(
+                RequestDTO.from_orm(item)
+                for item in sorted(requests, key=lambda item: str(item.id))
+            ),
+            engineers=tuple(
+                EngineerDTO.from_orm(item)
+                for item in sorted(engineers, key=lambda item: str(item.id))
+            ),
+            engineer_states=tuple(
+                ReplanEngineerState(engineer_id=item.engineer_id, is_available=item.is_available)
+                for item in sorted(engineer_states, key=lambda item: str(item.engineer_id))
+            ),
+            stops=tuple(
+                ReplanStop(
+                    engineer_id=item.engineer_id,
+                    request_id=item.request_id,
+                    sequence_number=item.sequence_number,
+                    planned_arrival=item.planned_arrival,
+                    planned_start=item.planned_start,
+                    planned_finish=item.planned_finish,
+                    travel_minutes=item.travel_minutes,
+                    distance_km=item.distance_km,
+                    is_locked=item.is_locked,
+                )
+                for item in sorted(
+                    stops, key=lambda item: (str(item.engineer_id), item.sequence_number)
+                )
+            ),
+            unassigned=tuple(
+                ReplanUnassigned(request_id=item.request_id, reason=item.reason)
+                for item in sorted(unassigned, key=lambda item: str(item.request_id))
+            ),
+        )
 
     async def import_initial_data(self, files: list[PlanningUploadFile]) -> InitialPlanningResult:
         if not files:

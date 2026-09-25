@@ -4,12 +4,14 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Literal
 
+from src.core.db.dto import EngineerDTO, RequestDTO
 from src.core.db.enums import (
     ConnectionType,
     Region,
     RequestTypeBk,
     RequestTypeHd,
     Skill,
+    UnassignedReason,
     VehicleType,
 )
 
@@ -84,3 +86,42 @@ class ParsedWorkbook:
     office_address: str | None
     requests: tuple[ParsedRequest, ...]
     engineers: tuple[ParsedEngineer, ...]
+
+
+@dataclass(frozen=True)
+class ReplanStop:
+    engineer_id: uuid.UUID
+    request_id: uuid.UUID
+    sequence_number: int
+    planned_arrival: datetime
+    planned_start: datetime
+    planned_finish: datetime
+    travel_minutes: int
+    distance_km: Decimal
+    is_locked: bool
+
+
+@dataclass(frozen=True)
+class ReplanUnassigned:
+    request_id: uuid.UUID
+    reason: UnassignedReason
+
+
+@dataclass(frozen=True)
+class ReplanEngineerState:
+    engineer_id: uuid.UUID
+    is_available: bool
+
+
+@dataclass(frozen=True)
+class ReplanBaseSnapshot:
+    base_plan_id: uuid.UUID
+    upload_id: uuid.UUID
+    region: Region
+    planning_date: date
+    calculation_cutoff_at: datetime
+    requests: tuple[RequestDTO, ...]
+    engineers: tuple[EngineerDTO, ...]
+    engineer_states: tuple[ReplanEngineerState, ...]
+    stops: tuple[ReplanStop, ...]
+    unassigned: tuple[ReplanUnassigned, ...]
