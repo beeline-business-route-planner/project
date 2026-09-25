@@ -1,17 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import L, { type LatLngBoundsExpression } from "leaflet";
-import {
-  CircleMarker,
-  MapContainer,
-  Polyline,
-  TileLayer,
-  Tooltip,
-  useMap,
-  useMapEvents,
-} from "react-leaflet";
+import { load } from "@2gis/mapgl";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { LocateFixed, Minus, Plus } from "lucide-react";
 import type { DetailedRoute, Engineer, OverviewRoutesResponse, RequestItem } from "../api/types";
-import { StatusPill, formatTime } from "./ui";
+import { formatTime, statusLabels } from "./ui";
 
 interface MapPanelProps {
   requests: RequestItem[];
@@ -24,130 +15,222 @@ interface MapPanelProps {
   onSelectRequest: (requestId: string) => void;
 }
 
+type MapGlApi = Awaited<ReturnType<typeof load>>;
+type MapInstance = InstanceType<MapGlApi["Map"]>;
+type Destructible = { destroy: () => void };
 type PointCluster = { key: string; center: [number, number]; requests: RequestItem[] };
 
-function ZoomObserver({ onZoom }: { onZoom: (zoom: number) => void }) {
-  useMapEvents({ zoomend: (event) => onZoom(event.target.getZoom()) });
-  return null;
+const MAP_KEY = import.meta.env.VITE_2GIS_KEY?.trim() ?? "";
+
+function centerFromRequests(requests: RequestItem[]): [number, number] {
+  if (!requests.length) return [37.72, 55.7];
+  return [
+    requests.reduce((sum, item) => sum + item.coordinates[0], 0) / requests.length,
+    requests.reduce((sum, item) => sum + item.coordinates[1], 0) / requests.length,
+  ];
 }
 
-function MapControls({ bounds }: { bounds: LatLngBoundsExpression }) {
-  const map = useMap();
-  return (
-    <div className="map-controls leaflet-top leaflet-right">
-      <div className="leaflet-control">
-        <button onClick={() => map.zoomIn()} aria-label="Приблизить"><Plus size={18} /></button>
-        <button onClick={() => map.zoomOut()} aria-label="Отдалить"><Minus size={18} /></button>
-        <button onClick={() => map.fitBounds(bounds, { padding: [32, 32] })} aria-label="Показать все"><LocateFixed size={17} /></button>
-      </div>
-    </div>
-  );
+function boundsFromRequests(requests: RequestItem[]) {
+  const center = centerFromRequests(requests);
+  if (requests.length < 2) {
+    return { southWest: [center[0] - 0.02, center[1] - 0.012], northEast: [center[0] + 0.02, center[1] + 0.012] };
+  }
+  const longitudes = requests.map((item) => item.coordinates[0]);
+  const latitudes = requests.map((item) => item.coordinates[1]);
+  return {
+    southWest: [Math.min(...longitudes), Math.min(...latitudes)],
+    northEast: [Math.max(...longitudes), Math.max(...latitudes)],
+  };
 }
 
-function routeLatLngs(coordinates: [number, number][]) {
-  return coordinates.map(([lon, lat]) => [lat, lon] as [number, number]);
+function colorWithAlpha(color: string, opacity: number) {
+  const normalized = color.startsWith("#") ? color.slice(1) : color;
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) return color;
+  return `#${normalized}${Math.round(Math.max(0, Math.min(1, opacity)) * 255).toString(16).padStart(2, "0")}`;
+}
+
+function createClusters(requests: RequestItem[], zoom: number): PointCluster[] {
+  if (zoom >= 13) {
+    return requests.map((request) => ({ key: request.id, center: request.coordinates, requests: [request] }));
+  }
+  const precision = zoom <= 10 ? 1 : 2;
+  const grouped = new Map<string, RequestItem[]>();
+  requests.forEach((request) => {
+    const key = `${request.coordinates[0].toFixed(precision)}:${request.coordinates[1].toFixed(precision)}`;
+    grouped.set(key, [...(grouped.get(key) ?? []), request]);
+  });
+  return [...grouped.entries()].map(([key, clusterRequests]) => ({
+    key,
+    center: [
+      clusterRequests.reduce((sum, item) => sum + item.coordinates[0], 0) / clusterRequests.length,
+      clusterRequests.reduce((sum, item) => sum + item.coordinates[1], 0) / clusterRequests.length,
+    ],
+    requests: clusterRequests,
+  }));
+}
+
+function createMarkerContent(cluster: PointCluster, selectedRequestId: string | null, onSelectRequest: (requestId: string) => void) {
+  const request = cluster.requests[0];
+  const selected = cluster.requests.some((item) => item.id === selectedRequestId);
+  const urgent = cluster.requests.some((item) => item.priority_rank === 1);
+  const marker = document.createElement("button");
+  marker.type = "button";
+  marker.className = [
+    "mapgl-request-marker",
+    selected ? "is-selected" : "",
+    urgent ? "is-urgent" : "",
+    request.status === "COMPLETED" ? "is-completed" : "",
+    cluster.requests.length > 1 ? "is-cluster" : "",
+  ].filter(Boolean).join(" ");
+  marker.setAttribute("aria-label", cluster.requests.length > 1 ? `${cluster.requests.length} заявок` : `Открыть заявку ${request.external_id}`);
+  if (cluster.requests.length > 1) marker.textContent = String(cluster.requests.length);
+
+  const tooltip = document.createElement("span");
+  tooltip.className = "mapgl-request-tooltip";
+  const title = document.createElement("strong");
+  title.textContent = cluster.requests.length > 1 ? `${cluster.requests.length} заявок рядом` : request.external_id;
+  const description = document.createElement("span");
+  description.textContent = cluster.requests.length > 1 ? "Нажмите, чтобы открыть первую" : `${request.bk_type} · ${request.district}`;
+  const meta = document.createElement("b");
+  meta.textContent = cluster.requests.length > 1 ? "" : `${formatTime(request.window_start)}–${formatTime(request.window_end)} · ${statusLabels[request.status]}`;
+  tooltip.append(title, description, meta);
+  marker.appendChild(tooltip);
+  marker.addEventListener("click", (event) => {
+    event.stopPropagation();
+    onSelectRequest(request.id);
+  });
+  return marker;
 }
 
 export function MapPanel(props: MapPanelProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<MapInstance | null>(null);
+  const initialCenter = useRef(centerFromRequests(props.requests));
+  const [mapApi, setMapApi] = useState<MapGlApi | null>(null);
+  const [mapError, setMapError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(11);
-  const bounds = useMemo<LatLngBoundsExpression>(() => {
-    const points = props.requests.map((request) => [request.coordinates[1], request.coordinates[0]] as [number, number]);
-    return points.length ? points : [[55.62, 37.66], [55.82, 37.92]];
-  }, [props.requests]);
-
-  const clusters = useMemo<PointCluster[]>(() => {
-    if (zoom >= 13) {
-      return props.requests.map((request) => ({
-        key: request.id,
-        center: [request.coordinates[1], request.coordinates[0]],
-        requests: [request],
-      }));
-    }
-    const precision = zoom <= 10 ? 1 : 2;
-    const grouped = new Map<string, RequestItem[]>();
-    props.requests.forEach((request) => {
-      const key = `${request.coordinates[0].toFixed(precision)}:${request.coordinates[1].toFixed(precision)}`;
-      grouped.set(key, [...(grouped.get(key) ?? []), request]);
-    });
-    return [...grouped.entries()].map(([key, requests]) => ({
-      key,
-      center: [
-        requests.reduce((sum, item) => sum + item.coordinates[1], 0) / requests.length,
-        requests.reduce((sum, item) => sum + item.coordinates[0], 0) / requests.length,
-      ],
-      requests,
-    }));
-  }, [props.requests, zoom]);
 
   const selectedEngineer = props.engineers.find((item) => item.id === props.selectedEngineerId);
   const displayedRoutes = useMemo(() => {
     if (!props.selectedEngineerId) return props.routes.routes;
-    const detail =
-      props.detailedRoute?.engineer_id === props.selectedEngineerId
-        ? props.detailedRoute
-        : null;
-    return props.routes.routes.map((overview) =>
-      detail && overview.engineer_id === props.selectedEngineerId ? detail : overview,
-    );
+    const detail = props.detailedRoute?.engineer_id === props.selectedEngineerId ? props.detailedRoute : null;
+    return props.routes.routes.map((overview) => detail && overview.engineer_id === props.selectedEngineerId ? detail : overview);
   }, [props.detailedRoute, props.routes.routes, props.selectedEngineerId]);
+  const clusters = useMemo(() => createClusters(props.requests, zoom), [props.requests, zoom]);
+
+  useEffect(() => {
+    if (!MAP_KEY || !containerRef.current) {
+      setMapError("Добавьте VITE_2GIS_KEY в frontend/.env");
+      return;
+    }
+    let disposed = false;
+    let map: MapInstance | null = null;
+    setMapError(null);
+    void load().then((api) => {
+      if (disposed || !containerRef.current) return;
+      map = new api.Map(containerRef.current, {
+        key: MAP_KEY,
+        center: initialCenter.current,
+        zoom: 11,
+        enableTrackResize: true,
+        defaultBackgroundColor: "#181818",
+      });
+      mapRef.current = map;
+      setMapApi(api);
+    }).catch(() => {
+      if (!disposed) setMapError("Не удалось загрузить карту 2ГИС. Проверьте ключ и подключение к интернету.");
+    });
+    return () => {
+      disposed = true;
+      setMapApi(null);
+      map?.destroy();
+      if (mapRef.current === map) mapRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapApi || !map) return;
+    const updateZoom = () => setZoom(map.getZoom());
+    map.on("zoomend", updateZoom);
+    return () => { map.off("zoomend", updateZoom); };
+  }, [mapApi]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapApi || !map || !props.requests.length) return;
+    map.fitBounds(boundsFromRequests(props.requests), {
+      padding: { top: 76, right: 54, bottom: 54, left: 54 },
+      maxZoom: 13,
+      animation: { duration: 650, easing: "easeOutCubic" },
+    });
+  }, [mapApi, props.requests]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapApi || !map) return;
+    const objects: Destructible[] = [];
+
+    displayedRoutes.forEach((route) => {
+      if (!route.geometry) return;
+      const engineer = props.engineers.find((item) => item.id === route.engineer_id);
+      const color = engineer?.color ?? "#ffd400";
+      const selected = route.engineer_id === props.selectedEngineerId;
+      const dimmed = Boolean(props.selectedEngineerId && !selected);
+      if (selected) {
+        objects.push(new mapApi.Polyline(map, {
+          coordinates: route.geometry.coordinates,
+          color: colorWithAlpha(color, .2),
+          width: 13,
+          zIndex: 9,
+        }));
+      }
+      objects.push(new mapApi.Polyline(map, {
+        coordinates: route.geometry.coordinates,
+        color: colorWithAlpha(color, dimmed ? .18 : selected ? .96 : .68),
+        width: selected ? 6 : 3,
+        zIndex: selected ? 10 : 5,
+      }));
+    });
+
+    clusters.forEach((cluster) => {
+      const content = createMarkerContent(cluster, props.selectedRequestId, props.onSelectRequest);
+      const size = cluster.requests.length > 1 ? 34 : cluster.requests.some((item) => item.id === props.selectedRequestId) ? 24 : 20;
+      objects.push(new mapApi.HtmlMarker(map, {
+        coordinates: cluster.center,
+        html: content,
+        anchor: [size / 2, size / 2],
+        interactive: true,
+        zIndex: cluster.requests.some((item) => item.id === props.selectedRequestId) ? 30 : 20,
+      }));
+    });
+
+    return () => objects.forEach((object) => object.destroy());
+  }, [clusters, displayedRoutes, mapApi, props.engineers, props.onSelectRequest, props.selectedEngineerId, props.selectedRequestId]);
+
+  const fitAll = () => {
+    const map = mapRef.current;
+    if (!map || !props.requests.length) return;
+    map.fitBounds(boundsFromRequests(props.requests), {
+      padding: { top: 76, right: 54, bottom: 54, left: 54 },
+      maxZoom: 13,
+      animation: { duration: 500, easing: "easeOutCubic" },
+    });
+  };
 
   return (
-    <div className="map-panel">
-      <MapContainer bounds={bounds} zoomControl={false} preferCanvas className="leaflet-map">
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        <ZoomObserver onZoom={setZoom} />
-        <MapControls bounds={bounds} />
+    <div className="map-panel mapgl-panel">
+      <div ref={containerRef} className="mapgl-map" aria-label="Карта заявок 2ГИС" />
+      {!mapApi && !mapError ? <div className="map-provider-state"><span className="spinner" /><strong>Загружаем карту 2ГИС</strong></div> : null}
+      {mapError ? <div className="map-provider-state error"><strong>Карта недоступна</strong><span>{mapError}</span></div> : null}
 
-        {displayedRoutes.map((route) => {
-          if (!route.geometry) return null;
-          const engineer = props.engineers.find((item) => item.id === route.engineer_id);
-          const isSelected = route.engineer_id === props.selectedEngineerId;
-          return (
-            <Polyline
-              key={`${route.engineer_id}-${"stops" in route ? "detailed" : "overview"}`}
-              positions={routeLatLngs(route.geometry.coordinates)}
-              pathOptions={{
-                color: engineer?.color ?? "#ffd400",
-                weight: isSelected ? 6 : 3,
-                opacity: props.selectedEngineerId && !isSelected ? 0.18 : isSelected ? 0.95 : 0.62,
-                lineCap: "round",
-                lineJoin: "round",
-              }}
-            />
-          );
-        })}
+      <div className="mapgl-controls" aria-label="Масштаб карты">
+        <button onClick={() => mapRef.current?.setZoom((mapRef.current?.getZoom() ?? 11) + 1, { duration: 250 })} aria-label="Приблизить"><Plus size={18} /></button>
+        <button onClick={() => mapRef.current?.setZoom((mapRef.current?.getZoom() ?? 11) - 1, { duration: 250 })} aria-label="Отдалить"><Minus size={18} /></button>
+        <button onClick={fitAll} aria-label="Показать все"><LocateFixed size={17} /></button>
+      </div>
 
-        {clusters.map((cluster) => {
-          const request = cluster.requests[0];
-          const selected = cluster.requests.some((item) => item.id === props.selectedRequestId);
-          const urgent = cluster.requests.some((item) => item.priority_rank === 1);
-          const fillColor = selected ? "#121316" : urgent ? "#ef6b4a" : request.status === "COMPLETED" ? "#24a071" : "#ffdb00";
-          return (
-            <CircleMarker
-              key={cluster.key}
-              center={cluster.center}
-              radius={cluster.requests.length > 1 ? 15 : selected ? 10 : 8}
-              pathOptions={{ color: "#fff", weight: 3, fillColor, fillOpacity: 1 }}
-              eventHandlers={{ click: () => props.onSelectRequest(request.id) }}
-            >
-              <Tooltip direction="top" offset={[0, -10]} opacity={1} className="request-tooltip">
-                {cluster.requests.length > 1 ? (
-                  <div className="cluster-tooltip"><strong>{cluster.requests.length} заявок</strong><span>Нажмите, чтобы открыть верхнюю</span></div>
-                ) : (
-                  <div className="map-tooltip-card">
-                    <div><strong>{request.external_id}</strong><StatusPill status={request.status} /></div>
-                    <span>{request.bk_type} · {request.district}</span>
-                    <b>{formatTime(request.window_start)}–{formatTime(request.window_end)}</b>
-                  </div>
-                )}
-              </Tooltip>
-            </CircleMarker>
-          );
-        })}
-      </MapContainer>
+      <div className="map-provider-badge"><span>2ГИС</span> MapGL</div>
       <div className="map-key">
         <span><i className="map-dot urgent" /> Авария</span>
         <span><i className="map-dot active" /> В работе</span>
@@ -155,7 +238,7 @@ export function MapPanel(props: MapPanelProps) {
       </div>
       {selectedEngineer ? (
         <div className="map-route-caption">
-          <i style={{ background: selectedEngineer.color }} />
+          <i className="route-live-signal" style={{ "--route-color": selectedEngineer.color } as React.CSSProperties} />
           <div><strong>{selectedEngineer.name}</strong><span>{selectedEngineer.request_ids.length} заявки в маршруте</span></div>
           {props.routeLoading ? <span className="mini-spinner" /> : <em>точный маршрут</em>}
         </div>
