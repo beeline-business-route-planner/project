@@ -26,6 +26,7 @@ from src.core.db.uow import UnitOfWork
 from src.core.s3 import S3Storage
 from src.core.s3.exc import S3UnavailableError
 from src.core.utils.initial_approval import InitialApprovalPolicy
+from src.core.utils.plan_time import latest_departure_at
 
 
 class PlanService:
@@ -123,7 +124,22 @@ class PlanService:
 
         stops = await self._uow.plan_stops.get_by_plan_id(plan.id)
         unassigned = await self._uow.plan_unassigned_requests.get_by_plan_id(plan.id)
-        request_ids = {item.request_id for item in stops} | {item.request_id for item in unassigned}
+        base_stops = (
+            await self._uow.plan_stops.get_by_plan_id(plan.based_on_plan_id)
+            if plan.based_on_plan_id is not None
+            else []
+        )
+        base_unassigned = (
+            await self._uow.plan_unassigned_requests.get_by_plan_id(plan.based_on_plan_id)
+            if plan.based_on_plan_id is not None
+            else []
+        )
+        request_ids = (
+            {item.request_id for item in stops}
+            | {item.request_id for item in unassigned}
+            | {item.request_id for item in base_stops}
+            | {item.request_id for item in base_unassigned}
+        )
         requests = await self._uow.requests.get_by_ids_for_update(request_ids)
         if len(requests) != len(request_ids) or any(
             request.updated_at > plan.created_at for request in requests
@@ -140,12 +156,11 @@ class PlanService:
         ):
             raise PlanStateChangedError
 
-        base_stops = (
-            await self._uow.plan_stops.get_by_plan_id(plan.based_on_plan_id)
-            if plan.based_on_plan_id is not None
-            else []
-        )
-        self._validate_past_stops(stops, base_stops, local_now)
+        if plan.kind == PlanKind.INITIAL:
+            if any(stop.planned_start < local_now for stop in stops):
+                raise PlanStopAlreadyStartedError
+        else:
+            self._validate_past_stops(stops, base_stops, local_now)
 
     @staticmethod
     def _cutoff_in_utc(cutoff: datetime) -> datetime:
@@ -158,12 +173,16 @@ class PlanService:
         old_by_request = {stop.request_id: stop for stop in base_stops}
         new_by_request = {stop.request_id: stop for stop in stops}
         if any(
-            old.planned_start < now and old.request_id not in new_by_request for old in base_stops
+            latest_departure_at(old.planned_start, old.travel_minutes) < now
+            and old.request_id not in new_by_request
+            for old in base_stops
         ):
             raise PlanStopAlreadyStartedError
         for stop in stops:
             old = old_by_request.get(stop.request_id)
-            if stop.planned_start >= now and (old is None or old.planned_start >= now):
+            if latest_departure_at(stop.planned_start, stop.travel_minutes) >= now and (
+                old is None or latest_departure_at(old.planned_start, old.travel_minutes) >= now
+            ):
                 continue
             if (
                 old is None
