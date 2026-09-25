@@ -52,6 +52,34 @@ class InitialPlanningResult:
 
 
 @dataclass(frozen=True)
+class ReplanPlanSummary:
+    id: uuid.UUID
+    region: Region
+    planning_date: date
+    created_at: datetime
+    based_on_plan_id: uuid.UUID
+    assigned_requests_count: int
+    unassigned_requests_count: int
+    engineers_used_count: int
+    total_mileage_km: Decimal
+
+
+@dataclass(frozen=True)
+class ReplanRegionResult:
+    region: Region
+    status: Literal["success", "error"]
+    plan_summary: ReplanPlanSummary | None = None
+    error_code: str | None = None
+    error_detail: str | None = None
+
+
+@dataclass(frozen=True)
+class ReplanPlanningResult:
+    status: Literal["success", "partial_success", "error"]
+    regions: tuple[ReplanRegionResult, ...]
+
+
+@dataclass(frozen=True)
 class ParsedRequest:
     external_id: int
     type_bk: RequestTypeBk
