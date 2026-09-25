@@ -64,3 +64,8 @@ class PlanningUnreachablePoints(Exception):
 @http_error(status_code=422, detail="У заявки или инженера не определены координаты")
 class PlanningMissingCoordinates(Exception):
     pass
+
+
+@http_error(status_code=409, detail="У округа нет утверждённого рабочего плана на этот день")
+class PlanningCurrentPlanMissing(Exception):
+    pass
