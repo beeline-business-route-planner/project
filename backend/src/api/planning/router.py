@@ -3,10 +3,15 @@ from typing import Annotated
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, File, UploadFile
 
-from src.api.planning.dto import PlanningUploadFile
+from src.api.planning.dto import (
+    EventPlanningCommand,
+    PlanningUploadFile,
+    UrgentRequestData,
+)
 from src.api.planning.schemas import (
     EventPlanningRequest,
     EventPlanningResponse,
+    EventPlanSummaryResponse,
     InitialPlanningResponse,
     InitialPlanSummaryResponse,
     PlanningRegionErrorResponse,
@@ -18,7 +23,6 @@ from src.api.planning.schemas import (
 )
 from src.api.planning.service import PlanningService
 from src.config import cfg
-from src.core.db.enums import PlanKind
 
 router = APIRouter(prefix="/planning", tags=["planning"], route_class=DishkaRoute)
 
@@ -105,14 +109,41 @@ async def create_event(
     request: EventPlanningRequest,
     service: FromDishka[PlanningService],
 ) -> EventPlanningResponse:
-    result = await service.create_event(request)
+    payload = request.urgent_request
+    urgent = (
+        UrgentRequestData(
+            external_id=payload.external_id,
+            type_bk=payload.type_bk,
+            type_hd=payload.type_hd,
+            district=payload.district,
+            address=payload.address,
+            connection_type=payload.connection_type,
+            is_gigabit=payload.is_gigabit,
+            window_start=payload.window_start,
+            window_end=payload.window_end,
+            norm_minutes=payload.norm_minutes,
+            norm_minutes_without_travel=payload.norm_minutes_without_travel,
+            priority=payload.priority,
+            required_skill=payload.required_skill,
+            required_vehicle_type=payload.required_vehicle_type,
+        )
+        if payload is not None
+        else None
+    )
+    result = await service.create_event(
+        EventPlanningCommand(
+            region=request.region,
+            event_type=request.event_type,
+            request_id=request.request_id,
+            engineer_id=request.engineer_id,
+            urgent_request=urgent,
+        )
+    )
     return EventPlanningResponse(
         event_id=result.event_id,
         event_type=result.event_type,
         request_id=result.request_id,
         engineer_id=result.engineer_id,
         occurred_at=result.occurred_at,
-        plan=ReplanPlanSummaryResponse.model_validate(result.plan, from_attributes=True).model_copy(
-            update={"kind": PlanKind.EVENT_REPLAN}
-        ),
+        plan=EventPlanSummaryResponse.model_validate(result.plan, from_attributes=True),
     )

@@ -28,6 +28,7 @@ from src.api.exc.planning import (
     RepeatedRequestError,
 )
 from src.api.planning.dto import (
+    EventPlanningCommand,
     EventPlanningResult,
     InitialPlanningResult,
     InitialPlanSummary,
@@ -43,7 +44,7 @@ from src.api.planning.dto import (
     ReplanUnassigned,
 )
 from src.api.planning.parser import PlanningWorkbookParser
-from src.api.planning.schemas import EventPlanningRequest
+from src.api.planning.utils import work_norm
 from src.config import cfg
 from src.core.algorithm import (
     AlgorithmService,
@@ -188,7 +189,7 @@ class PlanningService:
                 region=region, status="error", error_code=code, error_detail=detail
             )
 
-    async def create_event(self, request: EventPlanningRequest) -> EventPlanningResult:
+    async def create_event(self, request: EventPlanningCommand) -> EventPlanningResult:
         """Создаёт событие и кандидат плана в одной транзакции округа."""
         now = datetime.now(ZoneInfo("Europe/Moscow"))
         cutoff = now.replace(tzinfo=None)
@@ -297,14 +298,20 @@ class PlanningService:
             raise
 
     async def _validate_and_prepare_event(
-        self, request: EventPlanningRequest, base: ReplanBaseSnapshot, cutoff: datetime
+        self, request: EventPlanningCommand, base: ReplanBaseSnapshot, cutoff: datetime
     ) -> uuid.UUID:
         if request.event_type == ReplanningEventType.URGENT_REQUEST:
             payload = request.urgent_request
             if payload is None:
                 raise PlanningUrgentRequestInvalid
+            norm = work_norm(payload.type_bk)
             if (
-                payload.window_start.date() != base.planning_date
+                int(norm.priority) != payload.priority
+                or payload.priority not in (1, 2)
+                or norm.total_minutes != payload.norm_minutes
+                or norm.service_minutes != payload.norm_minutes_without_travel
+                or norm.required_skill != payload.required_skill
+                or payload.window_start.date() != base.planning_date
                 or payload.window_end.date() != base.planning_date
                 or payload.window_end <= cutoff
             ):
@@ -378,7 +385,7 @@ class PlanningService:
         return engineer_item.id
 
     async def _apply_to_snapshot(
-        self, snapshot: ReplanSnapshot, request: EventPlanningRequest, target_id: uuid.UUID
+        self, snapshot: ReplanSnapshot, request: EventPlanningCommand, target_id: uuid.UUID
     ) -> ReplanSnapshot:
         if request.event_type == ReplanningEventType.URGENT_REQUEST:
             payload = request.urgent_request
@@ -410,7 +417,7 @@ class PlanningService:
 
     @staticmethod
     def _audit_event_result(
-        request: EventPlanningRequest, target_id: uuid.UUID, result: ReplanResult
+        request: EventPlanningCommand, target_id: uuid.UUID, result: ReplanResult
     ) -> None:
         stops = [stop for route in result.routes for stop in route.stops]
         assigned = {stop.request_id for stop in stops}

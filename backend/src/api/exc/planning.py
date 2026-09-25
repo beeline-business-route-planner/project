@@ -98,7 +98,7 @@ class PlanningUrgentRequestExists(Exception):
 
 @http_error(
     status_code=422,
-    detail="Срочная заявка должна относиться к текущему рабочему дню и будущему окну",
+    detail="Некорректный тип, норматив, навык или окно срочной заявки",
 )
 class PlanningUrgentRequestInvalid(Exception):
     pass

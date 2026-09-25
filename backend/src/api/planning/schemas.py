@@ -110,9 +110,16 @@ class UrgentRequestPayload(BaseModel):
     window_end: datetime
     norm_minutes: int = Field(gt=0, le=32767)
     norm_minutes_without_travel: int = Field(gt=0, le=32767)
-    priority: Literal[1]
+    priority: Literal[1, 2]
     required_skill: Skill
     required_vehicle_type: VehicleType | None = None
+
+    @field_validator("district", "address")
+    @classmethod
+    def require_nonblank_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Район и адрес должны содержать текст")
+        return value.strip()
 
     @model_validator(mode="after")
     def validate_window(self) -> UrgentRequestPayload:
@@ -159,13 +166,17 @@ class EventPlanningRequest(BaseModel):
         return self
 
 
+class EventPlanSummaryResponse(ReplanPlanSummaryResponse):
+    kind: PlanKind = PlanKind.EVENT_REPLAN
+
+
 class EventPlanningResponse(BaseModel):
     event_id: uuid.UUID
     event_type: ReplanningEventType
     request_id: uuid.UUID | None
     engineer_id: uuid.UUID | None
     occurred_at: datetime
-    plan: ReplanPlanSummaryResponse
+    plan: EventPlanSummaryResponse
 
     @field_validator("occurred_at")
     @classmethod

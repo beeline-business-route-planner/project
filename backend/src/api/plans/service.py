@@ -21,7 +21,7 @@ from src.api.plans.presenter import PlanPresenter
 from src.api.plans.snapshot import PlanSnapshotAssembler
 from src.config import cfg
 from src.core.db.enums import ApprovalStatus, PlanKind, Region, ReplanningEventType, RequestStatus
-from src.core.db.models import Plan, PlanStop, ReplanningEvent
+from src.core.db.models import Engineer, Plan, PlanStop, ReplanningEvent, Request
 from src.core.db.uow import UnitOfWork
 from src.core.s3 import S3Storage
 from src.core.s3.exc import S3UnavailableError
@@ -63,33 +63,43 @@ class PlanService:
         return tuple(self._summary(plan, plan.id in current_ids) for plan in plans)
 
     async def approve(self, plan_id: uuid.UUID) -> PlanSummaryDTO:
-        plan = await self._lock_pending_plan(plan_id)
-        now = datetime.now(UTC)
-        decided_at = now.replace(tzinfo=None)
-        local_now = now.astimezone(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
-        await self._validate_approval(plan, local_now, decided_at)
-        self._uow.plans.set_approval_status(plan, ApprovalStatus.APPROVED, decided_at)
-        await self._reject_siblings(plan, decided_at)
-        if plan.triggered_by_event_id is not None:
-            event = await self._get_event(plan.triggered_by_event_id)
-            self._uow.replanning_events.set_approval_status(
-                event, ApprovalStatus.APPROVED, decided_at
-            )
-            await self._apply_event(event)
-        await self._uow.commit()
-        return self._summary(plan, is_current=True)
+        try:
+            plan = await self._lock_pending_plan(plan_id)
+            now = datetime.now(UTC)
+            decided_at = now.replace(tzinfo=None)
+            local_now = now.astimezone(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
+            await self._validate_approval(plan, local_now, decided_at)
+            self._uow.plans.set_approval_status(plan, ApprovalStatus.APPROVED, decided_at)
+            await self._reject_siblings(plan, decided_at)
+            if plan.triggered_by_event_id is not None:
+                event = await self._get_event(plan.triggered_by_event_id)
+                self._uow.replanning_events.set_approval_status(
+                    event, ApprovalStatus.APPROVED, decided_at
+                )
+                await self._apply_event(event)
+            summary = self._summary(plan, is_current=True)
+            await self._uow.commit()
+            return summary
+        except Exception:
+            await self._uow.rollback()
+            raise
 
     async def reject(self, plan_id: uuid.UUID) -> PlanSummaryDTO:
-        plan = await self._lock_pending_plan(plan_id)
-        decided_at = datetime.now(UTC).replace(tzinfo=None)
-        self._uow.plans.set_approval_status(plan, ApprovalStatus.REJECTED, decided_at)
-        if plan.triggered_by_event_id is not None:
-            event = await self._get_event(plan.triggered_by_event_id)
-            self._uow.replanning_events.set_approval_status(
-                event, ApprovalStatus.REJECTED, decided_at
-            )
-        await self._uow.commit()
-        return self._summary(plan, is_current=False)
+        try:
+            plan = await self._lock_pending_plan(plan_id)
+            decided_at = datetime.now(UTC).replace(tzinfo=None)
+            self._uow.plans.set_approval_status(plan, ApprovalStatus.REJECTED, decided_at)
+            if plan.triggered_by_event_id is not None:
+                event = await self._get_event(plan.triggered_by_event_id)
+                self._uow.replanning_events.set_approval_status(
+                    event, ApprovalStatus.REJECTED, decided_at
+                )
+            summary = self._summary(plan, is_current=False)
+            await self._uow.commit()
+            return summary
+        except Exception:
+            await self._uow.rollback()
+            raise
 
     async def _lock_pending_plan(self, plan_id: uuid.UUID) -> Plan:
         plan = await self._uow.plans.get_by_id(plan_id)
@@ -153,6 +163,8 @@ class PlanService:
         available_by_id = {engineer.id: engineer.is_available for engineer in engineers}
         event_id = getattr(plan, "triggered_by_event_id", None)
         event = await self._get_event(event_id) if event_id is not None else None
+        if event is not None:
+            self._validate_event_target(plan, event, requests, engineers)
         if len(available_by_id) != len(states) or any(
             available_by_id[state.engineer_id]
             != (
@@ -175,6 +187,42 @@ class PlanService:
                 raise PlanStopAlreadyStartedError
         else:
             self._validate_past_stops(stops, base_stops, local_now)
+
+    @staticmethod
+    def _validate_event_target(
+        plan: Plan,
+        event: ReplanningEvent,
+        requests: list[Request],
+        engineers: list[Engineer],
+    ) -> None:
+        if event.region != plan.region or event.planning_date != plan.planning_date:
+            raise PlanStateChangedError
+        if event.request_id is not None:
+            target_request = next((item for item in requests if item.id == event.request_id), None)
+            if (
+                target_request is None
+                or target_request.region != plan.region
+                or target_request.window_start.date() != plan.planning_date
+                or (
+                    event.event_type == ReplanningEventType.REQUEST_CANCELLED
+                    and target_request.status == RequestStatus.CANCELLED
+                )
+                or (
+                    event.event_type == ReplanningEventType.URGENT_REQUEST
+                    and target_request.upload_id is not None
+                )
+            ):
+                raise PlanStateChangedError
+        if event.engineer_id is not None:
+            target_engineer = next(
+                (item for item in engineers if item.id == event.engineer_id), None
+            )
+            if (
+                target_engineer is None
+                or target_engineer.region != plan.region
+                or target_engineer.shift_start.date() != plan.planning_date
+            ):
+                raise PlanStateChangedError
 
     @staticmethod
     def _cutoff_in_utc(cutoff: datetime) -> datetime:

@@ -14,13 +14,16 @@ from sqlalchemy import func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from src.api.exc.planning import (
+    PlanningCurrentPlanMissing,
     PlanningEngineerStateConflict,
     PlanningEventTargetMissing,
     PlanningPendingEventExists,
     PlanningRequestAlreadyCancelled,
     PlanningRoutingUnavailable,
     PlanningUrgentRequestExists,
+    PlanningUrgentRequestInvalid,
 )
+from src.api.exc.plans import PlanStateChangedError
 from src.api.planning.router import create_event, import_initial_planning_data
 from src.api.planning.schemas import EventPlanningRequest, UrgentRequestPayload
 from src.api.planning.service import PlanningService
@@ -100,19 +103,29 @@ class EventReplanEndToEndTest(unittest.IsolatedAsyncioTestCase):
             event_type=ReplanningEventType.URGENT_REQUEST,
             urgent_request=UrgentRequestPayload(
                 external_id=987654321,
-                type_bk=RequestTypeBk.LOCAL_REQUEST,
+                type_bk=RequestTypeBk.GLOBAL_PROBLEM,
                 type_hd=RequestTypeHd.EMERGENCY,
                 district="Тестовый район",
                 address="Тестовый адрес",
                 is_gigabit=False,
                 window_start=now + timedelta(minutes=20),
                 window_end=datetime.combine(now.date(), datetime.max.time()).replace(microsecond=0),
-                norm_minutes=40,
-                norm_minutes_without_travel=20,
+                norm_minutes=100,
+                norm_minutes_without_travel=80,
                 priority=1,
-                required_skill=Skill.LOCAL_WORKS,
+                required_skill=Skill.EMERGENCY_WORKS,
             ),
         )
+        async with self.sessions() as session:
+            invalid = EventPlanningRequest(
+                region=Region.VOSTOK,
+                event_type=ReplanningEventType.URGENT_REQUEST,
+                urgent_request=UrgentRequestPayload.model_validate(
+                    {**urgent.urgent_request.model_dump(), "priority": 2}
+                ),
+            )
+            with self.assertRaises(PlanningUrgentRequestInvalid):
+                await create_event(invalid, self.planning(session))
         async with self.sessions() as session:
             with self.assertRaises(PlanningRoutingUnavailable):
                 await create_event(
@@ -172,6 +185,38 @@ class EventReplanEndToEndTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(PlanningUrgentRequestExists):
                 await create_event(urgent, self.planning(session))
 
+        connection = EventPlanningRequest(
+            region=Region.VOSTOK,
+            event_type=ReplanningEventType.URGENT_REQUEST,
+            urgent_request=UrgentRequestPayload.model_validate(
+                {
+                    **urgent.urgent_request.model_dump(),
+                    "external_id": 987654322,
+                    "type_bk": RequestTypeBk.CONNECTION,
+                    "type_hd": RequestTypeHd.CONNECTION_REQUEST,
+                    "norm_minutes": 90,
+                    "norm_minutes_without_travel": 70,
+                    "priority": 2,
+                    "required_skill": Skill.CONNECTION_AND_ORDERS,
+                }
+            ),
+        )
+        async with self.sessions() as session:
+            connection_plan = await create_event(connection, self.planning(session))
+            self.assertEqual(connection_plan.plan.kind, PlanKind.EVENT_REPLAN)
+        async with self.sessions() as session:
+            await PlanService(UnitOfWork(session)).reject(connection_plan.plan.id)
+
+        async with self.sessions() as session:
+            with self.assertRaises(PlanningCurrentPlanMissing):
+                await create_event(
+                    EventPlanningRequest(
+                        region=Region.YUGOTSENTR,
+                        event_type=ReplanningEventType.REQUEST_CANCELLED,
+                        request_id=request_id,
+                    ),
+                    self.planning(session),
+                )
         async with self.sessions() as session:
             with self.assertRaises(PlanningEventTargetMissing):
                 await create_event(
@@ -220,6 +265,21 @@ class EventReplanEndToEndTest(unittest.IsolatedAsyncioTestCase):
                 self.planning(session),
             )
             self.assertTrue((await session.get(Engineer, engineer_id)).is_available)
+        async with self.sessions() as session:
+            engineer = await session.get(Engineer, engineer_id)
+            engineer.region = Region.YUGOTSENTR
+            await session.commit()
+        async with self.sessions() as session:
+            with self.assertRaises(PlanStateChangedError):
+                await PlanService(UnitOfWork(session)).approve(unavailable.plan.id)
+        async with self.sessions() as session:
+            candidate = await session.get(Plan, unavailable.plan.id)
+            event = await session.get(ReplanningEvent, unavailable.event_id)
+            self.assertEqual(candidate.approval_status, ApprovalStatus.PENDING)
+            self.assertEqual(event.approval_status, ApprovalStatus.PENDING)
+            engineer = await session.get(Engineer, engineer_id)
+            engineer.region = Region.VOSTOK
+            await session.commit()
         async with self.sessions() as session:
             await PlanService(UnitOfWork(session)).approve(unavailable.plan.id)
             self.assertFalse((await session.get(Engineer, engineer_id)).is_available)
