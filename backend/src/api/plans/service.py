@@ -1,10 +1,12 @@
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from src.api.exc.plans import (
     InitialPlanExpiredError,
     PlanBaseChangedError,
+    PlanExportGenerationError,
+    PlanExportStorageError,
     PlanNotFoundError,
     PlanNotPendingError,
     PlanStateChangedError,
@@ -13,13 +15,16 @@ from src.api.exc.plans import (
 )
 from src.api.plans.diff import PlanDiffEngine
 from src.api.plans.diff_dto import PlanSnapshotDTO
-from src.api.plans.dto import BaselineMetricsDTO, PlanDetailDTO, PlanSummaryDTO
+from src.api.plans.dto import BaselineMetricsDTO, PlanDetailDTO, PlanExportResult, PlanSummaryDTO
+from src.api.plans.export import PlanXlsxExporter
 from src.api.plans.presenter import PlanPresenter
 from src.api.plans.snapshot import PlanSnapshotAssembler
 from src.config import cfg
 from src.core.db.enums import ApprovalStatus, PlanKind, Region, ReplanningEventType, RequestStatus
 from src.core.db.models import Plan, PlanStop, ReplanningEvent
 from src.core.db.uow import UnitOfWork
+from src.core.s3 import S3Storage
+from src.core.s3.exc import S3UnavailableError
 from src.core.utils.initial_approval import InitialApprovalPolicy
 
 
@@ -44,6 +49,12 @@ class PlanService:
         return await self._build_detail(
             plan, is_current=current is not None and current.id == plan.id
         )
+
+    async def get_snapshot_by_id(self, plan_id: uuid.UUID) -> PlanSnapshotDTO:
+        plan = await self._uow.plans.get_by_id(plan_id)
+        if plan is None:
+            raise PlanNotFoundError
+        return await self._load_snapshot(plan)
 
     async def list_by_region(self, region: Region) -> tuple[PlanSummaryDTO, ...]:
         plans = await self._uow.plans.list_by_region(region)
@@ -310,3 +321,41 @@ class PlanService:
             ):
                 current_by_date[plan.planning_date] = plan
         return {plan.id for plan in current_by_date.values()}
+
+
+class PlanExportService:
+    """Экспортирует один сохранённый снимок плана во временный объект S3."""
+
+    def __init__(self, plans: PlanService, storage: S3Storage) -> None:
+        self._plans = plans
+        self._storage = storage
+
+    async def export(self, plan_id: uuid.UUID) -> PlanExportResult:
+        snapshot = await self._plans.get_snapshot_by_id(plan_id)
+        try:
+            data = PlanXlsxExporter.build(snapshot)
+        except (ValueError, OSError) as exc:
+            raise PlanExportGenerationError from exc
+        if len(data) > cfg.s3.max_export_size_bytes:
+            raise PlanExportGenerationError
+
+        key = (
+            f"{cfg.s3.export_prefix}/{snapshot.planning_date}/"
+            f"plan-{snapshot.id}-{uuid.uuid4()}.xlsx"
+        )
+        expires_at = datetime.now(UTC).replace(microsecond=0) + timedelta(
+            seconds=cfg.s3.export_url_ttl_seconds
+        )
+        try:
+            url = await self._storage.presigned_download_url(
+                cfg.s3.bucket_plans, key, cfg.s3.export_url_ttl_seconds
+            )
+            await self._storage.upload_file(
+                cfg.s3.bucket_plans,
+                key,
+                data,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        except S3UnavailableError as exc:
+            raise PlanExportStorageError from exc
+        return PlanExportResult(url=url, expires_at=expires_at)
