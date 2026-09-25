@@ -12,16 +12,17 @@ class AlgorithmVariant(enum.StrEnum):
     """Реализации initial с общим контрактом."""
 
     LAYERED_GRAPH = "layered_graph"
-    LAYERED_GRAPH_ALNS = "layered_graph_alns"
-    LAYERED_GRAPH_GREEDY = "layered_graph_greedy"
+    LNS = "lns"
     GREEDY = "greedy"
     BASELINE = "baseline"
 
 
-class DestroyOperator(enum.StrEnum):
-    """Destroy-окрестности детерминированного ALNS."""
+class RuinOperator(enum.StrEnum):
+    """Операторы разрушения плана в LNS."""
 
-    SINGLE_ENGINEER = "single_engineer"
-    ENGINEER_PAIR = "engineer_pair"
+    RANDOM = "random"
+    RELATED = "related"
+    ROUTE = "route"
     TIME_WINDOW = "time_window"
-    GEOGRAPHIC_CLUSTER = "geographic_cluster"
+    STRING = "string"
+    WORST = "worst"
