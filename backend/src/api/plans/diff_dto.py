@@ -6,8 +6,11 @@ from decimal import Decimal
 from src.api.plans.enums import EngineerChange, RequestChange
 from src.core.db.enums import (
     ApprovalStatus,
+    ConnectionType,
     PlanKind,
     Region,
+    RequestTypeBk,
+    RequestTypeHd,
     Skill,
     UnassignedReason,
     VehicleType,
@@ -36,6 +39,12 @@ class SnapshotRequestDTO:
     distance_km: Decimal | None
     is_locked: bool
     unassigned_reason: UnassignedReason | None
+    upload_id: uuid.UUID | None = None
+    type_bk: RequestTypeBk | None = None
+    type_hd: RequestTypeHd | None = None
+    connection_type: ConnectionType | None = None
+    is_gigabit: bool | None = None
+    norm_minutes: int | None = None
 
 
 @dataclass(frozen=True)
