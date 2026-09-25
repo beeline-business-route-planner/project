@@ -279,6 +279,16 @@ class SelectionDiagnostics:
 
 
 @dataclass(frozen=True)
+class LnsSearchDiagnostics:
+    """Агрегаты одного запуска LNS."""
+
+    iterations_count: int
+    accepted_count: int
+    improvements_count: int
+    operator_uses: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
 class StrategyDiagnostics:
     """Отчёт о времени и объёме поиска, создаётся только диагностическим прогоном."""
 
@@ -288,6 +298,7 @@ class StrategyDiagnostics:
     total_ms: float
     route_generation_ms: float
     selection: SelectionDiagnostics | None
+    lns_search: LnsSearchDiagnostics | None
     layers: tuple[LayerDiagnostics, ...]
 
 

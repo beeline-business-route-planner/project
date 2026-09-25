@@ -5,6 +5,7 @@ from time import perf_counter_ns
 
 from src.core.algorithm.dto import (
     LayerDiagnostics,
+    LnsSearchDiagnostics,
     SelectionDiagnostics,
     StrategyDiagnostics,
 )
@@ -27,6 +28,7 @@ class AlgorithmDiagnostics:
         self._selection_conflict_prunes_count = 0
         self._selection_bound_prunes_count = 0
         self._graph_runs_count = 0
+        self._lns_search: LnsSearchDiagnostics | None = None
         self._layers: list[LayerDiagnostics] = []
 
     def start(self) -> None:
@@ -73,6 +75,21 @@ class AlgorithmDiagnostics:
         self._selection_visited_nodes_count += visited_nodes_count
         self._selection_conflict_prunes_count += conflict_prunes_count
         self._selection_bound_prunes_count += bound_prunes_count
+
+    def record_lns_search(
+        self,
+        *,
+        iterations_count: int,
+        accepted_count: int,
+        improvements_count: int,
+        operator_uses: tuple[tuple[str, int], ...],
+    ) -> None:
+        self._lns_search = LnsSearchDiagnostics(
+            iterations_count=iterations_count,
+            accepted_count=accepted_count,
+            improvements_count=improvements_count,
+            operator_uses=operator_uses,
+        )
 
     def add_layer(
         self,
@@ -131,6 +148,7 @@ class AlgorithmDiagnostics:
             total_ms=self._milliseconds(total_ns),
             route_generation_ms=self._milliseconds(self._assignment_ns - self._selection_ns),
             selection=selection,
+            lns_search=self._lns_search,
             layers=tuple(self._layers),
         )
 

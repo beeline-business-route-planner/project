@@ -27,6 +27,7 @@ from src.core.algorithm.rules import PlanningRules
 from src.core.algorithm.strategies.baseline import BaselinePlanner
 from src.core.algorithm.strategies.graph import LayeredGraphPlanner
 from src.core.algorithm.strategies.greedy import GreedyPlanner
+from src.core.algorithm.strategies.lns import LnsPlanner
 from src.core.db.enums import UnassignedReason
 
 
@@ -148,6 +149,8 @@ class AlgorithmService:
         match variant:
             case AlgorithmVariant.LAYERED_GRAPH:
                 return LayeredGraphPlanner(diagnostics).assign(planning_input)
+            case AlgorithmVariant.LNS:
+                return LnsPlanner(diagnostics).assign(planning_input)
             case AlgorithmVariant.GREEDY:
                 return GreedyPlanner().assign(planning_input)
             case AlgorithmVariant.BASELINE:

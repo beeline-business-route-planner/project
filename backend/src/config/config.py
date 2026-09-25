@@ -97,6 +97,14 @@ class AlgorithmConfig(BaseModel):
     route_candidate_improvement_rounds: int = 2
     route_candidates_per_improvement_round: int = 4
     selection_node_budget: int = 5000
+    lns_iterations: int = 60
+    lns_random_seed: int = 20260925
+    lns_min_removal_fraction: float = 0.08
+    lns_max_removal_fraction: float = 0.3
+    lns_insertion_noise: float = 0.15
+    lns_acceptance_threshold: float = 0.02
+    lns_new_route_penalty_minutes: int = 10_000
+    lns_balance_load_weight: float = 0.25
 
 
 class LoggingConfig(BaseModel):

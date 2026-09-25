@@ -140,6 +140,32 @@ class LayeredGraphPlanner:
             if request_ids
         }
 
+    def best_route(
+        self,
+        engineer: Engineer,
+        jobs: Sequence[Job],
+        layers_by_request: dict[uuid.UUID, PlanningLayer],
+        cutoff_at: datetime,
+        job_positions: dict[uuid.UUID, int],
+    ) -> tuple[tuple[uuid.UUID, ...], int, int]:
+        """Точный лучший маршрут одного инженера из переданного пула заявок.
+
+        Лучший — по `(priority_score, число заявок, -дорога)`; повторный пул в рамках
+        одного экземпляра берётся из кэша графов.
+
+        Returns:
+            Порядок заявок, суммарный priority score и дорога в минутах.
+        """
+
+        states = self._cached_candidate_states(
+            engineer, jobs, layers_by_request, cutoff_at, job_positions
+        )
+        best = max(
+            states,
+            key=lambda state: (state.priority_score, len(state.path), -state.travel_minutes),
+        )
+        return best.path, best.priority_score, best.travel_minutes
+
     def _select_routes(
         self,
         candidate_groups: list[tuple[RouteCandidate, ...]],
