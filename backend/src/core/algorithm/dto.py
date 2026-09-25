@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from src.core.algorithm.enums import DistributionMode
-from src.core.db.enums import Region, Skill, UnassignedReason, VehicleType
+from src.core.db.enums import Region, RequestStatus, Skill, UnassignedReason, VehicleType
 
 
 class TravelMatrix(Protocol):
@@ -29,6 +29,7 @@ class RequestSnapshot:
     priority: int
     required_skill: Skill
     required_vehicle_type: VehicleType | None
+    status: RequestStatus = RequestStatus.NOT_SENT
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,8 @@ class EngineerSnapshot:
     skills: frozenset[Skill]
     vehicle_type: VehicleType
     is_available: bool
+    ready_at: datetime | None = None
+    """Не раньше этого момента инженер свободен в стартовой точке (конец прожитой истории)."""
 
 
 @dataclass(frozen=True)
@@ -149,6 +152,22 @@ class PlanningLayer:
 
 
 @dataclass(frozen=True)
+class KnownRoute:
+    engineer_id: uuid.UUID
+    request_ids: tuple[uuid.UUID, ...]
+
+
+@dataclass(frozen=True)
+class KnownSolution:
+    """Заранее известное решение (например, будущая часть текущего плана при replan).
+
+    Стратегия использует его как стартовое, только если все маршруты допустимы.
+    """
+
+    routes: tuple[KnownRoute, ...]
+
+
+@dataclass(frozen=True)
 class InitialPlanningInput:
     """Неизменяемый вход для независимого расчёта одного округа."""
 
@@ -159,6 +178,7 @@ class InitialPlanningInput:
     jobs: tuple[Job, ...]
     engineers: tuple[Engineer, ...]
     layers: tuple[PlanningLayer, ...]
+    known_solutions: tuple[KnownSolution, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -170,6 +190,7 @@ class Stop:
     finish: datetime
     travel_minutes: int
     distance_km: Decimal
+    is_locked: bool = False
 
 
 @dataclass(frozen=True)
@@ -308,3 +329,69 @@ class DiagnosedPlanningResult:
 
     result: InitialPlanningResult
     diagnostics: StrategyDiagnostics
+
+
+@dataclass(frozen=True)
+class BasePlanStop:
+    """Остановка утверждённого плана, от которого строится replan."""
+
+    engineer_id: uuid.UUID
+    request_id: uuid.UUID
+    sequence_number: int
+    arrival: datetime
+    start: datetime
+    finish: datetime
+    travel_minutes: int
+    distance_km: Decimal
+
+
+@dataclass(frozen=True)
+class ReplanSnapshot:
+    """Утверждённый план округа, актуальные заявки/инженеры и единый cutoff replan."""
+
+    region: Region
+    planning_date: date
+    calculation_cutoff_at: datetime
+    mode: DistributionMode
+    requests: tuple[RequestSnapshot, ...]
+    engineers: tuple[EngineerSnapshot, ...]
+    base_stops: tuple[BasePlanStop, ...]
+
+
+@dataclass(frozen=True)
+class ReplanDraft:
+    """Зафиксированная история и черновик будущего хвоста, ожидающий матриц."""
+
+    snapshot: ReplanSnapshot
+    locked_stops: tuple[BasePlanStop, ...]
+    cancelled_request_ids: frozenset[uuid.UUID]
+    tail: InitialPlanningDraft
+
+
+@dataclass(frozen=True)
+class ReplanInput:
+    """Вход расчёта replan: история без изменений и полный вход будущего хвоста."""
+
+    snapshot: ReplanSnapshot
+    locked_stops: tuple[BasePlanStop, ...]
+    cancelled_request_ids: frozenset[uuid.UUID]
+    tail: InitialPlanningInput
+
+
+@dataclass(frozen=True)
+class ReplanResult:
+    """Полный план дня после replan: locked history + пересчитанный хвост + неназначенные.
+
+    Отменённые и ещё не зафиксированные заявки не возвращаются в маршрут и не считаются
+    неназначенными: они перечислены в `cancelled_request_ids`.
+    """
+
+    region: Region
+    planning_date: date
+    calculation_cutoff_at: datetime
+    mode: DistributionMode
+    routes: tuple[Route, ...]
+    unassigned: tuple[UnassignedJob, ...]
+    cancelled_request_ids: tuple[uuid.UUID, ...]
+    metrics: PlanMetrics
+    algorithm_version: str

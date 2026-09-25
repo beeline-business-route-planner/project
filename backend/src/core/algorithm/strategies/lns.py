@@ -9,6 +9,7 @@ from src.core.algorithm.diagnostics import AlgorithmDiagnostics
 from src.core.algorithm.dto import Engineer, InitialPlanningInput, Job
 from src.core.algorithm.enums import DistributionMode, RuinOperator
 from src.core.algorithm.exc import AlgorithmInputError
+from src.core.algorithm.materialization import ScheduleMaterializer
 from src.core.algorithm.rules import PlanningRules
 from src.core.algorithm.strategies.graph import LayeredGraphPlanner
 from src.core.algorithm.strategies.greedy import GreedyPlanner
@@ -68,14 +69,20 @@ class LnsPlanner:
     def __init__(self, diagnostics: AlgorithmDiagnostics | None = None) -> None:
         self._greedy = GreedyPlanner()
         self._graph = LayeredGraphPlanner()
+        self._materializer = ScheduleMaterializer()
         self._diagnostics = diagnostics
 
     def assign(
         self, planning_input: InitialPlanningInput
     ) -> dict[uuid.UUID, tuple[uuid.UUID, ...]]:
-        outcome = _LnsSearch(planning_input, self._graph, cfg.algorithm.lns_random_seed).run(
-            [self._greedy.assign(planning_input)]
-        )
+        jobs_by_id = {job.id: job for job in planning_input.jobs}
+        layers_by_request = PlanningRules.index_layers(planning_input.layers, jobs_by_id)
+        starts = [self._greedy.assign(planning_input)]
+        for solution in planning_input.known_solutions:
+            routes = self._materializer.feasible_routes(planning_input, solution, layers_by_request)
+            if routes is not None:
+                starts.append(routes)
+        outcome = _LnsSearch(planning_input, self._graph, cfg.algorithm.lns_random_seed).run(starts)
         if self._diagnostics is not None:
             self._diagnostics.record_lns_search(
                 iterations_count=cfg.algorithm.lns_iterations,
@@ -130,7 +137,7 @@ class _LnsSearch:
         self._operator_uses = dict.fromkeys(RuinOperator, 0)
 
     def run(self, starts: Sequence[dict[uuid.UUID, tuple[uuid.UUID, ...]]]) -> _SearchOutcome:
-        """Ищет от лучшего из стартовых решений."""
+        """Ищет от лучшего из допустимых стартовых решений (greedy и известные решения)."""
 
         routes = max(
             (self._start_routes(start) for start in starts),

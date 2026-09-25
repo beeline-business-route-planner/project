@@ -1,24 +1,31 @@
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from src.config import cfg
 from src.core.algorithm.dto import (
+    BasePlanStop,
     Engineer,
     EngineerSnapshot,
     InitialPlanningDraft,
     InitialPlanningInput,
     InitialPlanningSnapshot,
     Job,
+    KnownRoute,
+    KnownSolution,
     LayerMatrix,
     LayerMatrixRequest,
     LayerTravelMatrix,
     PlanningLayer,
+    ReplanDraft,
+    ReplanInput,
+    ReplanSnapshot,
     RequestSnapshot,
     RoutePoint,
 )
 from src.core.algorithm.exc import AlgorithmInputError, MissingCoordinatesError
-from src.core.db.enums import RequestPriority
+from src.core.db.enums import RequestPriority, RequestStatus
 
 
 class InitialInputNormalizer:
@@ -201,9 +208,157 @@ class InitialInputNormalizer:
             start_latitude=engineer.start_latitude,
             start_longitude=engineer.start_longitude,
             shift_start=engineer.shift_start,
-            available_from=max(engineer.shift_start, cutoff_at),
+            available_from=max(engineer.shift_start, cutoff_at, engineer.ready_at or cutoff_at),
             shift_end=engineer.shift_end,
             skills=engineer.skills,
             vehicle_type=engineer.vehicle_type,
             is_available=engineer.is_available,
+        )
+
+
+class ReplanNormalizer:
+    """Делит утверждённый план на неизменяемую историю и вход для пересчёта будущего хвоста.
+
+    Остановка фиксируется, если заявка уже в пути, в работе или выполнена либо если
+    инженер по плану к cutoff уже едет к ней: даже при самом позднем выезде
+    (`planned_start - travel`) движение началось раньше cutoff. Это покрывает и правило
+    «плановое начало раньше cutoff». Вместе с ней фиксируются все более ранние остановки того же
+    инженера: прожитая история — всегда префикс маршрута. Хвост инженера начинается из
+    точки последней зафиксированной остановки не раньше её окончания и cutoff; у инженера
+    без истории — из его стартовой точки. Отменённая незафиксированная заявка в хвост не
+    попадает. Недоступный инженер сохраняет историю и не получает будущих остановок.
+    """
+
+    def __init__(self) -> None:
+        self._initial = InitialInputNormalizer()
+
+    def prepare(self, snapshot: ReplanSnapshot) -> ReplanDraft:
+        requests_by_id = {request.id: request for request in snapshot.requests}
+        locked_stops = self._locked_stops(snapshot, requests_by_id)
+        locked_ids = {stop.request_id for stop in locked_stops}
+        cancelled_ids = frozenset(
+            request.id
+            for request in snapshot.requests
+            if request.status == RequestStatus.CANCELLED and request.id not in locked_ids
+        )
+        last_locked: dict[uuid.UUID, BasePlanStop] = {}
+        for stop in locked_stops:
+            last_locked[stop.engineer_id] = stop
+        tail_engineers = tuple(
+            self._tail_engineer(engineer, last_locked.get(engineer.id), requests_by_id)
+            for engineer in snapshot.engineers
+        )
+        tail = self._initial.prepare(
+            InitialPlanningSnapshot(
+                region=snapshot.region,
+                planning_date=snapshot.planning_date,
+                calculation_cutoff_at=snapshot.calculation_cutoff_at,
+                mode=snapshot.mode,
+                requests=tuple(
+                    request
+                    for request in snapshot.requests
+                    if request.id not in locked_ids and request.id not in cancelled_ids
+                ),
+                engineers=tail_engineers,
+            )
+        )
+        return ReplanDraft(
+            snapshot=snapshot,
+            locked_stops=locked_stops,
+            cancelled_request_ids=cancelled_ids,
+            tail=tail,
+        )
+
+    def build(self, draft: ReplanDraft, matrices: Sequence[LayerMatrix]) -> ReplanInput:
+        """Собирает вход хвоста; будущая часть текущего плана передаётся известным решением.
+
+        Если с момента утверждения ничего не изменилось, этот хвост остаётся допустимым,
+        и стратегия не вернёт план хуже текущего.
+        """
+
+        locked_ids = {stop.request_id for stop in draft.locked_stops}
+        future_by_engineer: dict[uuid.UUID, list[BasePlanStop]] = {}
+        for stop in draft.snapshot.base_stops:
+            if stop.request_id not in locked_ids:
+                future_by_engineer.setdefault(stop.engineer_id, []).append(stop)
+        current_future = KnownSolution(
+            routes=tuple(
+                KnownRoute(
+                    engineer_id=engineer_id,
+                    request_ids=tuple(
+                        stop.request_id
+                        for stop in sorted(stops, key=lambda item: item.sequence_number)
+                    ),
+                )
+                for engineer_id, stops in sorted(
+                    future_by_engineer.items(), key=lambda item: item[0].int
+                )
+            )
+        )
+        return ReplanInput(
+            snapshot=draft.snapshot,
+            locked_stops=draft.locked_stops,
+            cancelled_request_ids=draft.cancelled_request_ids,
+            tail=replace(
+                self._initial.build(draft.tail, matrices), known_solutions=(current_future,)
+            ),
+        )
+
+    @staticmethod
+    def _locked_stops(
+        snapshot: ReplanSnapshot,
+        requests_by_id: dict[uuid.UUID, RequestSnapshot],
+    ) -> tuple[BasePlanStop, ...]:
+        """Выбирает префикс маршрута каждого инженера до последней прожитой остановки.
+
+        Raises:
+            AlgorithmInputError: если остановка ссылается на неизвестную заявку/инженера,
+                последовательность маршрута прерывается или начатая заявка не в плане.
+        """
+
+        engineer_ids = {engineer.id for engineer in snapshot.engineers}
+        started_statuses = {RequestStatus.ON_THE_WAY, RequestStatus.IN_PROGRESS, RequestStatus.DONE}
+        stops_by_engineer: dict[uuid.UUID, list[BasePlanStop]] = {}
+        for stop in snapshot.base_stops:
+            if stop.request_id not in requests_by_id or stop.engineer_id not in engineer_ids:
+                raise AlgorithmInputError("Остановка базового плана вне snapshot")
+            stops_by_engineer.setdefault(stop.engineer_id, []).append(stop)
+        locked: list[BasePlanStop] = []
+        for engineer_id in sorted(stops_by_engineer, key=lambda item: item.int):
+            stops = sorted(stops_by_engineer[engineer_id], key=lambda stop: stop.sequence_number)
+            if [stop.sequence_number for stop in stops] != list(range(1, len(stops) + 1)):
+                raise AlgorithmInputError("Последовательность базового маршрута прерывается")
+            lived_count = max(
+                (
+                    index + 1
+                    for index, stop in enumerate(stops)
+                    if stop.start - timedelta(minutes=stop.travel_minutes)
+                    < snapshot.calculation_cutoff_at
+                    or requests_by_id[stop.request_id].status in started_statuses
+                ),
+                default=0,
+            )
+            locked.extend(stops[:lived_count])
+        planned_ids = {stop.request_id for stop in snapshot.base_stops}
+        if any(
+            request.status in started_statuses and request.id not in planned_ids
+            for request in snapshot.requests
+        ):
+            raise AlgorithmInputError("Начатая или выполненная заявка отсутствует в базовом плане")
+        return tuple(locked)
+
+    @staticmethod
+    def _tail_engineer(
+        engineer: EngineerSnapshot,
+        last_locked: BasePlanStop | None,
+        requests_by_id: dict[uuid.UUID, RequestSnapshot],
+    ) -> EngineerSnapshot:
+        if last_locked is None:
+            return engineer
+        request = requests_by_id[last_locked.request_id]
+        return replace(
+            engineer,
+            start_latitude=request.latitude,
+            start_longitude=request.longitude,
+            ready_at=last_locked.finish,
         )

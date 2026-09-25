@@ -1,10 +1,12 @@
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from decimal import Decimal
 
 from src.core.algorithm.audit import ResultAuditor
 from src.core.algorithm.diagnostics import AlgorithmDiagnostics
 from src.core.algorithm.dto import (
+    BasePlanStop,
     DiagnosedPlanningResult,
     Engineer,
     InitialPlanningDraft,
@@ -15,6 +17,10 @@ from src.core.algorithm.dto import (
     LayerMatrix,
     PlanMetrics,
     PlanningLayer,
+    ReplanDraft,
+    ReplanInput,
+    ReplanResult,
+    ReplanSnapshot,
     Route,
     Stop,
     UnassignedJob,
@@ -22,7 +28,7 @@ from src.core.algorithm.dto import (
 from src.core.algorithm.enums import AlgorithmVariant
 from src.core.algorithm.exc import AlgorithmAuditError
 from src.core.algorithm.materialization import ScheduleMaterializer
-from src.core.algorithm.normalization import InitialInputNormalizer
+from src.core.algorithm.normalization import InitialInputNormalizer, ReplanNormalizer
 from src.core.algorithm.rules import PlanningRules
 from src.core.algorithm.strategies.baseline import BaselinePlanner
 from src.core.algorithm.strategies.graph import LayeredGraphPlanner
@@ -38,6 +44,7 @@ class AlgorithmService:
         self._normalizer = InitialInputNormalizer()
         self._materializer = ScheduleMaterializer()
         self._auditor = ResultAuditor()
+        self._replan_normalizer = ReplanNormalizer()
 
     def prepare_initial(self, snapshot: InitialPlanningSnapshot) -> InitialPlanningDraft:
         """Нормализует данные округа и перечисляет матрицы, которые нужно получить.
@@ -83,6 +90,49 @@ class AlgorithmService:
         diagnostics = AlgorithmDiagnostics()
         result = self._plan(planning_input, variant, diagnostics)
         return DiagnosedPlanningResult(result=result, diagnostics=diagnostics.report())
+
+    def prepare_replan(self, snapshot: ReplanSnapshot) -> ReplanDraft:
+        """Фиксирует прожитую историю утверждённого плана и описывает матрицы хвоста.
+
+        Args:
+            snapshot: утверждённый план округа, актуальные заявки/инженеры и cutoff.
+
+        Returns:
+            Зафиксированные остановки, отменённые заявки и черновик хвоста с запросами
+            матриц; стартовая точка инженера в черновике — конец его истории.
+
+        Raises:
+            AlgorithmInputError: если базовый план не согласован со snapshot.
+            MissingCoordinatesError: если у заявки или стартовой точки нет координат.
+        """
+
+        return self._replan_normalizer.prepare(snapshot)
+
+    def build_replan_input(
+        self,
+        draft: ReplanDraft,
+        matrices: Sequence[LayerMatrix],
+    ) -> ReplanInput:
+        return self._replan_normalizer.build(draft, matrices)
+
+    def plan_replan(
+        self,
+        replan_input: ReplanInput,
+        variant: AlgorithmVariant = AlgorithmVariant.LAYERED_GRAPH,
+    ) -> ReplanResult:
+        """Пересчитывает будущий хвост и возвращает полный план дня с неизменной историей.
+
+        Хвост считается выбранной стратегией и проходит обычный аудит initial, затем
+        склеивается с locked history и проверяется аудитом replan.
+
+        Raises:
+            AlgorithmAuditError: если результат нарушает инвариант истории или покрытия.
+        """
+
+        tail = self._plan(replan_input.tail, variant, None)
+        result = self._merge_replan(replan_input, tail)
+        self._auditor.audit_replan(replan_input, result)
+        return result
 
     def _plan(
         self,
@@ -139,6 +189,83 @@ class AlgorithmService:
         if diagnostics is not None:
             diagnostics.finish_audit()
         return result
+
+    def _merge_replan(
+        self,
+        replan_input: ReplanInput,
+        tail: InitialPlanningResult,
+    ) -> ReplanResult:
+        service_minutes = {
+            request.id: request.service_minutes for request in replan_input.snapshot.requests
+        }
+        engineers_by_id = {engineer.id: engineer for engineer in replan_input.tail.engineers}
+        locked_by_engineer: dict[uuid.UUID, list[BasePlanStop]] = {}
+        for locked_stop in replan_input.locked_stops:
+            locked_by_engineer.setdefault(locked_stop.engineer_id, []).append(locked_stop)
+        tail_by_engineer = {route.engineer_id: route.stops for route in tail.routes}
+        routes = []
+        for engineer_id in sorted(
+            set(locked_by_engineer) | set(tail_by_engineer), key=lambda item: str(item)
+        ):
+            locked = [
+                Stop(
+                    request_id=stop.request_id,
+                    sequence_number=stop.sequence_number,
+                    arrival=stop.arrival,
+                    start=stop.start,
+                    finish=stop.finish,
+                    travel_minutes=stop.travel_minutes,
+                    distance_km=stop.distance_km,
+                    is_locked=True,
+                )
+                for stop in sorted(
+                    locked_by_engineer.get(engineer_id, ()), key=lambda item: item.sequence_number
+                )
+            ]
+            future = [
+                replace(stop, sequence_number=len(locked) + index)
+                for index, stop in enumerate(tail_by_engineer.get(engineer_id, ()), start=1)
+            ]
+            routes.append(
+                self._full_day_route(
+                    engineers_by_id[engineer_id], (*locked, *future), service_minutes
+                )
+            )
+        full_routes = tuple(routes)
+        return ReplanResult(
+            region=tail.region,
+            planning_date=tail.planning_date,
+            calculation_cutoff_at=tail.calculation_cutoff_at,
+            mode=tail.mode,
+            routes=full_routes,
+            unassigned=tail.unassigned,
+            cancelled_request_ids=tuple(
+                sorted(replan_input.cancelled_request_ids, key=lambda item: str(item))
+            ),
+            metrics=self._metrics(full_routes, tail.unassigned, replan_input.tail.engineers),
+            algorithm_version=f"replan-{tail.algorithm_version}",
+        )
+
+    @staticmethod
+    def _full_day_route(
+        engineer: Engineer,
+        stops: tuple[Stop, ...],
+        service_minutes: dict[uuid.UUID, int],
+    ) -> Route:
+        service = sum(service_minutes[stop.request_id] for stop in stops)
+        travel = sum(stop.travel_minutes for stop in stops)
+        shift_minutes = int((engineer.shift_end - engineer.shift_start).total_seconds() // 60)
+        if shift_minutes <= 0:
+            raise AlgorithmAuditError("Смена инженера должна иметь положительную длину")
+        return Route(
+            engineer_id=engineer.id,
+            stops=stops,
+            service_minutes=service,
+            travel_minutes=travel,
+            distance_km=sum((stop.distance_km for stop in stops), start=Decimal("0")),
+            utilization_without_travel=Decimal(service) / Decimal(shift_minutes),
+            utilization_with_travel=Decimal(service + travel) / Decimal(shift_minutes),
+        )
 
     def _assign(
         self,

@@ -16,6 +16,7 @@ from src.core.algorithm.dto import (
 )
 from src.core.algorithm.enums import DistributionMode
 from src.core.algorithm.exc import AlgorithmInputError
+from src.core.algorithm.materialization import ScheduleMaterializer
 from src.core.algorithm.rules import PlanningRules
 from src.core.algorithm.strategies.baseline import BaselinePlanner
 from src.core.algorithm.strategies.greedy import GreedyPlanner
@@ -46,6 +47,7 @@ class LayeredGraphPlanner:
         self._greedy = GreedyPlanner()
         self._baseline = BaselinePlanner()
         self._selector = GlobalRouteSelector()
+        self._materializer = ScheduleMaterializer()
         self._diagnostics = diagnostics
         self._state_cache: dict[tuple[uuid.UUID, int], tuple[_GraphState, ...]] = {}
         self._travel_cache: dict[tuple[str, uuid.UUID, uuid.UUID], int] = {}
@@ -74,6 +76,17 @@ class LayeredGraphPlanner:
                 self._greedy.assign_priority_append_seed(seed_input),
             )
         )
+        known_routes = tuple(
+            routes
+            for solution in planning_input.known_solutions
+            if (
+                routes := self._materializer.feasible_routes(
+                    planning_input, solution, layers_by_request
+                )
+            )
+            is not None
+        )
+        seed_routes = (*seed_routes, *known_routes)
         self._reference_solutions.extend((baseline_routes, *seed_routes))
         candidate_groups: list[tuple[RouteCandidate, ...]] = []
         state_groups: list[tuple[Engineer, tuple[_GraphState, ...]]] = []

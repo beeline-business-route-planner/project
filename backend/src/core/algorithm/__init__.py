@@ -1,4 +1,5 @@
 from src.core.algorithm.dto import (
+    BasePlanStop,
     DiagnosedPlanningResult,
     Engineer,
     EngineerSnapshot,
@@ -7,6 +8,8 @@ from src.core.algorithm.dto import (
     InitialPlanningResult,
     InitialPlanningSnapshot,
     Job,
+    KnownRoute,
+    KnownSolution,
     LayerDiagnostics,
     LayerMatrix,
     LayerMatrixRequest,
@@ -14,6 +17,10 @@ from src.core.algorithm.dto import (
     LnsSearchDiagnostics,
     PlanMetrics,
     PlanningLayer,
+    ReplanDraft,
+    ReplanInput,
+    ReplanResult,
+    ReplanSnapshot,
     RequestSnapshot,
     Route,
     RoutePoint,
@@ -33,6 +40,13 @@ from src.core.algorithm.exc import (
 from src.core.algorithm.service import AlgorithmService
 
 __all__ = [
+    "KnownSolution",
+    "KnownRoute",
+    "ReplanSnapshot",
+    "ReplanResult",
+    "ReplanInput",
+    "ReplanDraft",
+    "BasePlanStop",
     "AlgorithmAuditError",
     "AlgorithmError",
     "AlgorithmInputError",

@@ -3,11 +3,15 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from src.core.algorithm.dto import (
+    BasePlanStop,
     Engineer,
+    EngineerSnapshot,
     InitialPlanningInput,
     InitialPlanningResult,
     Job,
     PlanningLayer,
+    ReplanInput,
+    ReplanResult,
     Route,
     Stop,
 )
@@ -42,6 +46,111 @@ class ResultAuditor:
             )
         self._audit_coverage(assigned_ids, jobs_by_id, result)
         self._audit_plan_metrics(planning_input, result, assigned_ids)
+
+    def audit_replan(self, replan_input: ReplanInput, result: ReplanResult) -> None:
+        """Проверяет полный план replan: неизменная история, хвост и покрытие дня.
+
+        Хвост уже прошёл обычный аудит initial на входе хвоста; здесь проверяется то, что
+        появилось при склейке: locked stops — точные копии базы и префикс маршрута, новые
+        остановки не раньше cutoff и только у доступных инженеров, каждая заявка дня ровно
+        один раз среди назначенных, неназначенных или отменённых, согласованные агрегаты.
+
+        Raises:
+            AlgorithmAuditError: при любом нарушении.
+        """
+
+        engineers_by_id = {engineer.id: engineer for engineer in replan_input.snapshot.engineers}
+        expected_locked = {stop.request_id: stop for stop in replan_input.locked_stops}
+        assigned_ids: list[uuid.UUID] = []
+        seen_locked: set[uuid.UUID] = set()
+        for route in result.routes:
+            engineer = engineers_by_id.get(route.engineer_id)
+            if engineer is None:
+                raise AlgorithmAuditError("Маршрут ссылается на неизвестного инженера")
+            assigned_ids.extend(
+                self._audit_replan_route(
+                    route,
+                    engineer,
+                    expected_locked,
+                    seen_locked,
+                    replan_input.snapshot.calculation_cutoff_at,
+                )
+            )
+        if seen_locked != set(expected_locked):
+            raise AlgorithmAuditError("Не все зафиксированные остановки перенесены в план")
+        self._audit_replan_coverage(replan_input, result, assigned_ids)
+
+    def _audit_replan_route(
+        self,
+        route: Route,
+        engineer: EngineerSnapshot,
+        expected_locked: dict[uuid.UUID, BasePlanStop],
+        seen_locked: set[uuid.UUID],
+        cutoff_at: datetime,
+    ) -> list[uuid.UUID]:
+        future_started = False
+        for expected_sequence, stop in enumerate(route.stops, start=1):
+            if stop.sequence_number != expected_sequence:
+                raise AlgorithmAuditError("Нарушена непрерывность sequence_number")
+            if stop.is_locked:
+                base = expected_locked.get(stop.request_id)
+                if future_started or base is None:
+                    raise AlgorithmAuditError("Зафиксированная остановка вне прожитой истории")
+                if not self._same_as_base(route.engineer_id, stop, base):
+                    raise AlgorithmAuditError("Зафиксированная остановка изменена")
+                seen_locked.add(stop.request_id)
+                continue
+            future_started = True
+            if not engineer.is_available:
+                raise AlgorithmAuditError("Недоступный инженер получил будущую остановку")
+            if stop.start < cutoff_at:
+                raise AlgorithmAuditError("Будущая остановка начинается раньше cutoff")
+        return [stop.request_id for stop in route.stops]
+
+    @staticmethod
+    def _audit_replan_coverage(
+        replan_input: ReplanInput,
+        result: ReplanResult,
+        assigned_ids: list[uuid.UUID],
+    ) -> None:
+        unassigned_ids = [item.job_id for item in result.unassigned]
+        all_ids = [*assigned_ids, *unassigned_ids, *result.cancelled_request_ids]
+        if len(all_ids) != len(set(all_ids)):
+            raise AlgorithmAuditError("Заявка встретилась в плане больше одного раза")
+        if set(all_ids) != {request.id for request in replan_input.snapshot.requests}:
+            raise AlgorithmAuditError("План не покрывает полный набор заявок дня")
+        if (
+            result.metrics.assigned_requests_count,
+            result.metrics.unassigned_requests_count,
+            result.metrics.engineers_used_count,
+            result.metrics.total_travel_minutes,
+        ) != (
+            len(assigned_ids),
+            len(unassigned_ids),
+            len(result.routes),
+            sum(route.travel_minutes for route in result.routes),
+        ):
+            raise AlgorithmAuditError("Агрегаты replan не совпадают с маршрутами")
+
+    @staticmethod
+    def _same_as_base(engineer_id: uuid.UUID, stop: Stop, base: BasePlanStop) -> bool:
+        return (
+            engineer_id,
+            stop.sequence_number,
+            stop.arrival,
+            stop.start,
+            stop.finish,
+            stop.travel_minutes,
+            stop.distance_km,
+        ) == (
+            base.engineer_id,
+            base.sequence_number,
+            base.arrival,
+            base.start,
+            base.finish,
+            base.travel_minutes,
+            base.distance_km,
+        )
 
     def _audit_route(
         self,
