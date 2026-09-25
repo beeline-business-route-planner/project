@@ -1,9 +1,9 @@
 import asyncio
 import logging
 import uuid
-from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from src.api.exc.planning import (
@@ -11,17 +11,14 @@ from src.api.exc.planning import (
     PlanningFileCountError,
     PlanningFileValidationError,
     PlanningGeocodingUnavailable,
-    PlanningInvalidRoutingResponse,
-    PlanningMissingCoordinates,
-    PlanningRoutingUnavailable,
-    PlanningStorageUnavailable,
-    PlanningUnreachablePoints,
+    PlanningRegionPairError,
     RepeatedRequestError,
 )
 from src.api.planning.dto import (
     InitialPlanningResult,
+    InitialPlanSummary,
     ParsedWorkbook,
-    PlanningImportResult,
+    PlanningRegionResult,
     PlanningUploadFile,
 )
 from src.api.planning.parser import PlanningWorkbookParser
@@ -88,82 +85,155 @@ class PlanningService:
         self._dgis = dgis
 
     async def import_initial_data(self, files: list[PlanningUploadFile]) -> InitialPlanningResult:
-        if not files or len(files) % 2 != 0:
+        if not files:
             raise PlanningFileCountError
-
-        parsed_workbooks = await asyncio.gather(
-            *(asyncio.to_thread(PlanningWorkbookParser.parse, file) for file in files)
+        identified = await asyncio.gather(
+            *(asyncio.to_thread(PlanningWorkbookParser.identify_region, file) for file in files)
         )
-        region_pairs = PlanningWorkbookParser.build_region_pairs(parsed_workbooks)
-        for pair in region_pairs.values():
-            external_ids = [request.external_id for request in pair["requests"].requests]
+        grouped_files: dict[Region, list[PlanningUploadFile]] = {}
+        for region, file in zip(identified, files, strict=True):
+            grouped_files.setdefault(region, []).append(file)
+
+        regions: list[PlanningRegionResult] = []
+        for region in sorted(grouped_files, key=lambda item: item.value):
+            try:
+                region_files = grouped_files[region]
+                if len(region_files) != 2:
+                    raise PlanningRegionPairError
+                parsed = await asyncio.gather(
+                    *(
+                        asyncio.to_thread(PlanningWorkbookParser.parse, file)
+                        for file in region_files
+                    )
+                )
+                pair = PlanningWorkbookParser.build_region_pairs(parsed)[region]
+            except (PlanningFileValidationError, PlanningRegionPairError) as exc:
+                code, detail = self._region_error(exc)
+                regions.append(
+                    PlanningRegionResult(
+                        region=region, status="error", error_code=code, error_detail=detail
+                    )
+                )
+                continue
+            regions.append(await self._run_region(region, pair["requests"], pair["engineers"]))
+
+        successful = sum(item.status == "success" for item in regions)
+        status: Literal["success", "partial_success", "error"]
+        if successful == len(regions):
+            status = "success"
+        elif successful:
+            status = "partial_success"
+        else:
+            status = "error"
+        return InitialPlanningResult(status=status, regions=tuple(regions))
+
+    async def _run_region(
+        self,
+        region: Region,
+        requests_workbook: ParsedWorkbook,
+        engineers_workbook: ParsedWorkbook,
+    ) -> PlanningRegionResult:
+        uploaded_objects: list[tuple[str, str]] = []
+        planning_date = min(request.window_start for request in requests_workbook.requests).date()
+        cutoff_at = datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
+        try:
+            await self._uow.plans.lock_region_day(region, planning_date)
+            if await self._uow.plans.has_approved_initial(region, planning_date):
+                await self._uow.rollback()
+                return PlanningRegionResult(
+                    region=region,
+                    status="error",
+                    error_code="initial_already_approved",
+                    error_detail="Первичный план округа за этот день уже утверждён",
+                )
+            external_ids = [request.external_id for request in requests_workbook.requests]
             if len(external_ids) != len(set(external_ids)):
                 raise RepeatedRequestError
-
-        prepared_regions = []
-        for region in sorted(region_pairs, key=lambda item: item.value):
-            requests_workbook = region_pairs[region]["requests"]
-            engineers_workbook = region_pairs[region]["engineers"]
-            prepared_regions.append(
-                await self._prepare_region(region, requests_workbook, engineers_workbook)
+            if any(
+                request.window_start.date() != planning_date
+                for request in requests_workbook.requests
+            ):
+                raise PlanningFileValidationError
+            coordinates = await self._prepare_region(region, requests_workbook, engineers_workbook)
+            upload_id, requests, engineers = await self._persist_region(
+                region, requests_workbook, engineers_workbook, coordinates, uploaded_objects
+            )
+            await self._uow.flush()
+            plan_id = await self._calculate_and_persist_initial(
+                upload_id,
+                region,
+                planning_date,
+                cutoff_at,
+                requests,
+                engineers,
+                DistributionMode.MIN_ENGINEERS,
+            )
+            await self._uow.flush()
+            plan = await self._uow.plans.get_by_id(plan_id)
+            if plan is None:
+                raise RuntimeError("Сохранённый план не найден")
+            summary = InitialPlanSummary(
+                id=plan.id,
+                region=plan.region,
+                planning_date=plan.planning_date,
+                created_at=plan.created_at,
+                approval_deadline=plan.created_at
+                + timedelta(minutes=cfg.planning.approval_ttl_minutes),
+                assigned_requests_count=plan.assigned_requests_count,
+                unassigned_requests_count=plan.unassigned_requests_count,
+                engineers_used_count=plan.engineers_used_count,
+                total_mileage_km=plan.total_mileage_km,
+            )
+            await self._uow.commit()
+            return PlanningRegionResult(region=region, status="success", plan_summary=summary)
+        except Exception as exc:
+            await self._uow.rollback()
+            await self._delete_uploaded_objects(uploaded_objects)
+            code, detail = self._region_error(exc)
+            if code == "internal_error":
+                log.exception("planning.initial_region_failed", extra={"region": region.value})
+            return PlanningRegionResult(
+                region=region, status="error", error_code=code, error_detail=detail
             )
 
-        uploaded_objects: list[tuple[str, str]] = []
-        results: list[PlanningImportResult] = []
-        try:
-            for prepared in prepared_regions:
-                results.append(await self._persist_region(*prepared, uploaded_objects))
-            await self._uow.commit()
-        except S3UnavailableError as exc:
-            await self._uow.rollback()
-            await self._delete_uploaded_objects(uploaded_objects)
-            raise PlanningStorageUnavailable from exc
-        except Exception:
-            await self._uow.rollback()
-            await self._delete_uploaded_objects(uploaded_objects)
-            raise
-
-        try:
-            plan_ids = [
-                await self._calculate_and_persist_initial(
-                    result.upload_id,
-                    result.region,
-                    DistributionMode.MIN_ENGINEERS,
-                )
-                for result in results
-            ]
-        except DgisUnavailableError as exc:
-            raise PlanningRoutingUnavailable from exc
-        except InvalidDgisResponseError as exc:
-            raise PlanningInvalidRoutingResponse from exc
-        except DgisUnreachablePointsError as exc:
-            raise PlanningUnreachablePoints from exc
-        except MissingCoordinatesError as exc:
-            raise PlanningMissingCoordinates from exc
-        results_with_plans = [
-            replace(result, plan_id=plan_id)
-            for result, plan_id in zip(results, plan_ids, strict=True)
-        ]
-        return InitialPlanningResult(status="imported", imports=tuple(results_with_plans))
+    @staticmethod
+    def _region_error(exc: Exception) -> tuple[str, str]:
+        errors: tuple[tuple[type[Exception], str, str], ...] = (
+            (RepeatedRequestError, "duplicate_request", "Повторяются номера заявок"),
+            (PlanningFileValidationError, "invalid_file", "Некорректные данные Excel"),
+            (PlanningRegionPairError, "invalid_region_pair", "Нужна пара Excel округа"),
+            (PlanningAddressNotFound, "address_not_found", "Адрес не найден"),
+            (PlanningGeocodingUnavailable, "geocoding_unavailable", "Геокодирование недоступно"),
+            (S3UnavailableError, "storage_unavailable", "Хранилище файлов недоступно"),
+            (DgisUnavailableError, "routing_unavailable", "Маршрутизация недоступна"),
+            (
+                InvalidDgisResponseError,
+                "invalid_routing_response",
+                "Некорректный ответ маршрутизации",
+            ),
+            (DgisUnreachablePointsError, "unreachable_points", "Маршрут между точками не найден"),
+            (MissingCoordinatesError, "missing_coordinates", "Не определены координаты"),
+        )
+        for error_type, code, detail in errors:
+            if isinstance(exc, error_type):
+                return code, detail
+        return "internal_error", "Не удалось рассчитать план округа"
 
     async def _calculate_and_persist_initial(
         self,
         upload_id: uuid.UUID,
         region: Region,
+        planning_date: date,
+        cutoff_at: datetime,
+        requests: list[Request],
+        engineers: list[EngineerModel],
         mode: DistributionMode,
     ) -> uuid.UUID:
-        requests = await self._uow.requests.get_by_upload_id(upload_id)
-        engineers = await self._uow.engineers.get_by_upload_id(upload_id)
-        if not requests:
-            raise PlanningFileValidationError
-        requests.sort(key=lambda request: request.id.int)
-        engineers.sort(key=lambda engineer: engineer.id.int)
-
         draft = self._algorithm.prepare_initial(
             InitialPlanningSnapshot(
                 region=region,
-                planning_date=min(request.window_start for request in requests).date(),
-                calculation_cutoff_at=datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None),
+                planning_date=planning_date,
+                calculation_cutoff_at=cutoff_at,
                 mode=mode,
                 requests=tuple(self._to_request_snapshot(request) for request in requests),
                 engineers=tuple(self._to_engineer_snapshot(engineer) for engineer in engineers),
@@ -204,7 +274,6 @@ class PlanningService:
                 algorithm_version=baseline.algorithm_version,
             )
         )
-        await self._uow.commit()
         return plan_id
 
     def _persist_initial_result(
@@ -226,6 +295,7 @@ class PlanningService:
                 engineers_used_count=calculated.metrics.engineers_used_count,
                 assigned_requests_count=calculated.metrics.assigned_requests_count,
                 unassigned_requests_count=calculated.metrics.unassigned_requests_count,
+                created_at=datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None),
             )
         )
         self._uow.plan_engineer_states.add_many(
@@ -300,12 +370,7 @@ class PlanningService:
         region: Region,
         requests_workbook: ParsedWorkbook,
         engineers_workbook: ParsedWorkbook,
-    ) -> tuple[
-        Region,
-        ParsedWorkbook,
-        ParsedWorkbook,
-        dict[str, Coordinates],
-    ]:
+    ) -> dict[str, Coordinates]:
         if requests_workbook.office_address is None:
             raise PlanningFileValidationError
         addresses = [requests_workbook.office_address]
@@ -320,7 +385,7 @@ class PlanningService:
             except GeocodingUnavailableError as exc:
                 raise PlanningGeocodingUnavailable from exc
             coordinates[address] = point
-        return region, requests_workbook, engineers_workbook, coordinates
+        return coordinates
 
     async def _persist_region(
         self,
@@ -329,20 +394,20 @@ class PlanningService:
         engineers_workbook: ParsedWorkbook,
         coordinates: dict[str, Coordinates],
         uploaded_objects: list[tuple[str, str]],
-    ) -> PlanningImportResult:
+    ) -> tuple[uuid.UUID, list[Request], list[EngineerModel]]:
         upload_id = self._uow.data_uploads.create(region)
         file_dtos: list[UploadedFileCreateDTO] = []
         for workbook in (requests_workbook, engineers_workbook):
             bucket = cfg.s3.bucket_uploads
             safe_filename = Path(workbook.source.filename).name
             key = f"planning/{upload_id}/{uuid.uuid7()}-{safe_filename}"
+            uploaded_objects.append((bucket, key))
             await self._storage.upload_file(
                 bucket,
                 key,
                 workbook.source.data,
                 workbook.source.content_type,
             )
-            uploaded_objects.append((bucket, key))
             file_dtos.append(
                 UploadedFileCreateDTO(
                     upload_id=upload_id,
@@ -397,14 +462,9 @@ class PlanningService:
             for engineer in engineers_workbook.engineers
         ]
         self._uow.uploaded_files.add_many(file_dtos)
-        self._uow.requests.add_many(request_dtos)
-        self._uow.engineers.add_many(engineer_dtos)
-        return PlanningImportResult(
-            upload_id=upload_id,
-            region=region,
-            requests_count=len(request_dtos),
-            engineers_count=len(engineer_dtos),
-        )
+        requests = self._uow.requests.add_many(request_dtos)
+        engineers = self._uow.engineers.add_many(engineer_dtos)
+        return upload_id, requests, engineers
 
     async def _delete_uploaded_objects(self, objects: list[tuple[str, str]]) -> None:
         for bucket, key in objects:

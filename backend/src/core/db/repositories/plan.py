@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 
 from src.core.db.dto import PlanCreateDTO
 from src.core.db.enums import ApprovalStatus, PlanKind, Region
@@ -11,6 +11,12 @@ from src.core.db.repositories.base import BaseRepository
 
 class PlanRepository(BaseRepository[Plan]):
     model = Plan
+
+    async def lock_region_day(self, region: Region, planning_date: date) -> None:
+        await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:region), :planning_day)"),
+            {"region": region.value, "planning_day": planning_date.toordinal()},
+        )
 
     async def get_current(self, region: Region, planning_date: date) -> Plan | None:
         """Последний утверждённый план округа за рабочий день."""
@@ -111,5 +117,7 @@ class PlanRepository(BaseRepository[Plan]):
         model.engineers_used_count = plan.engineers_used_count
         model.assigned_requests_count = plan.assigned_requests_count
         model.unassigned_requests_count = plan.unassigned_requests_count
+        if plan.created_at is not None:
+            model.created_at = plan.created_at
         self.add(model)
         return plan_id

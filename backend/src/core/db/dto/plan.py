@@ -19,6 +19,7 @@ class PlanCreateDTO:
     engineers_used_count: int
     assigned_requests_count: int
     unassigned_requests_count: int
+    created_at: datetime | None = None
 
 
 @dataclass(frozen=True)

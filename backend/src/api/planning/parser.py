@@ -29,6 +29,26 @@ from src.core.db.enums import ConnectionType, Region, RequestTypeHd, Skill, Vehi
 
 class PlanningWorkbookParser:
     @staticmethod
+    def identify_region(source: PlanningUploadFile) -> Region:
+        """Читает только заголовок, чтобы ошибка книги затронула её округ."""
+        if not source.filename or Path(source.filename).suffix.casefold() != ".xlsx":
+            raise PlanningFileValidationError
+        if not source.data or len(source.data) > cfg.planning.max_file_size_bytes:
+            raise PlanningFileValidationError
+        workbook = None
+        try:
+            workbook = load_workbook(BytesIO(source.data), read_only=True, data_only=True)
+            title = required_string(workbook.active.cell(row=1, column=1).value)
+            return PlanningWorkbookParser._parse_region(title)
+        except PlanningFileValidationError:
+            raise
+        except (BadZipFile, InvalidFileException, OSError, TypeError, ValueError, KeyError) as exc:
+            raise PlanningFileValidationError from exc
+        finally:
+            if workbook is not None:
+                workbook.close()
+
+    @staticmethod
     def parse(source: PlanningUploadFile) -> ParsedWorkbook:
         if not source.filename or Path(source.filename).suffix.casefold() != ".xlsx":
             raise PlanningFileValidationError

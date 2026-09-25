@@ -20,7 +20,8 @@ class RequestRepository(BaseRepository[Request]):
         result = await self._session.scalars(select(Request).where(Request.id.in_(request_ids)))
         return list(result.all())
 
-    def add_many(self, requests: list[RequestCreateDTO]) -> None:
+    def add_many(self, requests: list[RequestCreateDTO]) -> list[Request]:
+        models: list[Request] = []
         for request in requests:
             model = Request()
             model.upload_id = request.upload_id
@@ -42,3 +43,5 @@ class RequestRepository(BaseRepository[Request]):
             model.required_skill = request.required_skill
             model.required_vehicle_type = request.required_vehicle_type
             self.add(model)
+            models.append(model)
+        return models

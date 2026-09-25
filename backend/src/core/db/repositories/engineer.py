@@ -38,7 +38,8 @@ class EngineerRepository(BaseRepository[Engineer]):
         )
         return list(result.all())
 
-    def add_many(self, engineers: list[EngineerCreateDTO]) -> None:
+    def add_many(self, engineers: list[EngineerCreateDTO]) -> list[Engineer]:
+        models: list[Engineer] = []
         for engineer in engineers:
             model = Engineer()
             model.upload_id = engineer.upload_id
@@ -56,3 +57,5 @@ class EngineerRepository(BaseRepository[Engineer]):
                 model.skills.append(engineer_skill)
             model.vehicle_type = engineer.vehicle_type
             self.add(model)
+            models.append(model)
+        return models

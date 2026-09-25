@@ -3,7 +3,7 @@ from src.api.exc.base import http_error
 
 @http_error(
     status_code=422,
-    detail="Нужно загрузить ненулевое чётное количество Excel-файлов",
+    detail="Нужно загрузить хотя бы один Excel-файл",
 )
 class PlanningFileCountError(Exception):
     pass
