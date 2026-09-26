@@ -171,6 +171,7 @@ export interface PlanningRun {
 
 export interface PlanSummary {
   id: string;
+  planning_date?: string;
   code: string;
   status: PlanStatus;
   parent_plan_id: string | null;

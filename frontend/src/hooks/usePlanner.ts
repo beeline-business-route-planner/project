@@ -102,6 +102,7 @@ function normalizePlans(plans: BackendPlanSummary[]): PlanSummary[] {
     .sort((left, right) => right.created_at.localeCompare(left.created_at))
     .map((plan, index) => ({
       id: plan.id,
+      planning_date: plan.planning_date,
       code: `PLN-${plan.planning_date.replaceAll("-", "").slice(2)}-${String(plans.length - index).padStart(2, "0")}`,
       status: planStatus(plan),
       parent_plan_id: plan.based_on_plan_id,

@@ -36,7 +36,11 @@ type ListTab = "requests" | "engineers";
 
 export function Dashboard({ planner }: { planner: PlannerController }) {
   const { data } = planner;
-  const canOperate = planner.source === "api" && Boolean(data.activePlanId);
+  const today = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date());
+  const canOperate = planner.source === "api" && data.planningDate === today
+    && data.plans.some((plan) => plan.status === "approved" && plan.planning_date === today);
   const [tab, setTab] = useState<ListTab>("requests");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<RequestStatus | "all">("all");
@@ -92,7 +96,7 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
           <h1>Рабочий день</h1>
           <p>План <strong>{data.plans.find((plan) => plan.id === data.activePlanId)?.code ?? "—"}</strong> · создан {formatTime(data.plans.find((plan) => plan.id === data.activePlanId)?.created_at)}</p>
         </div>
-        <button className="button primary" disabled={!canOperate} title={!canOperate ? "Сначала загрузите пару Excel и создайте план" : undefined} onClick={() => setUrgentOpen(true)}><Plus size={17} /> Новая заявка</button>
+        <button className="button primary" disabled={!canOperate} title={!canOperate ? "Нужен утверждённый план на текущий день" : undefined} onClick={() => setUrgentOpen(true)}><Plus size={17} /> Новая заявка</button>
       </div>
 
       <section className="kpi-grid day-kpis">
