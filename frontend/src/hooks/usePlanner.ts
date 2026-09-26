@@ -401,16 +401,17 @@ export function usePlanner() {
     showNotice("Статус заявки обновлён");
   }, [apiUnavailable, showNotice, source]);
 
-  const importDataset = useCallback(async (file: File) => {
+  const importDataset = useCallback(async (files: File[]) => {
     if ((import.meta.env.VITE_DEMO_MODE ?? "auto") === "true") throw new Error("Импорт требует подключения backend");
-    const result = await backend.importInitial([file]);
+    if (files.length !== 2) throw new Error("Выберите два Excel-файла одного округа: заявки и инженеры");
+    const result = await backend.importInitial(files);
     const imported = result.regions.find((item) => item.status === "success" && item.plan_summary);
     if (!imported) {
       const reason = result.regions.find((item) => item.error)?.error?.detail;
       throw new Error(reason ?? "Backend не создал план ни для одного региона");
     }
     await loadApi(imported.region, imported.plan_summary?.planning_date, imported.plan_summary?.id, true);
-    showNotice(`Файл «${file.name}» принят`);
+    showNotice("Пара Excel-файлов принята, план рассчитан");
   }, [loadApi, showNotice]);
 
   const runPlanning = useCallback(async (isReplan: boolean) => {
@@ -459,8 +460,8 @@ export function usePlanner() {
         is_gigabit: false,
         window_start: String(payload.window_start),
         window_end: String(payload.window_end),
-        norm_minutes: Number(payload.service_minutes ?? 100),
-        norm_minutes_without_travel: Number(payload.service_minutes ?? 100),
+        norm_minutes: 100,
+        norm_minutes_without_travel: 80,
         priority: 1,
         required_skill: "emergency_works",
         required_vehicle_type: "car",

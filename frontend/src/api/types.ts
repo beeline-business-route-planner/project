@@ -246,6 +246,7 @@ export interface ApiPlanDiffItem {
 export interface ApiErrorBody {
   code: string;
   message: string;
+  detail: string | { msg: string }[];
   details: Record<string, unknown>;
   correlation_id: string;
 }

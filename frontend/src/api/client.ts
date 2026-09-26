@@ -13,7 +13,13 @@ export class ApiError extends Error {
   details: Record<string, unknown>;
 
   constructor(status: number, body: Partial<ApiErrorBody>) {
-    super(body.message ?? `Backend вернул HTTP ${status}`);
+    const detail = body.detail;
+    const detailMessage = typeof detail === "string"
+      ? detail
+      : Array.isArray(detail)
+        ? detail.map((item) => item.msg).filter(Boolean).join("; ")
+        : undefined;
+    super(body.message ?? detailMessage ?? `Backend вернул HTTP ${status}`);
     this.name = "ApiError";
     this.status = status;
     this.code = body.code ?? "unknown_error";
@@ -61,7 +67,15 @@ export async function apiBlob(path: string): Promise<{ blob: Blob; filename: str
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { "X-Correlation-ID": crypto.randomUUID() },
   });
-  if (!response.ok) throw new ApiError(response.status, { message: response.statusText });
+  if (!response.ok) {
+    let errorBody: Partial<ApiErrorBody> = {};
+    try {
+      errorBody = (await response.json()) as Partial<ApiErrorBody>;
+    } catch {
+      errorBody = { message: response.statusText };
+    }
+    throw new ApiError(response.status, errorBody);
+  }
   const disposition = response.headers.get("content-disposition") ?? "";
   const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? "report";
   return { blob: await response.blob(), filename };

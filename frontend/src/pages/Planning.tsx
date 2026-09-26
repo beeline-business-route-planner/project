@@ -40,7 +40,7 @@ export function Planning({ planner }: { planner: PlannerController }) {
   const { data } = planner;
   const [selectedPlanId, setSelectedPlanId] = useState(data.activePlanId);
   const [view, setView] = useState<PlanningView>("schedule");
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualRequestId, setManualRequestId] = useState<string | undefined>();
@@ -62,9 +62,20 @@ export function Planning({ planner }: { planner: PlannerController }) {
   const unassigned = data.requests.filter((request) => !request.engineer_id && request.status !== "CANCELLED");
 
   const upload = async () => {
-    if (!file) return;
+    if (files.length !== 2) {
+      planner.showNotice("Выберите ровно два Excel-файла одного округа: заявки и инженеры");
+      return;
+    }
+    if (files.some((file) => !file.name.toLowerCase().endsWith(".xlsx") || file.size === 0 || file.size > 10_000_000)) {
+      planner.showNotice("Нужны непустые файлы XLSX размером до 10 МБ каждый");
+      return;
+    }
     setBusy(true);
-    try { await planner.importDataset(file); setFile(null); } catch (error) { actionError(error); } finally { setBusy(false); }
+    try {
+      await planner.importDataset(files);
+      setFiles([]);
+      if (inputRef.current) inputRef.current.value = "";
+    } catch (error) { actionError(error); } finally { setBusy(false); }
   };
 
   const calculate = async (replan: boolean) => {
@@ -105,12 +116,12 @@ export function Planning({ planner }: { planner: PlannerController }) {
 
         <div className="planning-workspace">
           <section className="import-strip">
-            <div className="import-copy"><span className="section-number">01</span><div><h2>Исходные данные</h2><p>Excel с заявками и параметрами сценария</p></div></div>
-            <input ref={inputRef} hidden type="file" accept=".xlsx,.xls" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-            <button className={`file-drop ${file ? "has-file" : ""}`} disabled={explicitDemo} title={explicitDemo ? "Импорт требует backend" : undefined} onClick={() => inputRef.current?.click()}>
-              {file ? <><span className="file-icon ready"><FileSpreadsheet size={18} /></span><div><strong>{file.name}</strong><small>{(file.size / 1024).toFixed(0)} КБ · готов к загрузке</small></div><CheckCircle2 size={19} className="success-icon" /></> : <><span className="file-icon"><UploadCloud size={19} /></span><div><strong>Выбрать Excel-файл</strong><small>XLSX, до 10 МБ</small></div><ChevronRight size={17} /></>}
+            <div className="import-copy"><span className="section-number">01</span><div><h2>Исходные данные</h2><p>Пара XLSX одного округа: заявки и инженеры</p></div></div>
+            <input ref={inputRef} hidden type="file" multiple accept=".xlsx" onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
+            <button className={`file-drop ${files.length ? "has-file" : ""}`} disabled={explicitDemo} title={explicitDemo ? "Импорт требует backend" : undefined} onClick={() => inputRef.current?.click()}>
+              {files.length ? <><span className="file-icon ready"><FileSpreadsheet size={18} /></span><div><strong>{files.map((file) => file.name).join(" + ")}</strong><small>{files.length === 2 ? "2 файла выбраны · проверьте, что они относятся к одному округу" : `Выбрано ${files.length}: нужно ровно 2`}</small></div>{files.length === 2 ? <CheckCircle2 size={19} className="success-icon" /> : <AlertTriangle size={19} />}</> : <><span className="file-icon"><UploadCloud size={19} /></span><div><strong>Выбрать два Excel-файла</strong><small>Заявки + инженеры · XLSX до 10 МБ каждый</small></div><ChevronRight size={17} /></>}
             </button>
-            {file ? <button className="button secondary small" disabled={busy} onClick={() => void upload()}>{busy ? "Загрузка…" : "Загрузить"}</button> : null}
+            {files.length ? <button className="button secondary small" disabled={busy || files.length !== 2} onClick={() => void upload()}>{busy ? "Загрузка…" : "Загрузить"}</button> : null}
           </section>
 
           <section className="plan-canvas">
