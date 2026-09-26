@@ -50,7 +50,7 @@ export function Planning({ planner }: { planner: PlannerController }) {
   const isDraft = selectedPlan?.status === "draft";
   const explicitDemo = (import.meta.env.VITE_DEMO_MODE ?? "auto") === "true";
   const canEditManually = false;
-  const canOperate = planner.source === "api";
+  const canOperate = planner.source === "api" && Boolean(data.activePlanId);
   const actionError = (error: unknown) => planner.showNotice(error instanceof Error ? error.message : "Действие не удалось");
 
   useEffect(() => {
@@ -96,7 +96,7 @@ export function Planning({ planner }: { planner: PlannerController }) {
     <div className="planning-page">
       <div className="page-heading">
         <div><span className="eyebrow">Сценарии и назначения</span><h1>Планирование</h1><p>Загрузите данные, проверьте ограничения и утвердите лучший вариант.</p></div>
-        <div className="heading-actions"><button className="button secondary" disabled={!canOperate} title={!canOperate ? "Подключите backend или включите явный демо-режим" : undefined} onClick={() => setEventOpen(true)}><CalendarClock size={17} /> Событие дня</button><button className="button primary" disabled={busy || !canOperate} title={!canOperate ? "Подключите backend или включите явный демо-режим" : undefined} onClick={() => void calculate(Boolean(data.activePlanId))}><Sparkles size={17} /> {data.activePlanId ? "Перепланировать" : "Сформировать план"}</button></div>
+        <div className="heading-actions"><button className="button secondary" disabled={!canOperate} title={!canOperate ? "Сначала загрузите пару Excel и создайте план" : undefined} onClick={() => setEventOpen(true)}><CalendarClock size={17} /> Событие дня</button><button className="button primary" disabled={busy || !canOperate} title={!canOperate ? "Сначала загрузите пару Excel и создайте план" : undefined} onClick={() => void calculate(Boolean(data.activePlanId))}><Sparkles size={17} /> {data.activePlanId ? "Перепланировать" : "Сформировать план"}</button></div>
       </div>
 
       <div className="planning-layout">
@@ -173,7 +173,7 @@ function Schedule({ planner, onEditRequest }: { planner: PlannerController; onEd
         const requests = data.requests.filter((request) => request.engineer_id === engineer.id);
         return (
           <div className="schedule-row" key={engineer.id}>
-            <div className="schedule-engineer"><Avatar name={engineer.name} color={engineer.color} small /><div><strong>{engineer.name}</strong><span>{Math.round(engineer.load_minutes / 480 * 100)}% · {formatDistance(engineer.distance_meters)}</span></div></div>
+            <div className="schedule-engineer"><Avatar name={engineer.name} color={engineer.color} small /><div><strong>{engineer.name}</strong><span>{(engineer.load_percent ?? Math.round(engineer.load_minutes / 480 * 100))}% · {formatDistance(engineer.distance_meters)}</span></div></div>
             <div className="timeline-track">
               {[1, 2, 3, 4, 5].map((line) => <i className="grid-line" key={line} style={{ left: `${line * 16.667}%` }} />)}
               {requests.map((request) => {

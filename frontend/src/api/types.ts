@@ -54,6 +54,7 @@ export interface Engineer {
   status: "available" | "en_route" | "working" | "unavailable";
   request_ids: string[];
   load_minutes: number;
+  load_percent?: number;
   distance_meters: number;
   color: string;
 }

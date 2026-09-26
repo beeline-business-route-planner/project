@@ -36,7 +36,7 @@ type ListTab = "requests" | "engineers";
 
 export function Dashboard({ planner }: { planner: PlannerController }) {
   const { data } = planner;
-  const canOperate = planner.source === "api";
+  const canOperate = planner.source === "api" && Boolean(data.activePlanId);
   const [tab, setTab] = useState<ListTab>("requests");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<RequestStatus | "all">("all");
@@ -92,7 +92,7 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
           <h1>Рабочий день</h1>
           <p>План <strong>{data.plans.find((plan) => plan.id === data.activePlanId)?.code ?? "—"}</strong> · создан {formatTime(data.plans.find((plan) => plan.id === data.activePlanId)?.created_at)}</p>
         </div>
-        <button className="button primary" disabled={!canOperate} title={!canOperate ? "Создание заявки требует backend; для презентации включите VITE_DEMO_MODE=true" : undefined} onClick={() => setUrgentOpen(true)}><Plus size={17} /> Новая заявка</button>
+        <button className="button primary" disabled={!canOperate} title={!canOperate ? "Сначала загрузите пару Excel и создайте план" : undefined} onClick={() => setUrgentOpen(true)}><Plus size={17} /> Новая заявка</button>
       </div>
 
       <section className="kpi-grid day-kpis">
@@ -130,7 +130,7 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
               <button key={engineer.id} className={`engineer-row ${selectedEngineerId === engineer.id ? "selected" : ""}`} onClick={() => selectEngineer(engineer.id)}>
                 <Avatar name={engineer.name} color={engineer.color} />
                 <div><strong>{engineer.name}</strong><span>{engineer.external_code} · {transportLabels[engineer.transport]}</span><div className="skill-dots">{engineer.skills.map((skill) => <i key={skill} data-tooltip={skillLabels[skill]} aria-label={`Квалификация: ${skillLabels[skill]}`}><SkillIcon skill={skill} size={12} /></i>)}</div></div>
-                <aside><b>{engineer.request_ids.length}</b><span>заявок</span><em>{Math.round(engineer.load_minutes / 480 * 100)}%</em></aside>
+                <aside><b>{engineer.request_ids.length}</b><span>заявок</span><em>{(engineer.load_percent ?? Math.round(engineer.load_minutes / 480 * 100))}%</em></aside>
               </button>
             ))}
           </div>
@@ -209,8 +209,8 @@ function EngineerDetails({ engineer, requests, onRequest, onClose }: {
       <div className="details-head"><div><span>Инженер</span><h2>{engineer.external_code}</h2></div><button className="icon-button" onClick={onClose}><X size={17} /></button></div>
       <div className="engineer-profile"><Avatar name={engineer.name} color={engineer.color} /><div><h3>{engineer.name}</h3><span><TransportIcon transport={engineer.transport} /> {transportLabels[engineer.transport]}</span></div><i className={`availability ${engineer.status}`} /></div>
       <div className="skill-chips">{engineer.skills.map((skill) => <span key={skill}><SkillIcon skill={skill} />{skillLabels[skill]}</span>)}</div>
-      <div className="detail-three"><div><b>{requests.length}</b><span>заявок</span></div><div><b>{formatDistance(engineer.distance_meters)}</b><span>маршрут</span></div><div><b>{Math.round(engineer.load_minutes / 480 * 100)}%</b><span>загрузка</span></div></div>
-      <div className="load-bar"><i style={{ width: `${Math.min(100, engineer.load_minutes / 4.8)}%`, background: engineer.color }} /></div>
+      <div className="detail-three"><div><b>{requests.length}</b><span>заявок</span></div><div><b>{formatDistance(engineer.distance_meters)}</b><span>маршрут</span></div><div><b>{(engineer.load_percent ?? Math.round(engineer.load_minutes / 480 * 100))}%</b><span>загрузка</span></div></div>
+      <div className="load-bar"><i style={{ width: `${Math.min(100, engineer.load_percent ?? engineer.load_minutes / 4.8)}%`, background: engineer.color }} /></div>
       <div className="route-list"><label>Маршрут на день</label>{requests.map((request, index) => <button key={request.id} onClick={() => onRequest(request.id)}><span className="route-index" style={{ borderColor: engineer.color }}>{index + 1}</span><div><strong>{formatTime(request.arrival_at ?? request.window_start)} · {request.external_id}</strong><span>{request.address}</span></div><StatusPill status={request.status} /></button>)}</div>
     </div>
   );

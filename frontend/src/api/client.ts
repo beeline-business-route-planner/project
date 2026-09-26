@@ -2,7 +2,7 @@ import type { ApiErrorBody } from "./types";
 
 const configuredApiUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
 // Local Vite proxy avoids a browser CORS failure when backend has no cors.origins.
-const API_BASE_URL = import.meta.env.DEV && /^https?:\/\/(localhost|127\.0\.0\.1):8000\/api\/?$/.test(configuredApiUrl)
+const API_BASE_URL = import.meta.env.DEV && /^https?:\/\/(localhost|127\.0\.0\.1):8000\/api(?:\/v1)?\/?$/.test(configuredApiUrl)
   ? "/api"
   : configuredApiUrl.replace(/\/$/, "");
 
@@ -12,7 +12,7 @@ export class ApiError extends Error {
   correlationId: string;
   details: Record<string, unknown>;
 
-  constructor(status: number, body: Partial<ApiErrorBody>) {
+  constructor(status: number, body: Partial<ApiErrorBody>, requestId?: string | null) {
     const detail = body.detail;
     const detailMessage = typeof detail === "string"
       ? detail
@@ -23,7 +23,7 @@ export class ApiError extends Error {
     this.name = "ApiError";
     this.status = status;
     this.code = body.code ?? "unknown_error";
-    this.correlationId = body.correlation_id ?? "—";
+    this.correlationId = body.correlation_id ?? requestId ?? "—";
     this.details = body.details ?? {};
   }
 }
@@ -56,7 +56,7 @@ export async function apiRequest<T>(path: string, options: ApiOptions = {}): Pro
     } catch {
       errorBody = { message: response.statusText };
     }
-    throw new ApiError(response.status, errorBody);
+    throw new ApiError(response.status, errorBody, response.headers.get("X-Request-Id"));
   }
 
   if (response.status === 204) return undefined as T;
@@ -74,7 +74,7 @@ export async function apiBlob(path: string): Promise<{ blob: Blob; filename: str
     } catch {
       errorBody = { message: response.statusText };
     }
-    throw new ApiError(response.status, errorBody);
+    throw new ApiError(response.status, errorBody, response.headers.get("X-Request-Id"));
   }
   const disposition = response.headers.get("content-disposition") ?? "";
   const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? "report";

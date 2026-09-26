@@ -184,7 +184,8 @@ function engineerFromBackend(
     skills: (detail?.skills ?? []).map((skill) => skillMap[skill] ?? "local"),
     status: detail?.is_available === false ? "unavailable" : tile.assigned_requests_count ? "working" : "available",
     request_ids: tile.stops.map((stop) => stop.request_id),
-    load_minutes: Math.round(load <= 1 ? load * 480 : load * 4.8),
+    load_minutes: Math.round(load * (Date.parse(tile.shift_end) - Date.parse(tile.shift_start)) / 6_000_000),
+    load_percent: Math.round(load),
     distance_meters: number(tile.route_distance_km) * 1000,
     color: colors[index % colors.length],
   };
@@ -259,7 +260,32 @@ export function usePlanner() {
     try {
       const region = regionOf(scenarioOverride);
       const summaries = await backend.plans(region);
-      if (!summaries.length) throw new Error("Для выбранного участка пока нет рассчитанных планов");
+      if (!summaries.length) {
+        const today = new Intl.DateTimeFormat("sv-SE", {
+          timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit",
+        }).format(new Date());
+        const planningDate = dateOverride ?? today;
+        setDetailedRoute(null);
+        setData({
+          scenarios: apiScenarios.map((scenario) => ({
+            ...scenario,
+            planning_dates: scenario.id === region ? [planningDate] : [],
+          })),
+          scenarioId: region,
+          planningDate,
+          activePlanId: "",
+          requests: [],
+          engineers: [],
+          plans: [],
+          routes: { plan_id: "", revision: "", status: "", routes: [] },
+          metrics: { assigned: 0, unassigned: 0, completed: 0, engineers_used: 0,
+            distance_meters: 0, avg_load_percent: 0, coverage_percent: 0 },
+          audit: [],
+          diff: [],
+        });
+        setSource("api");
+        return;
+      }
       const availableDates = [...new Set(summaries.map((plan) => plan.planning_date))].sort().reverse();
       const planningDate = dateOverride && availableDates.includes(dateOverride)
         ? dateOverride

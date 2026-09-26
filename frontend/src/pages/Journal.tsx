@@ -103,8 +103,8 @@ export function Journal({
 
           <div className="analytics-grid">
             <section className="chart-card workload-chart">
-              <div className="card-head"><div><h2>Загрузка инженеров</h2><p>Работы + дорога от 8-часовой смены</p></div><span className="chart-badge">План {data.plans.find((plan) => plan.id === data.activePlanId)?.code}</span></div>
-              <div className="workload-bars">{data.engineers.map((engineer) => { const percent = Math.round(engineer.load_minutes / 480 * 100); return <div key={engineer.id}><span>{engineer.name}</span><div><i style={{ width: `${Math.min(100, percent)}%`, background: engineer.color }} /></div><b>{percent}%</b></div>; })}</div>
+              <div className="card-head"><div><h2>Загрузка инженеров</h2><p>Работы + дорога от длительности смены</p></div><span className="chart-badge">План {data.plans.find((plan) => plan.id === data.activePlanId)?.code}</span></div>
+              <div className="workload-bars">{data.engineers.map((engineer) => { const percent = (engineer.load_percent ?? Math.round(engineer.load_minutes / 480 * 100)); return <div key={engineer.id}><span>{engineer.name}</span><div><i style={{ width: `${Math.min(100, percent)}%`, background: engineer.color }} /></div><b>{percent}%</b></div>; })}</div>
               <div className="chart-axis"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
             </section>
 
