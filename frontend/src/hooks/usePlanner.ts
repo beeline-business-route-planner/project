@@ -105,7 +105,6 @@ function normalizePlans(plans: BackendPlanSummary[]): PlanSummary[] {
       planning_date: plan.planning_date,
       code: `PLN-${plan.planning_date.replaceAll("-", "").slice(2)}-${String(plans.length - index).padStart(2, "0")}`,
       status: planStatus(plan),
-      planning_date: plan.planning_date,
       parent_plan_id: plan.based_on_plan_id,
       base_plan_id: plan.based_on_plan_id,
       input_version: plan.id,
