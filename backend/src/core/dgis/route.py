@@ -32,6 +32,7 @@ class DgisRouteService:
     ) -> RouteLeg:
         if not cfg.dgis.api_key:
             raise DgisUnavailableError("Не задан ключ 2ГИС")
+        payload: dict[str, object]
         if vehicle_type == VehicleType.PUBLIC_TRANSPORT:
             path = "/public_transport/2.0"
             payload = {
@@ -48,7 +49,6 @@ class DgisRouteService:
                     "mcd",
                     "pedestrian",
                 ],
-                "max_result_count": 1,
             }
         else:
             path = "/routing/7.0.0/global"
@@ -79,7 +79,14 @@ class DgisRouteService:
         if vehicle_type == VehicleType.PUBLIC_TRANSPORT:
             if not isinstance(raw, list) or not raw:
                 raise InvalidDgisResponseError("2ГИС не построил маршрут транспорта")
-            option = raw[0]
+            option = next(
+                (
+                    item
+                    for item in raw
+                    if isinstance(item, dict) and item.get("pedestrian") is False
+                ),
+                raw[0],
+            )
             geometry = self._public_transport_geometry(option)
         else:
             if not isinstance(raw, dict) or raw.get("status") != "OK":

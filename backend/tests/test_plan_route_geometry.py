@@ -30,6 +30,23 @@ class DgisRouteGeometryTests(unittest.IsolatedAsyncioTestCase):
                     200,
                     json=[
                         {
+                            "pedestrian": True,
+                            "total_distance": 900,
+                            "total_duration": 900,
+                            "movements": [
+                                {
+                                    "alternatives": [
+                                        {
+                                            "geometry": [
+                                                {"selection": "LINESTRING(37.1 55.1, 37.2 55.2)"}
+                                            ]
+                                        }
+                                    ]
+                                }
+                            ],
+                        },
+                        {
+                            "pedestrian": False,
                             "total_distance": 510,
                             "total_duration": 190,
                             "movements": [
@@ -52,7 +69,7 @@ class DgisRouteGeometryTests(unittest.IsolatedAsyncioTestCase):
                                     ]
                                 },
                             ],
-                        }
+                        },
                     ],
                 )
             return httpx.Response(
