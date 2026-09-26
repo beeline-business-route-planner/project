@@ -10,6 +10,7 @@ from src.api.reports.dto import (
     ReportBaseline,
     ReportEngineer,
     ReportEvent,
+    ReportMetrics,
     ReportPlanVersion,
     ReportStop,
     ReportUnassigned,
@@ -104,17 +105,22 @@ class DailyReportService:
         if current.approved_at is None:
             raise ValueError("Последний план не утверждён")
         versions = tuple(self._plan_version(item) for item in plans)
-        engineers, unassigned = await self._final_routes(current)
+        initial_engineers, initial_unassigned = await self._final_routes(initial)
+        initial_metrics = ReportPresenter.metrics(
+            initial_engineers,
+            initial.assigned_requests_count,
+            initial.unassigned_requests_count,
+        )
+        self._validate_metrics(initial, initial_metrics, initial_engineers, initial_unassigned)
+        engineers, unassigned = (
+            (initial_engineers, initial_unassigned)
+            if current.id == initial.id
+            else await self._final_routes(current)
+        )
         metrics = ReportPresenter.metrics(
             engineers, current.assigned_requests_count, current.unassigned_requests_count
         )
-        if (
-            metrics.assigned_count != sum(len(item.stops) for item in engineers)
-            or metrics.unassigned_count != len(unassigned)
-            or metrics.engineers_used_count != current.engineers_used_count
-            or metrics.mileage_km != current.total_mileage_km
-        ):
-            raise ValueError("Метрики последнего плана не совпадают с сохранёнными маршрутами")
+        self._validate_metrics(current, metrics, engineers, unassigned)
         return RegionReportSnapshot(
             region=region,
             planning_date=current.planning_date,
@@ -122,6 +128,7 @@ class DailyReportService:
             upload_id=initial.upload_id,
             initial_approved_at=initial.approved_at,
             baseline=self._baseline(baseline),
+            initial_metrics=initial_metrics,
             plans=versions,
             changes=ReportPresenter.changes(versions),
             events=tuple(self._event(item, event_requests, event_engineers) for item in events),
@@ -131,6 +138,21 @@ class DailyReportService:
             unassigned=unassigned,
             metrics=metrics,
         )
+
+    @staticmethod
+    def _validate_metrics(
+        plan: Plan,
+        metrics: ReportMetrics,
+        engineers: tuple[ReportEngineer, ...],
+        unassigned: tuple[ReportUnassigned, ...],
+    ) -> None:
+        if (
+            metrics.assigned_count != sum(len(item.stops) for item in engineers)
+            or metrics.unassigned_count != len(unassigned)
+            or metrics.engineers_used_count != plan.engineers_used_count
+            or metrics.mileage_km != plan.total_mileage_km
+        ):
+            raise ValueError("Метрики плана не совпадают с сохранёнными маршрутами")
 
     async def _final_routes(
         self, plan: Plan

@@ -105,6 +105,7 @@ class RegionReportSnapshot:
     upload_id: uuid.UUID
     initial_approved_at: datetime
     baseline: ReportBaseline
+    initial_metrics: ReportMetrics
     plans: tuple[ReportPlanVersion, ...]
     changes: tuple[ReportPlanChange, ...]
     events: tuple[ReportEvent, ...]

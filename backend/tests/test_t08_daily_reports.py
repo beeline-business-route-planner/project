@@ -3,14 +3,17 @@
 import os
 import unittest
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from src.api.plans.snapshot import PlanSnapshotAssembler
+from src.api.reports.pdf import DailyPdfRenderer
 from src.api.reports.service import DailyReportService
 from src.core.db.enums import (
     ApprovalStatus,
@@ -20,6 +23,7 @@ from src.core.db.enums import (
     RequestTypeBk,
     RequestTypeHd,
     Skill,
+    UnassignedReason,
     VehicleType,
 )
 from src.core.db.models import (
@@ -29,6 +33,7 @@ from src.core.db.models import (
     Plan,
     PlanEngineerState,
     PlanStop,
+    PlanUnassignedRequest,
     ReplanningEvent,
     Request,
 )
@@ -111,7 +116,7 @@ class DailyReportEndToEndTest(unittest.IsolatedAsyncioTestCase):
                     approved_at=early,
                     calculation_cutoff_at=morning,
                     assigned_requests_count=1,
-                    unassigned_requests_count=0,
+                    unassigned_requests_count=1 if region == Region.YUGO_VOSTOK else 0,
                     engineers_used_count=1,
                     total_mileage_km=Decimal("1.00"),
                 )
@@ -125,7 +130,7 @@ class DailyReportEndToEndTest(unittest.IsolatedAsyncioTestCase):
                     BaselineResult(
                         initial_plan_id=initial.id,
                         assigned_requests_count=1,
-                        unassigned_requests_count=0,
+                        unassigned_requests_count=1 if region == Region.YUGO_VOSTOK else 0,
                         engineers_used_count=1,
                         total_mileage_km=Decimal("2.00"),
                         average_workload_with_travel=Decimal("10.42"),
@@ -139,6 +144,53 @@ class DailyReportEndToEndTest(unittest.IsolatedAsyncioTestCase):
                         plan_id=initial.id, engineer_id=engineer.id, is_available=True
                     )
                 )
+                if region == Region.YUGO_VOSTOK:
+                    idle_engineer = Engineer(
+                        id=uuid.uuid7(),
+                        upload_id=upload.id,
+                        name="Инженер без маршрута",
+                        region=region,
+                        start_point_address="Офис",
+                        shift_start=morning,
+                        shift_end=morning + timedelta(hours=8),
+                        vehicle_type=VehicleType.CAR,
+                        is_available=True,
+                    )
+                    session.add(idle_engineer)
+                    await session.flush()
+                    session.add(
+                        PlanEngineerState(
+                            plan_id=initial.id,
+                            engineer_id=idle_engineer.id,
+                            is_available=True,
+                        )
+                    )
+                    extra = Request(
+                        id=uuid.uuid7(),
+                        upload_id=upload.id,
+                        external_id=201,
+                        type_bk=RequestTypeBk.LOCAL_REQUEST,
+                        type_hd=RequestTypeHd.INFORMATION,
+                        region=region,
+                        district="Район",
+                        address="Неназначенный адрес",
+                        is_gigabit=False,
+                        window_start=morning,
+                        window_end=morning + timedelta(hours=8),
+                        norm_minutes=50,
+                        norm_minutes_without_travel=30,
+                        priority=3,
+                        required_skill=Skill.LOCAL_WORKS,
+                    )
+                    session.add(extra)
+                    await session.flush()
+                    session.add(
+                        PlanUnassignedRequest(
+                            plan_id=initial.id,
+                            request_id=extra.id,
+                            reason=UnassignedReason.NO_TIME_SLOT,
+                        )
+                    )
                 if region == Region.VOSTOK:
                     urgent = Request(
                         id=uuid.uuid7(),
@@ -303,9 +355,42 @@ class DailyReportEndToEndTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(east.changes[0].assigned_delta, 1)
         self.assertEqual(east.baseline.mileage_km, Decimal("2.00"))
         self.assertEqual(len(south_east.plans), 1)
+        self.assertEqual(len(south_east.engineers), 2)
+        self.assertEqual(sum(bool(item.stops) for item in south_east.engineers), 1)
+        self.assertEqual(len(south_east.unassigned), 1)
+        self.assertEqual(south_east.unassigned[0].reason, UnassignedReason.NO_TIME_SLOT)
+        self.assertEqual(snapshot.summary.requests_count, 4)
         self.assertEqual(snapshot.summary.assigned_count, 3)
+        self.assertEqual(snapshot.summary.unassigned_count, 1)
         self.assertEqual(snapshot.summary.mileage_km, Decimal("3.00"))
-        self.assertEqual(snapshot.summary.engineers_count, 2)
+        self.assertEqual(snapshot.summary.engineers_count, 3)
+        files = DailyPdfRenderer.render(snapshot)
+        self.assertEqual(set(files), {"vostok.pdf", "yugo_vostok.pdf", "summary.pdf"})
+        self.assertTrue(all(content.startswith(b"%PDF-") for content in files.values()))
+        self.assertEqual(set(DailyPdfRenderer.render(empty)), {"summary.pdf"})
+        long_route = tuple(
+            replace(
+                east.engineers[0].stops[0],
+                sequence_number=number,
+                address="Длинный адрес с кириллицей и деталями " * 10,
+            )
+            for number in range(1, 61)
+        )
+        stress_region = replace(
+            east,
+            engineers=(replace(east.engineers[0], stops=long_route),),
+        )
+        stress_pdf = DailyPdfRenderer.render(replace(snapshot, regions=(stress_region,)))[
+            "vostok.pdf"
+        ]
+        self.assertTrue(stress_pdf.startswith(b"%PDF-"))
+        output_dir = os.environ.get("T08_PDF_OUTPUT_DIR")
+        if output_dir is not None:
+            destination = Path(output_dir)
+            destination.mkdir(parents=True, exist_ok=True)
+            for filename, content in files.items():
+                (destination / filename).write_bytes(content)
+            (destination / "stress.pdf").write_bytes(stress_pdf)
 
     @staticmethod
     def _stop(session, plan_id, engineer_id, request_id, sequence, start) -> None:
