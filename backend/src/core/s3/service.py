@@ -79,7 +79,7 @@ class S3Storage:
                 if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                     raise S3UnavailableError("S3 вернул некорректную ссылку")
                 return url
-        except (BotoCoreError, ClientError, OSError) as exc:
+        except (BotoCoreError, ClientError, OSError, ValueError, TypeError) as exc:
             raise S3UnavailableError("Не удалось создать ссылку на объект S3") from exc
 
 

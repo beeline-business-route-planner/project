@@ -67,7 +67,8 @@ services:
       mc mb -p local/$${S3_BUCKET_ANSWERS} local/$${S3_BUCKET_UPLOADS} local/$${S3_BUCKET_PLANS} local/$${S3_BUCKET_EXPORTS} &&
       mc anonymous set public local/$${S3_BUCKET_ANSWERS} &&
       mc anonymous set public local/$${S3_BUCKET_UPLOADS} &&
-      mc anonymous set public local/$${S3_BUCKET_PLANS}
+      mc anonymous set public local/$${S3_BUCKET_PLANS} &&
+      mc anonymous set private local/$${S3_BUCKET_EXPORTS}
       "
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}

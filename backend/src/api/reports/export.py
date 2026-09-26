@@ -8,8 +8,9 @@ class DailyReportZipBuilder:
     """Собирает детерминированный ZIP из готовых PDF без локальных файлов."""
 
     @staticmethod
-    def build(planning_date: date, files: dict[str, bytes], regions_count: int) -> bytes:
-        if "summary.pdf" not in files or len(files) != regions_count + 1:
+    def build(planning_date: date, files: dict[str, bytes], region_codes: tuple[str, ...]) -> bytes:
+        expected = {"summary.pdf", *(f"{code}.pdf" for code in region_codes)}
+        if len(expected) != len(region_codes) + 1 or set(files) != expected:
             raise ValueError("Неверный набор PDF для дневного отчёта")
         output = BytesIO()
         folder = f"daily-report-{planning_date.isoformat()}"

@@ -1,7 +1,8 @@
 from datetime import time
 from pathlib import Path
+from typing import Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import (
     BaseSettings,
     EnvSettingsSource,
@@ -47,6 +48,8 @@ class S3Config(BaseModel):
     access_key: str = ""
     secret_key: str = ""
     region: str = "us-east-1"
+    connect_timeout_seconds: int = Field(default=10, gt=0)
+    read_timeout_seconds: int = Field(default=60, gt=0)
     bucket_answers: str = "answers"
     bucket_uploads: str = "uploads"
     bucket_plans: str = "plans"
@@ -55,6 +58,18 @@ class S3Config(BaseModel):
     export_url_ttl_seconds: int = Field(default=900, gt=0)
     export_retention_hours: int = Field(default=24, gt=0)
     max_export_size_bytes: int = Field(default=10_000_000, gt=0)
+
+    @model_validator(mode="after")
+    def validate_export_settings(self) -> Self:
+        if self.bucket_exports in {
+            self.bucket_answers,
+            self.bucket_uploads,
+            self.bucket_plans,
+        }:
+            raise ValueError("Бакет экспортов должен отличаться от остальных бакетов S3")
+        if self.export_url_ttl_seconds >= self.export_retention_hours * 3600:
+            raise ValueError("Срок хранения экспорта должен превышать время жизни ссылки")
+        return self
 
 
 class GeocodingConfig(BaseModel):

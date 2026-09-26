@@ -321,7 +321,11 @@ class DailyReportExportService:
         try:
             snapshot = await self._reports.build_snapshot(planning_date)
             files = DailyPdfRenderer.render(snapshot)
-            data = DailyReportZipBuilder.build(planning_date, files, len(snapshot.regions))
+            data = DailyReportZipBuilder.build(
+                planning_date,
+                files,
+                tuple(region.region.value for region in snapshot.regions),
+            )
             return await self._delivery.deliver(
                 data=data,
                 kind=ExportKind.DAILY_REPORT,

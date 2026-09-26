@@ -13,6 +13,8 @@ from src.api.exc.reports import DailyReportGenerationError, DailyReportStorageEr
 from src.api.reports.export import DailyReportZipBuilder
 from src.api.reports.service import DailyReportExportService
 from src.config import cfg
+from src.config.config import S3Config
+from src.core.db.enums import Region
 from src.core.s3 import (
     ExportDownload,
     ExportKind,
@@ -27,13 +29,17 @@ from src.core.s3.service import S3Storage
 class DailyReportZipTest(unittest.TestCase):
     def test_archive_contains_exactly_regions_and_summary_with_stable_names(self) -> None:
         files = {
-            "yugo-vostok.pdf": b"%PDF-1.4\nsecond",
+            "yugo_vostok.pdf": b"%PDF-1.4\nsecond",
             "summary.pdf": b"%PDF-1.4\nsummary",
             "vostok.pdf": b"%PDF-1.4\nfirst",
         }
         planning_date = date(2026, 9, 26)
-        first = DailyReportZipBuilder.build(planning_date, files, regions_count=2)
-        second = DailyReportZipBuilder.build(planning_date, dict(reversed(list(files.items()))), 2)
+        first = DailyReportZipBuilder.build(
+            planning_date, files, region_codes=("vostok", "yugo_vostok")
+        )
+        second = DailyReportZipBuilder.build(
+            planning_date, dict(reversed(list(files.items()))), ("vostok", "yugo_vostok")
+        )
         self.assertEqual(first, second)
         with ZipFile(io.BytesIO(first)) as archive:
             self.assertEqual(
@@ -41,20 +47,39 @@ class DailyReportZipTest(unittest.TestCase):
                 [
                     "daily-report-2026-09-26/summary.pdf",
                     "daily-report-2026-09-26/vostok.pdf",
-                    "daily-report-2026-09-26/yugo-vostok.pdf",
+                    "daily-report-2026-09-26/yugo_vostok.pdf",
                 ],
             )
             self.assertEqual(archive.read(archive.namelist()[0]), files["summary.pdf"])
 
     def test_rejects_missing_summary_and_unsafe_name(self) -> None:
         with self.assertRaises(ValueError):
-            DailyReportZipBuilder.build(date(2026, 9, 26), {"vostok.pdf": b"%PDF-1.4"}, 1)
+            DailyReportZipBuilder.build(date(2026, 9, 26), {"vostok.pdf": b"%PDF-1.4"}, ("vostok",))
         with self.assertRaises(ValueError):
             DailyReportZipBuilder.build(
                 date(2026, 9, 26),
                 {"summary.pdf": b"%PDF-1.4", "../other.pdf": b"%PDF-1.4"},
-                1,
+                ("vostok",),
             )
+        with self.assertRaises(ValueError):
+            DailyReportZipBuilder.build(
+                date(2026, 9, 26),
+                {"summary.pdf": b"%PDF-1.4", "other.pdf": b"%PDF-1.4"},
+                ("vostok",),
+            )
+
+    def test_empty_day_contains_only_summary(self) -> None:
+        result = DailyReportZipBuilder.build(date(2026, 9, 26), {"summary.pdf": b"%PDF-1.4"}, ())
+        with ZipFile(io.BytesIO(result)) as archive:
+            self.assertEqual(archive.namelist(), ["daily-report-2026-09-26/summary.pdf"])
+
+
+class S3ExportSettingsTest(unittest.TestCase):
+    def test_export_bucket_is_separate_and_retention_outlives_url(self) -> None:
+        with self.assertRaises(ValueError):
+            S3Config(bucket_exports="plans")
+        with self.assertRaises(ValueError):
+            S3Config(export_url_ttl_seconds=3600, export_retention_hours=1)
 
 
 class S3ExportDeliveryTest(unittest.IsolatedAsyncioTestCase):
@@ -111,8 +136,6 @@ class S3ExportDeliveryTest(unittest.IsolatedAsyncioTestCase):
             await delivery.deliver(data=b"x", **params)
 
 
-
-
 class S3ClientEndpointTest(unittest.TestCase):
     def test_presign_client_uses_public_endpoint(self) -> None:
         session = Mock()
@@ -123,6 +146,9 @@ class S3ClientEndpointTest(unittest.TestCase):
         ):
             connection.get()
             self.assertEqual(session.client.call_args.kwargs["endpoint_url"], "http://minio:9000")
+            client_config = session.client.call_args.kwargs["config"]
+            self.assertEqual(client_config.connect_timeout, cfg.s3.connect_timeout_seconds)
+            self.assertEqual(client_config.read_timeout, cfg.s3.read_timeout_seconds)
             connection.get(public=True)
             self.assertEqual(
                 session.client.call_args.kwargs["endpoint_url"],
@@ -153,6 +179,18 @@ class S3PresignTest(unittest.IsolatedAsyncioTestCase):
             'attachment; filename="report.zip"',
         )
 
+    async def test_malformed_presigned_url_is_storage_failure(self) -> None:
+        client = Mock()
+        client.generate_presigned_url = AsyncMock(return_value=None)
+        context = AsyncMock()
+        context.__aenter__.return_value = client
+        connection = Mock()
+        connection.get.return_value = context
+        with self.assertRaises(S3UnavailableError):
+            await S3Storage(connection).presigned_download_url(
+                "exports", "key", 900, "report.zip", "application/zip"
+            )
+
     async def test_presign_sdk_failure_is_translated(self) -> None:
         client = Mock()
         client.generate_presigned_url = AsyncMock(
@@ -173,7 +211,12 @@ class DailyReportExportServiceTest(unittest.IsolatedAsyncioTestCase):
         planning_date = date(2026, 9, 26)
         reports = Mock()
         reports.build_snapshot = AsyncMock(
-            return_value=SimpleNamespace(regions=(object(), object()))
+            return_value=SimpleNamespace(
+                regions=(
+                    SimpleNamespace(region=Region.VOSTOK),
+                    SimpleNamespace(region=Region.YUGO_VOSTOK),
+                )
+            )
         )
         delivery = Mock()
         delivery.deliver = AsyncMock(
@@ -190,7 +233,7 @@ class DailyReportExportServiceTest(unittest.IsolatedAsyncioTestCase):
             return_value={
                 "summary.pdf": b"%PDF-1.4\nsummary",
                 "vostok.pdf": b"%PDF-1.4\nfirst",
-                "yugo-vostok.pdf": b"%PDF-1.4\nsecond",
+                "yugo_vostok.pdf": b"%PDF-1.4\nsecond",
             },
         ):
             result = await DailyReportExportService(reports, delivery).export(planning_date)
@@ -203,9 +246,7 @@ class DailyReportExportServiceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_storage_failure_maps_to_api_error(self) -> None:
         reports = Mock()
-        reports.build_snapshot = AsyncMock(
-            return_value=SimpleNamespace(regions=())
-        )
+        reports.build_snapshot = AsyncMock(return_value=SimpleNamespace(regions=()))
         delivery = Mock()
         delivery.deliver = AsyncMock(side_effect=S3UnavailableError("unavailable"))
         with patch(
@@ -218,7 +259,7 @@ class DailyReportExportServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_report_does_not_upload(self) -> None:
         reports = Mock()
         reports.build_snapshot = AsyncMock(
-            return_value=SimpleNamespace(regions=(object(),))
+            return_value=SimpleNamespace(regions=(SimpleNamespace(region=Region.VOSTOK),))
         )
         delivery = Mock()
         delivery.deliver = AsyncMock()
