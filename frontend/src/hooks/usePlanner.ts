@@ -105,6 +105,7 @@ function normalizePlans(plans: BackendPlanSummary[]): PlanSummary[] {
       planning_date: plan.planning_date,
       code: `PLN-${plan.planning_date.replaceAll("-", "").slice(2)}-${String(plans.length - index).padStart(2, "0")}`,
       status: planStatus(plan),
+      planning_date: plan.planning_date,
       parent_plan_id: plan.based_on_plan_id,
       base_plan_id: plan.based_on_plan_id,
       input_version: plan.id,
@@ -303,7 +304,11 @@ export function usePlanner() {
       const engineers = plan.engineers.map((engineer, index) =>
         engineerFromBackend(engineer, engineerDetails[index], index),
       );
-      const plans = normalizePlans(summaries);
+      const plans = normalizePlans(summaries).map((item) =>
+        item.id === plan.id
+          ? { ...item, can_approve: plan.can_approve, approval_deadline: plan.approval_deadline }
+          : item,
+      );
       const scenarios = apiScenarios.map((scenario) => ({
         ...scenario,
         planning_dates: scenario.id === region ? availableDates : [planningDate],

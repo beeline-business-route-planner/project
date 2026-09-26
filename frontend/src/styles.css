@@ -322,6 +322,8 @@ button, select { cursor: pointer; }
 .plan-title-line h2 { font-size: 14px; }
 .plan-toolbar > div:first-child > p { margin: 4px 0 0 35px; color: var(--muted); font-size: 7px; }
 .plan-actions { display: flex; gap: 4px; }
+.plan-action-stack { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+.plan-action-reason { max-width: 230px; color: #a73a35; font-size: 10px; line-height: 1.25; text-align: right; }
 .plan-metrics { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--line); }
 .plan-metrics article { height: 65px; padding: 12px; border-right: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
 .plan-metrics article:last-child { border-right: 0; }

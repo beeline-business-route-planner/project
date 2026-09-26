@@ -174,6 +174,9 @@ export interface PlanSummary {
   planning_date?: string;
   code: string;
   status: PlanStatus;
+  planning_date?: string;
+  can_approve?: boolean;
+  approval_deadline?: string | null;
   parent_plan_id: string | null;
   base_plan_id: string | null;
   input_version: string;

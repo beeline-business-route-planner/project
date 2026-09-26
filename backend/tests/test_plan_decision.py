@@ -1,12 +1,13 @@
 import unittest
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
 from src.api.exc.plans import PlanStopAlreadyStartedError
 from src.api.plans.service import PlanService
 from src.config import cfg
+from src.core.db.enums import ApprovalStatus, PlanKind
 from src.core.utils.initial_approval import InitialApprovalPolicy
 
 
@@ -26,6 +27,34 @@ class InitialApprovalPolicyTest(unittest.TestCase):
             PlanService._cutoff_in_utc(datetime(2026, 9, 24, 10)),
             datetime(2026, 9, 24, 7),
         )
+
+
+class ApprovalAvailabilityTest(unittest.TestCase):
+    def test_initial_plan_can_be_approved_only_on_planning_day_before_deadline(self) -> None:
+        created_at = datetime(2026, 9, 26, 21, 5)
+        plan = SimpleNamespace(
+            approval_status=ApprovalStatus.PENDING,
+            kind=PlanKind.INITIAL,
+            planning_date=datetime(2026, 9, 27).date(),
+            created_at=created_at,
+        )
+        # 26 сентября 23:10 в Москве: для плана на 27-е ещё рано.
+        self.assertFalse(PlanService._can_approve(plan, datetime(2026, 9, 26, 20, 10, tzinfo=UTC)))
+        # В рабочий день можно утвердить до истечения TTL.
+        self.assertTrue(PlanService._can_approve(plan, datetime(2026, 9, 26, 21, 10, tzinfo=UTC)))
+        expired = created_at + timedelta(minutes=cfg.planning.approval_ttl_minutes, seconds=1)
+        self.assertFalse(PlanService._can_approve(plan, expired.replace(tzinfo=UTC)))
+        plan.approval_status = ApprovalStatus.APPROVED
+        self.assertFalse(PlanService._can_approve(plan, datetime(2026, 9, 26, 21, 10, tzinfo=UTC)))
+
+    def test_replan_requires_planning_day(self) -> None:
+        plan = SimpleNamespace(
+            approval_status=ApprovalStatus.PENDING,
+            kind=PlanKind.REPLAN,
+            planning_date=datetime(2026, 9, 27).date(),
+        )
+        self.assertFalse(PlanService._can_approve(plan, datetime(2026, 9, 26, 20, tzinfo=UTC)))
+        self.assertTrue(PlanService._can_approve(plan, datetime(2026, 9, 26, 21, tzinfo=UTC)))
 
 
 class PastStopDecisionTest(unittest.TestCase):

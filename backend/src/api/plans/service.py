@@ -353,6 +353,7 @@ class PlanService:
             snapshot=snapshot,
             is_current=is_current,
             approval_deadline=self._approval_deadline(plan),
+            can_approve=self._can_approve(plan, datetime.now(UTC)),
             diff=diff,
             baseline_metrics=baseline_metrics,
             default_shift_start=cfg.planning.default_shift_start,
@@ -397,6 +398,17 @@ class PlanService:
             unassigned_requests_count=plan.unassigned_requests_count,
             engineers_used_count=plan.engineers_used_count,
             total_mileage_km=plan.total_mileage_km,
+        )
+
+    @staticmethod
+    def _can_approve(plan: Plan, now: datetime) -> bool:
+        """Быстрая проверка доступности; окончательная валидация остаётся под lock."""
+        if plan.approval_status != ApprovalStatus.PENDING:
+            return False
+        if plan.planning_date != now.astimezone(ZoneInfo("Europe/Moscow")).date():
+            return False
+        return plan.kind != PlanKind.INITIAL or InitialApprovalPolicy.is_valid(
+            plan.created_at, now.astimezone(UTC).replace(tzinfo=None)
         )
 
     @staticmethod

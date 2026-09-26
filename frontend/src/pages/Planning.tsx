@@ -42,6 +42,7 @@ export function Planning({ planner }: { planner: PlannerController }) {
   const [view, setView] = useState<PlanningView>("schedule");
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
+  const [nowMs, setNowMs] = useState(Date.now());
   const [manualOpen, setManualOpen] = useState(false);
   const [manualRequestId, setManualRequestId] = useState<string | undefined>();
   const [eventOpen, setEventOpen] = useState(false);
@@ -52,10 +53,29 @@ export function Planning({ planner }: { planner: PlannerController }) {
   const canEditManually = false;
   const today = new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit",
-  }).format(new Date());
+  }).format(new Date(nowMs));
   const canOperate = planner.source === "api" && data.planningDate === today
     && data.plans.some((plan) => plan.status === "approved" && plan.planning_date === today);
   const actionError = (error: unknown) => planner.showNotice(error instanceof Error ? error.message : "Действие не удалось");
+  const approvalReason = isDraft ? (
+    planner.source !== "api" ? "Подключите backend для утверждения плана" :
+    selectedPlan.planning_date !== today ? "План можно утвердить только в его рабочий день" :
+    selectedPlan.approval_deadline && nowMs > Date.parse(selectedPlan.approval_deadline) ? "Срок утверждения плана истёк" :
+    selectedPlan.can_approve !== true ? "План сейчас нельзя утвердить. Обновите данные или пересчитайте план" : null
+  ) : null;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const approveSelected = async () => {
+    if (!selectedPlan || approvalReason) return;
+    setBusy(true);
+    try {
+      await planner.approvePlan(selectedPlan);
+    } catch (error) { actionError(error); } finally { setBusy(false); }
+  };
 
   useEffect(() => {
     if (data.plans.some((plan) => plan.id === selectedPlanId)) return;
@@ -137,7 +157,7 @@ export function Planning({ planner }: { planner: PlannerController }) {
               <div className="plan-actions">
                 <button className="button ghost" disabled={!canEditManually} title={!canEditManually ? "Backend не предоставляет ручное редактирование назначений" : undefined} onClick={() => openManual()}><PencilLine size={16} /> Изменить вручную</button>
                 <button className="button ghost" disabled={busy || !canOperate} onClick={() => void calculate(true)}><RotateCcw size={16} /> Пересчитать</button>
-                {isDraft ? <button className="button primary" disabled={busy || planner.source !== "api"} onClick={() => { void planner.approvePlan(selectedPlan).catch(actionError); }}><Check size={16} /> Утвердить план</button> : null}
+                {isDraft ? <div className="plan-action-stack"><button className="button primary" disabled={busy || Boolean(approvalReason)} onClick={() => void approveSelected()}><Check size={16} /> Утвердить план</button>{approvalReason ? <small className="plan-action-reason" role="status">{approvalReason}</small> : null}</div> : null}
               </div>
             </div>
 
