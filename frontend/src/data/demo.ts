@@ -281,7 +281,7 @@ export const demoWorkspace: WorkspaceData = {
     engineers_used: 5,
     distance_meters: 91700,
     avg_load_percent: 71,
-    on_time_percent: 92,
+    coverage_percent: 86,
   },
   audit: demoAudit,
   diff: demoDiff,

@@ -1,7 +1,11 @@
 import { apiRequest } from "./client";
 import type {
   BackendEngineerDetail,
+  BackendEventResult,
+  BackendExport,
   BackendInitialPlanningResponse,
+  BackendPlanningEvent,
+  BackendPlanningResult,
   BackendPlanDetail,
   BackendPlanSummary,
   BackendRegion,
@@ -40,4 +44,8 @@ export const backend = {
       rawBody: form,
     });
   },
+  replan: (regions: BackendRegion[]) => apiRequest<BackendPlanningResult>("/planning/replan", { method: "POST", body: { regions } }),
+  event: (payload: BackendPlanningEvent) => apiRequest<BackendEventResult>("/planning/events", { method: "POST", body: payload }),
+  exportPlan: (planId: string) => apiRequest<BackendExport>(`/plans/${planId}/export`),
+  exportDailyReport: (planningDate: string) => apiRequest<BackendExport>(`/reports/daily?${query({ planning_date: planningDate })}`),
 };

@@ -1,18 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
-import {
-  Bell,
-  BookOpenText,
-  CalendarDays,
-  ChevronDown,
-  CircleHelp,
-  History,
-  LayoutDashboard,
-  Menu,
-  RefreshCw,
-  Route,
-  Settings,
-  X,
-} from "lucide-react";
+import { CalendarDays, ChevronDown, Menu, X } from "lucide-react";
+import { BellSimpleIcon } from "@phosphor-icons/react/dist/csr/BellSimple";
+import { BookOpenTextIcon } from "@phosphor-icons/react/dist/csr/BookOpenText";
+import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
+import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
+import { PathIcon } from "@phosphor-icons/react/dist/csr/Path";
+import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
+import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
+import { SquaresFourIcon } from "@phosphor-icons/react/dist/csr/SquaresFour";
 import type { DataSource, PlannerController } from "../hooks/usePlanner";
 import { API_BASE_URL } from "../api/client";
 import { BeelineLogo } from "./BeelineLogo";
@@ -28,9 +23,9 @@ interface ShellProps {
 }
 
 const nav = [
-  { id: "dashboard" as const, label: "Контроль дня", icon: LayoutDashboard },
-  { id: "planning" as const, label: "Планирование", icon: Route },
-  { id: "journal" as const, label: "Журнал и отчёты", icon: History },
+  { id: "dashboard" as const, label: "Контроль дня", icon: SquaresFourIcon },
+  { id: "planning" as const, label: "Планирование", icon: PathIcon },
+  { id: "journal" as const, label: "Журнал и отчёты", icon: ClockCounterClockwiseIcon },
 ];
 
 function ConnectionBadge({ source }: { source: DataSource }) {
@@ -112,11 +107,11 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
         </nav>
 
         <div className="sidebar-bottom">
-          <button onClick={() => openUtility("instructions")}><BookOpenText size={17} /><span className="nav-label">Инструкция</span></button>
-          <button onClick={() => openUtility("settings")}><Settings size={17} /><span className="nav-label">Настройки</span></button>
+          <button onClick={() => openUtility("instructions")}><BookOpenTextIcon size={18} /><span className="nav-label">Инструкция</span></button>
+          <button onClick={() => openUtility("settings")}><GearSixIcon size={18} weight="regular" /><span className="nav-label">Настройки</span></button>
           <div className="user-card">
             <span className="user-avatar">ДП</span>
-            <div><strong>Диспетчер</strong><small>Юго-восток</small></div>
+            <div><strong>Диспетчер</strong><small>{scenario?.name ?? "Участок"}</small></div>
             <ChevronDown size={15} />
           </div>
         </div>
@@ -152,9 +147,9 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
           </div>
           <div className="topbar-actions">
             <ConnectionBadge source={planner.source} />
-            <button className="icon-button" onClick={() => void planner.refresh()} aria-label="Обновить данные" title="Обновить данные"><RefreshCw size={18} /></button>
-            <button className="icon-button" onClick={() => openUtility("help")} aria-label="Помощь" title="Помощь"><CircleHelp size={18} /></button>
-            <button className="icon-button notification" onClick={() => openUtility("notifications")} aria-label={`Уведомления: ${notificationCount}`} title="Уведомления"><Bell size={18} />{notificationCount > 0 && !notificationsRead ? <i /> : null}</button>
+            <button className="icon-button" onClick={() => void planner.refresh()} aria-label="Обновить данные" title="Обновить данные"><ArrowsClockwiseIcon size={19} /></button>
+            <button className="icon-button" onClick={() => openUtility("help")} aria-label="Помощь" title="Помощь"><QuestionIcon size={19} /></button>
+            <button className="icon-button notification" onClick={() => openUtility("notifications")} aria-label={`Уведомления: ${notificationCount}`} title="Уведомления"><BellSimpleIcon size={19} />{notificationCount > 0 && !notificationsRead ? <i /> : null}</button>
           </div>
         </header>
 
@@ -166,7 +161,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
       ) : null}
       {planner.error ? (
         <div className="system-banner">
-          <div><strong>Backend сейчас недоступен</strong><span>{planner.error}</span></div>
+          <div><strong>{planner.source === "demo" ? "Показан демонстрационный сценарий" : "Ошибка загрузки данных"}</strong><span>{planner.error}</span></div>
           <button onClick={planner.dismissError}><X size={16} /></button>
         </div>
       ) : null}
@@ -174,7 +169,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
 
       {pushVisible && !utilityPanel ? (
         <div className="push-notification" role="status" aria-live="polite">
-          <span className="push-icon"><Bell size={18} /></span>
+          <span className="push-icon"><BellSimpleIcon size={18} weight="fill" /></span>
           <button className="push-main" onClick={() => openUtility("notifications")}>
             <strong>Есть события рабочего дня</strong>
             <span>{overdueCount ? `${overdueCount} просрочена · ` : ""}{unassignedCount ? `${unassignedCount} без назначения` : `${draftCount} черновик плана`}</span>
@@ -199,7 +194,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
               <div className="utility-content">
                 <section><strong>Контроль дня</strong><p>Выберите заявку или инженера — справа откроются детали, а карта подсветит связанный маршрут.</p></section>
                 <section><strong>Планирование</strong><p>Импортируйте XLSX, рассчитайте вариант и проверьте причины заявок без назначения до утверждения.</p></section>
-                <section><strong>Журнал и отчёты</strong><p>Смотрите метрики, версии плана и аудит. Список версий выгружается в CSV, отчёты — в XLSX или PDF при поддержке backend.</p></section>
+                <section><strong>Журнал и отчёты</strong><p>Смотрите метрики и историю версий. Список выгружается в CSV; подключённый backend предоставляет XLSX плана и ZIP с дневными PDF.</p></section>
                 <div className="utility-status"><span className={`status-light ${planner.source}`} />Источник данных: <b>{planner.source === "api" ? "backend API" : "демонстрационный набор"}</b></div>
               </div>
             ) : null}
@@ -217,8 +212,8 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
               <div className="utility-content instruction-steps">
                 <section><span>01</span><div><strong>Проверьте исходные данные</strong><p>Выберите участок и рабочий день в верхней панели.</p></div></section>
                 <section><span>02</span><div><strong>Оцените отклонения</strong><p>На экране контроля найдите просрочки, свободных инженеров и незакрытые окна.</p></div></section>
-                <section><span>03</span><div><strong>Пересчитайте план</strong><p>Внесите событие или ручную правку, затем сравните новый маршрут с базовым.</p></div></section>
-                <section><span>04</span><div><strong>Зафиксируйте результат</strong><p>Утвердите вариант и проверьте запись в журнале действий.</p></div></section>
+                <section><span>03</span><div><strong>Пересчитайте план</strong><p>Внесите событие рабочего дня, затем сравните связанные версии плана.</p></div></section>
+                <section><span>04</span><div><strong>Зафиксируйте результат</strong><p>Утвердите вариант и проверьте его в истории версий.</p></div></section>
               </div>
             ) : null}
 

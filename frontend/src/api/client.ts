@@ -1,7 +1,10 @@
 import type { ApiErrorBody } from "./types";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api";
+const configuredApiUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
+// Local Vite proxy avoids a browser CORS failure when backend has no cors.origins.
+const API_BASE_URL = import.meta.env.DEV && /^https?:\/\/(localhost|127\.0\.0\.1):8000\/api\/?$/.test(configuredApiUrl)
+  ? "/api"
+  : configuredApiUrl.replace(/\/$/, "");
 
 export class ApiError extends Error {
   status: number;
