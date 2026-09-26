@@ -48,8 +48,8 @@ class RequestLoggingMiddleware:
         }
 
         if status_code < 400:
-            log.info("HTTP request completed", extra=log_extra)
+            log.info("http.request_completed", extra=log_extra)
         elif status_code < 500:
-            log.warning("HTTP 4xx response", extra=log_extra)
+            log.warning("http.client_error", extra=log_extra)
         else:
-            log.error("HTTP server error", extra=log_extra)
+            log.error("http.server_error", extra=log_extra)

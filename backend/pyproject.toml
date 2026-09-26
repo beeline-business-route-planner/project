@@ -5,14 +5,21 @@ description = "Project backend service"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "aioboto3>=15.5.0",
     "alembic>=1.18.5",
     "asyncpg>=0.31.0",
     "dishka>=1.10.1",
     "fastapi>=0.139.0",
+    "greenlet>=3.5.3",
+    "httpx>=0.28.1",
+    "openpyxl>=3.1.5",
     "prometheus-client>=0.25.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
+    "python-multipart>=0.0.32",
     "sqlalchemy>=2.0.51",
+    "types-aioboto3[s3]>=15.5.0",
+    "tzdata>=2026.4",
     "uvicorn>=0.51.0",
 ]
 
@@ -29,7 +36,10 @@ src = ["src"]
 include = ["src/**/*.py"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W", "B", "C4", "UP", "SIM"]
+select = ["E", "F", "I", "W", "B", "C4", "C90", "UP", "SIM"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 13
 
 [tool.ruff.format]
 quote-style = "double"
