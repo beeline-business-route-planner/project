@@ -5,17 +5,26 @@ from zoneinfo import ZoneInfo
 from src.api.exc.plans import (
     InitialPlanExpiredError,
     PlanBaseChangedError,
+    PlanEngineerNotFoundError,
     PlanExportGenerationError,
     PlanExportStorageError,
     PlanNotFoundError,
     PlanNotPendingError,
+    PlanRouteCoordinatesMissingError,
+    PlanRouteUnavailableError,
     PlanStateChangedError,
     PlanStopAlreadyStartedError,
     PlanWrongDayError,
 )
 from src.api.plans.diff import PlanDiffEngine
 from src.api.plans.diff_dto import PlanSnapshotDTO
-from src.api.plans.dto import BaselineMetricsDTO, PlanDetailDTO, PlanSummaryDTO
+from src.api.plans.dto import (
+    BaselineMetricsDTO,
+    EngineerRouteDTO,
+    PlanDetailDTO,
+    PlanSummaryDTO,
+    RouteSegmentDTO,
+)
 from src.api.plans.export import PlanXlsxExporter
 from src.api.plans.presenter import PlanPresenter
 from src.api.plans.snapshot import PlanSnapshotAssembler
@@ -23,6 +32,8 @@ from src.config import cfg
 from src.core.db.enums import ApprovalStatus, PlanKind, Region, ReplanningEventType, RequestStatus
 from src.core.db.models import Engineer, Plan, PlanStop, ReplanningEvent, Request
 from src.core.db.uow import UnitOfWork
+from src.core.dgis.exc import DgisUnavailableError, InvalidDgisResponseError
+from src.core.dgis.route import DgisRouteService
 from src.core.s3 import (
     ExportDownload,
     ExportKind,
@@ -407,6 +418,65 @@ class PlanService:
             ):
                 current_by_date[plan.planning_date] = plan
         return {plan.id for plan in current_by_date.values()}
+
+
+class PlanRouteService:
+    """Строит линию выбранного инженера из неизменяемого снимка плана."""
+
+    def __init__(self, plans: PlanService, routes: DgisRouteService) -> None:
+        self._plans = plans
+        self._routes = routes
+
+    async def get_engineer_route(
+        self, plan_id: uuid.UUID, engineer_id: uuid.UUID
+    ) -> EngineerRouteDTO:
+        plan = await self._plans.get_by_id(plan_id)
+        engineer = next((item for item in plan.engineers if item.engineer_id == engineer_id), None)
+        if engineer is None:
+            raise PlanEngineerNotFoundError
+        if engineer.start_longitude is None or engineer.start_latitude is None:
+            raise PlanRouteCoordinatesMissingError
+        if any(stop.longitude is None or stop.latitude is None for stop in engineer.stops):
+            raise PlanRouteCoordinatesMissingError
+        previous = (float(engineer.start_longitude), float(engineer.start_latitude))
+        coordinates: list[tuple[float, float]] = []
+        segments: list[RouteSegmentDTO] = []
+        distance = 0
+        duration = 0
+        for stop_index, stop in enumerate(engineer.stops, start=1):
+            assert stop.longitude is not None and stop.latitude is not None
+            target = (float(stop.longitude), float(stop.latitude))
+            if target == previous:
+                previous = target
+                continue
+            try:
+                leg = await self._routes.build_leg(previous, target, engineer.vehicle_type)
+            except (DgisUnavailableError, InvalidDgisResponseError) as exc:
+                raise PlanRouteUnavailableError from exc
+            joined = bool(coordinates and coordinates[-1] == leg.coordinates[0])
+            point_start = len(coordinates) - 1 if joined else len(coordinates)
+            coordinates.extend(leg.coordinates[1:] if joined else leg.coordinates)
+            segments.append(
+                RouteSegmentDTO(
+                    sequence=stop_index,
+                    distance_meters=leg.distance_meters,
+                    duration_seconds=leg.duration_seconds,
+                    point_start=point_start,
+                    point_end=len(coordinates) - 1,
+                )
+            )
+            distance += leg.distance_meters
+            duration += leg.duration_seconds
+            previous = target
+        return EngineerRouteDTO(
+            engineer_id=engineer_id,
+            profile=engineer.vehicle_type,
+            provider="2gis-routing",
+            geometry=tuple(coordinates) if len(coordinates) >= 2 else None,
+            distance_meters=distance,
+            duration_seconds=duration,
+            segments=tuple(segments),
+        )
 
 
 class PlanExportService:

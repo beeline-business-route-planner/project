@@ -1,6 +1,7 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -18,6 +19,29 @@ from src.core.utils.time import as_utc
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
+
+class RouteSegmentResponse(ApiModel):
+    sequence: int
+    distance_meters: int
+    duration_seconds: int
+    point_start: int
+    point_end: int
+
+
+class RouteGeometryResponse(ApiModel):
+    type: Literal["LineString"] = "LineString"
+    coordinates: list[tuple[float, float]]
+
+
+class EngineerRouteResponse(ApiModel):
+    engineer_id: uuid.UUID
+    profile: VehicleType
+    provider: str
+    geometry: RouteGeometryResponse | None
+    distance_meters: int
+    duration_seconds: int
+    segments: list[RouteSegmentResponse]
 
 
 class PlanExportResponse(BaseModel):

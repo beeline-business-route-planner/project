@@ -36,6 +36,21 @@ class PlanStopAlreadyStartedError(Exception):
     pass
 
 
+@http_error(status_code=404, detail="Инженер не найден в плане")
+class PlanEngineerNotFoundError(Exception):
+    pass
+
+
+@http_error(status_code=422, detail="Нет координат для маршрута инженера")
+class PlanRouteCoordinatesMissingError(Exception):
+    pass
+
+
+@http_error(status_code=502, detail="Не удалось построить детальный маршрут")
+class PlanRouteUnavailableError(Exception):
+    pass
+
+
 @http_error(status_code=500, detail="Не удалось сформировать экспорт плана")
 class PlanExportGenerationError(Exception):
     pass

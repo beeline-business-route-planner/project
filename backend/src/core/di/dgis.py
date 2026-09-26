@@ -5,6 +5,7 @@ from dishka import Provider, Scope, provide
 
 from src.config import cfg
 from src.core.dgis import DgisClient, DgisMatrixService
+from src.core.dgis.route import DgisRouteService
 
 
 class DgisProvider(Provider):
@@ -21,3 +22,7 @@ class DgisProvider(Provider):
     @provide(scope=Scope.APP)
     def get_dgis_matrix_service(self, client: DgisClient) -> DgisMatrixService:
         return DgisMatrixService(client)
+
+    @provide(scope=Scope.APP)
+    def get_dgis_route_service(self, client: DgisClient) -> DgisRouteService:
+        return DgisRouteService(client)

@@ -1,6 +1,7 @@
 import { apiRequest } from "./client";
 import type {
   BackendEngineerDetail,
+  BackendEngineerRoute,
   BackendEventResult,
   BackendExport,
   BackendInitialPlanningResponse,
@@ -28,6 +29,8 @@ export const backend = {
       `/plans/current?${query({ region, planning_date: planningDate })}`,
     ),
   plan: (planId: string) => apiRequest<BackendPlanDetail>(`/plans/${planId}`),
+  engineerRoute: (planId: string, engineerId: string) =>
+    apiRequest<BackendEngineerRoute>(`/plans/${planId}/engineers/${engineerId}/route`),
   approvePlan: (planId: string) =>
     apiRequest<BackendPlanSummary>(`/plans/${planId}/approve`, { method: "POST" }),
   rejectPlan: (planId: string) =>

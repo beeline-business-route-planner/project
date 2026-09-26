@@ -12,6 +12,7 @@ interface MapPanelProps {
   selectedRequestId: string | null;
   selectedEngineerId: string | null;
   routeLoading: boolean;
+  routeError: string | null;
   onSelectRequest: (requestId: string) => void;
 }
 
@@ -283,7 +284,15 @@ export function MapPanel(props: MapPanelProps) {
         <div className="map-route-caption">
           <i className="route-live-signal" style={{ "--route-color": selectedEngineer.color } as React.CSSProperties} />
           <div><strong>{selectedEngineer.name}</strong><span>{selectedEngineer.request_ids.length} заявки в маршруте</span></div>
-          {props.routeLoading ? <span className="mini-spinner" /> : <em>точный маршрут</em>}
+          {props.routeLoading ? (
+            <span className="mini-spinner" />
+          ) : props.routeError ? (
+            <em title={props.routeError}>Маршрут недоступен</em>
+          ) : props.detailedRoute?.route_status === "ready" ? (
+            <em>{props.detailedRoute.provider === "2gis-routing" ? "Маршрут по дорогам" : "Демонстрационный маршрут"}</em>
+          ) : (
+            <em>Нет маршрута</em>
+          )}
         </div>
       ) : null}
     </div>

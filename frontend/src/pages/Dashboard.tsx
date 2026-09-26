@@ -148,6 +148,7 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
           selectedRequestId={selectedRequestId}
           selectedEngineerId={selectedEngineerId}
           routeLoading={planner.routeLoading}
+          routeError={planner.routeError}
           onSelectRequest={selectRequest}
         />
 

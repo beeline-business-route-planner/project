@@ -389,6 +389,22 @@ export interface BackendPlanDiff {
   }>;
 }
 
+export interface BackendEngineerRoute {
+  engineer_id: string;
+  profile: BackendVehicle;
+  provider: string;
+  geometry: LineString | null;
+  distance_meters: number;
+  duration_seconds: number;
+  segments: Array<{
+    sequence: number;
+    distance_meters: number;
+    duration_seconds: number;
+    point_start: number;
+    point_end: number;
+  }>;
+}
+
 export interface BackendPlanDetail {
   id: string;
   region: BackendRegion;

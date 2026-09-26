@@ -144,3 +144,23 @@ class PlanSummaryDTO:
     unassigned_requests_count: int
     engineers_used_count: int
     total_mileage_km: Decimal
+
+
+@dataclass(frozen=True)
+class RouteSegmentDTO:
+    sequence: int
+    distance_meters: int
+    duration_seconds: int
+    point_start: int
+    point_end: int
+
+
+@dataclass(frozen=True)
+class EngineerRouteDTO:
+    engineer_id: uuid.UUID
+    profile: VehicleType
+    provider: str
+    geometry: tuple[tuple[float, float], ...] | None
+    distance_meters: int
+    duration_seconds: int
+    segments: tuple[RouteSegmentDTO, ...]

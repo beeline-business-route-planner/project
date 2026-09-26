@@ -197,28 +197,16 @@ function routesFromPlan(plan: BackendPlanDetail): OverviewRoutesResponse {
     plan_id: plan.id,
     revision: plan.created_at,
     status: plan.approval_status,
-    routes: plan.engineers.map((engineer) => {
-      const coordinates = [
-        engineer.start_longitude != null && engineer.start_latitude != null
-          ? [number(engineer.start_longitude), number(engineer.start_latitude)] as [number, number]
-          : null,
-        ...engineer.stops.map((stop) =>
-          stop.longitude != null && stop.latitude != null
-            ? [number(stop.longitude), number(stop.latitude)] as [number, number]
-            : null,
-        ),
-      ].filter((point): point is [number, number] => point !== null);
-      return {
-        engineer_id: engineer.engineer_id,
-        profile: engineer.vehicle_type,
-        route_status: coordinates.length > 1 ? "ready" as const : "empty" as const,
-        provider: "backend-plan",
-        graph_fingerprint: plan.id,
-        geometry: coordinates.length > 1 ? { type: "LineString" as const, coordinates } : null,
-        distance_meters: number(engineer.route_distance_km) * 1000,
-        duration_seconds: engineer.stops.reduce((sum, stop) => sum + (stop.travel_minutes ?? 0) * 60, 0),
-      };
-    }),
+    routes: plan.engineers.map((engineer) => ({
+      engineer_id: engineer.engineer_id,
+      profile: engineer.vehicle_type,
+      route_status: "empty" as const,
+      provider: "backend-plan",
+      graph_fingerprint: plan.id,
+      geometry: null,
+      distance_meters: number(engineer.route_distance_km) * 1000,
+      duration_seconds: engineer.stops.reduce((sum, stop) => sum + (stop.travel_minutes ?? 0) * 60, 0),
+    })),
   };
 }
 
@@ -247,6 +235,9 @@ export function usePlanner() {
   const [notice, setNotice] = useState<string | null>(null);
   const [detailedRoute, setDetailedRoute] = useState<DetailedRoute | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const routeRequestToken = useRef(0);
+  const routeCache = useRef(new Map<string, DetailedRoute>());
   const noticeTimer = useRef<number | null>(null);
 
   const showNotice = useCallback((message: string) => {
@@ -256,6 +247,10 @@ export function usePlanner() {
   }, []);
 
   const loadApi = useCallback(async (scenarioOverride?: string, dateOverride?: string, planId?: string, strict = false) => {
+    routeRequestToken.current += 1;
+    setDetailedRoute(null);
+    setRouteError(null);
+    setRouteLoading(false);
     setLoading(true);
     setError(null);
     try {
@@ -374,17 +369,30 @@ export function usePlanner() {
   }, [loadApi, showNotice, source]);
 
   const loadDetailedRoute = useCallback(async (engineerId: string | null) => {
+    const token = ++routeRequestToken.current;
+    setDetailedRoute(null);
+    setRouteError(null);
     if (!engineerId) {
-      setDetailedRoute(null);
+      setRouteLoading(false);
+      return;
+    }
+    if (source === "demo") {
+      setDetailedRoute(getDemoDetailedRoute(engineerId));
+      setRouteLoading(false);
+      return;
+    }
+    const planId = data.activePlanId;
+    const cacheKey = `${planId}:${engineerId}`;
+    const cached = routeCache.current.get(cacheKey);
+    if (cached) {
+      setDetailedRoute(cached);
+      setRouteLoading(false);
       return;
     }
     setRouteLoading(true);
     try {
-      if (source === "demo") {
-        setDetailedRoute(getDemoDetailedRoute(engineerId));
-        return;
-      }
-      const route = data.routes.routes.find((item) => item.engineer_id === engineerId);
+      const result = await backend.engineerRoute(planId, engineerId);
+      if (token !== routeRequestToken.current) return;
       const stops = data.requests
         .filter((request) => request.engineer_id === engineerId)
         .sort((left, right) => (left.arrival_at ?? "").localeCompare(right.arrival_at ?? ""))
@@ -395,23 +403,34 @@ export function usePlanner() {
           coordinates: request.coordinates,
           snapped_coordinates: request.coordinates,
         }));
-      setDetailedRoute({
-        plan_id: data.activePlanId,
+      const detail: DetailedRoute = {
+        plan_id: planId,
         revision: data.routes.revision,
         status: data.routes.status,
         engineer_id: engineerId,
-        profile: route?.profile ?? "driving",
-        route_status: route?.route_status ?? "empty",
-        provider: route?.provider ?? "backend-plan",
-        graph_fingerprint: route?.graph_fingerprint ?? data.activePlanId,
-        geometry: route?.geometry ?? null,
-        distance_meters: route?.distance_meters ?? 0,
-        duration_seconds: route?.duration_seconds ?? 0,
+        profile: result.profile,
+        route_status: result.geometry ? "ready" : "empty",
+        provider: result.provider,
+        graph_fingerprint: planId,
+        geometry: result.geometry,
+        distance_meters: result.distance_meters,
+        duration_seconds: result.duration_seconds,
         stops,
-        segments: [],
-      });
+        segments: result.segments.map((segment) => ({
+          ...segment,
+          key: `${planId}:${engineerId}:${segment.sequence}`,
+          from_location_id: segment.sequence === 1 ? engineerId : stops[segment.sequence - 2]?.location_id ?? engineerId,
+          to_location_id: stops[segment.sequence - 1]?.location_id ?? engineerId,
+          metrics_source: "route" as const,
+        })),
+      };
+      routeCache.current.set(cacheKey, detail);
+      setDetailedRoute(detail);
+    } catch (requestError) {
+      if (token !== routeRequestToken.current) return;
+      setRouteError(errorText(requestError));
     } finally {
-      setRouteLoading(false);
+      if (token === routeRequestToken.current) setRouteLoading(false);
     }
   }, [data, source]);
 
@@ -572,6 +591,7 @@ export function usePlanner() {
     notice,
     detailedRoute,
     routeLoading,
+    routeError,
     changeContext,
     loadDetailedRoute,
     updateRequestStatus,

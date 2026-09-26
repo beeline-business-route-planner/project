@@ -4,8 +4,13 @@ from datetime import date
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter
 
-from src.api.plans.schemas import PlanDetailResponse, PlanExportResponse, PlanSummaryResponse
-from src.api.plans.service import PlanExportService, PlanService
+from src.api.plans.schemas import (
+    EngineerRouteResponse,
+    PlanDetailResponse,
+    PlanExportResponse,
+    PlanSummaryResponse,
+)
+from src.api.plans.service import PlanExportService, PlanRouteService, PlanService
 from src.core.db.enums import Region
 
 router = APIRouter(prefix="/plans", tags=["plans"], route_class=DishkaRoute)
@@ -32,6 +37,23 @@ async def list_plans(service: FromDishka[PlanService], region: Region) -> list[P
 async def get_plan(service: FromDishka[PlanService], plan_id: uuid.UUID) -> PlanDetailResponse:
     plan = await service.get_by_id(plan_id)
     return PlanDetailResponse.model_validate(plan)
+
+
+@router.get("/{plan_id}/engineers/{engineer_id}/route", response_model=EngineerRouteResponse)
+async def get_engineer_route(
+    service: FromDishka[PlanRouteService], plan_id: uuid.UUID, engineer_id: uuid.UUID
+) -> EngineerRouteResponse:
+    route = await service.get_engineer_route(plan_id, engineer_id)
+    return EngineerRouteResponse.model_validate(
+        {
+            **route.__dict__,
+            "geometry": (
+                {"type": "LineString", "coordinates": route.geometry}
+                if route.geometry is not None
+                else None
+            ),
+        }
+    )
 
 
 @router.get("/{plan_id}/export", response_model=PlanExportResponse)
