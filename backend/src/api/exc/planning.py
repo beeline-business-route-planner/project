@@ -69,3 +69,36 @@ class PlanningMissingCoordinates(Exception):
 @http_error(status_code=409, detail="У округа нет утверждённого рабочего плана на этот день")
 class PlanningCurrentPlanMissing(Exception):
     pass
+
+
+@http_error(status_code=409, detail="У округа уже есть ожидающее решение событие")
+class PlanningPendingEventExists(Exception):
+    pass
+
+
+@http_error(status_code=404, detail="Цель события не найдена в текущем плане округа")
+class PlanningEventTargetMissing(Exception):
+    pass
+
+
+@http_error(status_code=409, detail="Заявка уже отменена")
+class PlanningRequestAlreadyCancelled(Exception):
+    pass
+
+
+@http_error(status_code=409, detail="Инженер уже находится в запрошенном состоянии")
+class PlanningEngineerStateConflict(Exception):
+    pass
+
+
+@http_error(status_code=409, detail="Срочная заявка с этим внешним ID уже существует")
+class PlanningUrgentRequestExists(Exception):
+    pass
+
+
+@http_error(
+    status_code=422,
+    detail="Некорректный тип, норматив, навык или окно срочной заявки",
+)
+class PlanningUrgentRequestInvalid(Exception):
+    pass

@@ -1,8 +1,10 @@
 import uuid
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import select
 
 from src.core.db.dto import RequestCreateDTO
+from src.core.db.enums import Region
 from src.core.db.models import Request
 from src.core.db.repositories.base import BaseRepository
 
@@ -29,6 +31,20 @@ class RequestRepository(BaseRepository[Request]):
             .order_by(Request.id)
             .with_for_update()
             .execution_options(populate_existing=True)
+        )
+        return list(result.all())
+
+    async def list_by_external_id(
+        self, region: Region, planning_date: date, external_id: int
+    ) -> list[Request]:
+        result = await self._session.scalars(
+            select(Request).where(
+                Request.region == region,
+                Request.external_id == external_id,
+                Request.window_start >= datetime.combine(planning_date, time.min),
+                Request.window_start
+                < datetime.combine(planning_date + timedelta(days=1), time.min),
+            )
         )
         return list(result.all())
 

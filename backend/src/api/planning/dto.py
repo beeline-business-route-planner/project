@@ -8,6 +8,7 @@ from src.core.db.dto import EngineerDTO, RequestDTO
 from src.core.db.enums import (
     ConnectionType,
     Region,
+    ReplanningEventType,
     RequestTypeBk,
     RequestTypeHd,
     Skill,
@@ -153,3 +154,40 @@ class ReplanBaseSnapshot:
     engineer_states: tuple[ReplanEngineerState, ...]
     stops: tuple[ReplanStop, ...]
     unassigned: tuple[ReplanUnassigned, ...]
+
+
+@dataclass(frozen=True)
+class UrgentRequestData:
+    external_id: int
+    type_bk: RequestTypeBk
+    type_hd: RequestTypeHd
+    district: str
+    address: str
+    connection_type: ConnectionType | None
+    is_gigabit: bool
+    window_start: datetime
+    window_end: datetime
+    norm_minutes: int
+    norm_minutes_without_travel: int
+    priority: int
+    required_skill: Skill
+    required_vehicle_type: VehicleType | None
+
+
+@dataclass(frozen=True)
+class EventPlanningCommand:
+    region: Region
+    event_type: ReplanningEventType
+    request_id: uuid.UUID | None
+    engineer_id: uuid.UUID | None
+    urgent_request: UrgentRequestData | None
+
+
+@dataclass(frozen=True)
+class EventPlanningResult:
+    event_id: uuid.UUID
+    event_type: ReplanningEventType
+    request_id: uuid.UUID | None
+    engineer_id: uuid.UUID | None
+    occurred_at: datetime
+    plan: ReplanPlanSummary
