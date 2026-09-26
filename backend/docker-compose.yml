@@ -64,7 +64,7 @@ services:
     entrypoint: >
       /bin/sh -c "
       mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
-      mc mb -p local/$${S3_BUCKET_ANSWERS} local/$${S3_BUCKET_UPLOADS} local/$${S3_BUCKET_PLANS} &&
+      mc mb -p local/$${S3_BUCKET_ANSWERS} local/$${S3_BUCKET_UPLOADS} local/$${S3_BUCKET_PLANS} local/$${S3_BUCKET_EXPORTS} &&
       mc anonymous set public local/$${S3_BUCKET_ANSWERS} &&
       mc anonymous set public local/$${S3_BUCKET_UPLOADS} &&
       mc anonymous set public local/$${S3_BUCKET_PLANS}
@@ -75,6 +75,7 @@ services:
       S3_BUCKET_ANSWERS: ${S3_BUCKET_ANSWERS}
       S3_BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS}
       S3_BUCKET_PLANS: ${S3_BUCKET_PLANS}
+      S3_BUCKET_EXPORTS: ${S3_BUCKET_EXPORTS:-exports}
 
   backend:
     build: .
@@ -98,6 +99,8 @@ services:
       S3__BUCKET_ANSWERS: ${S3_BUCKET_ANSWERS}
       S3__BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS}
       S3__BUCKET_PLANS: ${S3_BUCKET_PLANS}
+      S3__BUCKET_EXPORTS: ${S3_BUCKET_EXPORTS:-exports}
+      S3__PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
     ports:
       - "127.0.0.1:8000:8000"
 

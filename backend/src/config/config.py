@@ -43,14 +43,17 @@ class DatabaseConfig(BaseModel):
 
 class S3Config(BaseModel):
     endpoint_url: str = ""
+    public_endpoint_url: str | None = None
     access_key: str = ""
     secret_key: str = ""
     region: str = "us-east-1"
     bucket_answers: str = "answers"
     bucket_uploads: str = "uploads"
     bucket_plans: str = "plans"
-    export_prefix: str = "exports"
+    bucket_exports: str = "exports"
+    export_prefix: str = Field(default="exports", pattern=r"^[A-Za-z0-9][A-Za-z0-9/_-]*$")
     export_url_ttl_seconds: int = Field(default=900, gt=0)
+    export_retention_hours: int = Field(default=24, gt=0)
     max_export_size_bytes: int = Field(default=10_000_000, gt=0)
 
 
