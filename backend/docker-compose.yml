@@ -78,6 +78,22 @@ services:
       S3_BUCKET_PLANS: ${S3_BUCKET_PLANS}
       S3_BUCKET_EXPORTS: ${S3_BUCKET_EXPORTS:-exports}
 
+  minio-export-lifecycle:
+    build: .
+    image: project_backend:latest
+    restart: "no"
+    entrypoint: ["python", "-m", "src.core.s3.lifecycle"]
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      S3__ENDPOINT_URL: http://minio:9000
+      S3__ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3__SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3__BUCKET_EXPORTS: ${S3_BUCKET_EXPORTS:-exports}
+      S3__EXPORT_PREFIX: ${S3_EXPORT_PREFIX:-exports}
+      S3__EXPORT_RETENTION_HOURS: ${S3_EXPORT_RETENTION_HOURS:-24}
+
   backend:
     build: .
     image: project_backend:latest
@@ -86,7 +102,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      minio-init:
+      minio-export-lifecycle:
         condition: service_completed_successfully
     environment:
       DATABASE__POSTGRES_USERNAME: ${POSTGRES_USER}
@@ -101,6 +117,8 @@ services:
       S3__BUCKET_UPLOADS: ${S3_BUCKET_UPLOADS}
       S3__BUCKET_PLANS: ${S3_BUCKET_PLANS}
       S3__BUCKET_EXPORTS: ${S3_BUCKET_EXPORTS:-exports}
+      S3__EXPORT_PREFIX: ${S3_EXPORT_PREFIX:-exports}
+      S3__EXPORT_RETENTION_HOURS: ${S3_EXPORT_RETENTION_HOURS:-24}
       S3__PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
     ports:
       - "127.0.0.1:8000:8000"
