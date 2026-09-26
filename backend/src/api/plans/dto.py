@@ -16,12 +16,6 @@ from src.core.db.enums import (
 
 
 @dataclass(frozen=True)
-class PlanExportResult:
-    url: str
-    expires_at: datetime
-
-
-@dataclass(frozen=True)
 class EngineerCardDTO:
     """Мини-карточка инженера — вложена в тайл заявки (см. docs/PLANS_API.md)."""
 

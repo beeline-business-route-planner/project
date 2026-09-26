@@ -23,6 +23,9 @@ class ApiModel(BaseModel):
 class PlanExportResponse(BaseModel):
     url: str
     expires_at: datetime
+    filename: str
+    content_type: str
+    size_bytes: int
 
 
 class EngineerCard(ApiModel):

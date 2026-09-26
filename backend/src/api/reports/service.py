@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from src.api.exc.reports import DailyReportGenerationError, DailyReportStorageError
 from src.api.reports.dto import (
     DailyReportSnapshot,
     RegionReportSnapshot,
@@ -15,10 +16,19 @@ from src.api.reports.dto import (
     ReportStop,
     ReportUnassigned,
 )
+from src.api.reports.export import DailyReportZipBuilder
+from src.api.reports.pdf import DailyPdfRenderer
 from src.api.reports.presenter import ReportPresenter
 from src.core.db.enums import PlanKind, Region
 from src.core.db.models import BaselineResult, Engineer, Plan, PlanStop, ReplanningEvent, Request
 from src.core.db.uow import UnitOfWork
+from src.core.s3 import (
+    ExportDownload,
+    ExportKind,
+    ExportTooLargeError,
+    S3ExportDelivery,
+    S3UnavailableError,
+)
 
 
 class DailyReportService:
@@ -298,3 +308,32 @@ class DailyReportService:
             approved_at=event.approved_at,
             target=target,
         )
+
+
+class DailyReportExportService:
+    """Собирает дневной PDF-пакет и доставляет его по временной ссылке."""
+
+    def __init__(self, reports: DailyReportService, delivery: S3ExportDelivery) -> None:
+        self._reports = reports
+        self._delivery = delivery
+
+    async def export(self, planning_date: date) -> ExportDownload:
+        try:
+            snapshot = await self._reports.build_snapshot(planning_date)
+            files = DailyPdfRenderer.render(snapshot)
+            data = DailyReportZipBuilder.build(
+                planning_date,
+                files,
+                tuple(region.region.value for region in snapshot.regions),
+            )
+            return await self._delivery.deliver(
+                data=data,
+                kind=ExportKind.DAILY_REPORT,
+                planning_date=planning_date,
+                filename=f"daily-report-{planning_date.isoformat()}.zip",
+                content_type="application/zip",
+            )
+        except (ValueError, OSError, ExportTooLargeError) as exc:
+            raise DailyReportGenerationError from exc
+        except S3UnavailableError as exc:
+            raise DailyReportStorageError from exc

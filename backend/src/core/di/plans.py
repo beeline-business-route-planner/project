@@ -2,7 +2,7 @@ from dishka import Provider, Scope, provide
 
 from src.api.plans.service import PlanExportService, PlanService
 from src.core.db.uow import UnitOfWork
-from src.core.s3 import S3Storage
+from src.core.s3 import S3ExportDelivery
 
 
 class PlansProvider(Provider):
@@ -11,5 +11,7 @@ class PlansProvider(Provider):
         return PlanService(uow)
 
     @provide(scope=Scope.REQUEST)
-    def get_plan_export_service(self, plans: PlanService, storage: S3Storage) -> PlanExportService:
-        return PlanExportService(plans, storage)
+    def get_plan_export_service(
+        self, plans: PlanService, delivery: S3ExportDelivery
+    ) -> PlanExportService:
+        return PlanExportService(plans, delivery)
