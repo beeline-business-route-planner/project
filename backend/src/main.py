@@ -20,6 +20,7 @@ from src.core.di import (
     GeocodingProvider,
     PlanningProvider,
     PlansProvider,
+    ReportsProvider,
     RequestsProvider,
     RoutingProvider,
     S3Provider,
@@ -40,6 +41,7 @@ container = make_async_container(
     PlanningProvider(),
     PlansProvider(),
     RequestsProvider(),
+    ReportsProvider(),
     EngineersProvider(),
 )
 
