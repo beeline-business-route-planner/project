@@ -26,7 +26,6 @@ from src.core.algorithm.dto import (
 )
 from src.core.algorithm.exc import AlgorithmInputError, MissingCoordinatesError
 from src.core.db.enums import RequestPriority, RequestStatus
-from src.core.utils.plan_time import latest_departure_at
 
 
 class InitialInputNormalizer:
@@ -36,9 +35,8 @@ class InitialInputNormalizer:
         operational_start = datetime.combine(
             snapshot.planning_date, cfg.planning.default_shift_start
         )
-        operational_end = datetime.combine(snapshot.planning_date, cfg.planning.default_shift_end)
         jobs = tuple(
-            self._to_job(request, operational_start, operational_end)
+            self._to_job(request, operational_start, snapshot.calculation_cutoff_at)
             for request in snapshot.requests
         )
         engineers = tuple(
@@ -114,9 +112,10 @@ class InitialInputNormalizer:
     ) -> tuple[LayerMatrixRequest, ...]:
         """Описывает одну матрицу на слой и тип транспорта.
 
-        Sources — старты инженеров этого транспорта и заявки текущего и всех предыдущих
-        слоёв: до запуска графа неизвестно, какие хвосты останутся во frontier.
-        Будущие слои не включаются.
+        Sources — старты инженеров этого транспорта и заявки всех слоёв, начинающихся не
+        позже текущего: до запуска графа неизвестно, какие хвосты останутся во frontier, а
+        переход между слоями с одинаковым началом окна допустим в обе стороны.
+        Слои с более поздним началом не включаются.
         """
 
         jobs_by_window: dict[tuple[datetime, datetime], list[Job]] = {}
@@ -127,8 +126,8 @@ class InitialInputNormalizer:
             key=lambda item: item.value,
         )
         requests: list[LayerMatrixRequest] = []
-        previous_job_ids: set[uuid.UUID] = set()
         for (window_start, window_end), layer_jobs in sorted(jobs_by_window.items()):
+            earlier_job_ids = {job.id for job in jobs if job.release_at <= window_start}
             for vehicle_type in vehicle_types:
                 target_ids = frozenset(
                     job.id
@@ -149,24 +148,28 @@ class InitialInputNormalizer:
                         window_end=window_end,
                         traffic_reference_at=window_start + (window_end - window_start) / 2,
                         vehicle_type=vehicle_type,
-                        source_ids=frozenset(engineer_ids | previous_job_ids | target_ids),
+                        source_ids=frozenset(engineer_ids | earlier_job_ids | target_ids),
                         target_ids=target_ids,
                     )
                 )
-            previous_job_ids.update(job.id for job in layer_jobs)
         return tuple(requests)
 
     @staticmethod
     def _to_job(
         request: RequestSnapshot,
         operational_start: datetime,
-        operational_end: datetime,
+        cutoff_at: datetime,
     ) -> Job:
         """Нормализует окно начала работ с SLA аварии 120 минут.
 
-        Техническое окно аварии на весь день (`00:01–23:59`) отсчитывается от начала
-        операционного дня. Авария с обычным клиентским окном не может начаться раньше
-        этого окна, поэтому SLA отсчитывается от его начала и не выходит за его конец.
+        SLA аварии отсчитывается от момента её поступления, но не раньше начала
+        операционного дня и не раньше клиентского окна: `release = max(окно, поступление)`,
+        `latest = min(конец окна, release + 120)`. Техническое окно на весь день
+        (`00:01–23:59`) — частный случай этого правила. Если к cutoff SLA уже истёк, а заявка
+        всё ещё в пересчитываемом пуле, отсчёт начинается заново от cutoff: аварию нужно
+        выполнить как можно раньше, а не молча отбросить. Клиентское окно при этом не
+        расширяется: если отсчёт начинается после его конца, окно остаётся исходным, и
+        авария честно не назначается.
         """
 
         if request.latitude is None or request.longitude is None:
@@ -176,15 +179,14 @@ class InitialInputNormalizer:
         latest_start_at = request.window_end
         if is_emergency:
             response = timedelta(minutes=cfg.algorithm.emergency_response_minutes)
-            covers_whole_day = (
-                request.window_start <= operational_start and request.window_end >= operational_end
+            sla_start = max(
+                request.window_start, request.received_at or cutoff_at, operational_start
             )
-            release_at = operational_start if covers_whole_day else request.window_start
-            latest_start_at = (
-                release_at + response
-                if covers_whole_day
-                else min(request.window_end, release_at + response)
-            )
+            if sla_start + response < cutoff_at:
+                sla_start = cutoff_at
+            if sla_start <= request.window_end:
+                release_at = sla_start
+                latest_start_at = min(request.window_end, sla_start + response)
         return Job(
             id=request.id,
             latitude=request.latitude,
@@ -214,19 +216,20 @@ class InitialInputNormalizer:
             skills=engineer.skills,
             vehicle_type=engineer.vehicle_type,
             is_available=engineer.is_available,
+            history_service_minutes=engineer.history_service_minutes,
         )
 
 
 class ReplanNormalizer:
     """Делит утверждённый план на неизменяемую историю и вход для пересчёта будущего хвоста.
 
-    Остановка фиксируется, если заявка уже в пути, в работе или выполнена либо если
-    инженер к cutoff уже должен был выехать к ней даже при самом позднем выезде
-    (`start - travel`). Вместе с ней фиксируются все более ранние остановки того же
+    Остановка фиксируется, если заявка уже в пути, в работе или выполнена либо если её
+    плановое начало работ раньше cutoff. Вместе с ней фиксируются все более ранние остановки того же
     инженера: прожитая история — всегда префикс маршрута. Хвост инженера начинается из
     точки последней зафиксированной остановки не раньше её окончания и cutoff; у инженера
     без истории — из его стартовой точки. Отменённая незафиксированная заявка в хвост не
     попадает. Недоступный инженер сохраняет историю и не получает будущих остановок.
+    Минуты истории передаются хвосту, чтобы цель режима считалась за весь день.
     """
 
     def __init__(self) -> None:
@@ -242,10 +245,20 @@ class ReplanNormalizer:
             if request.status == RequestStatus.CANCELLED and request.id not in locked_ids
         )
         last_locked: dict[uuid.UUID, BasePlanStop] = {}
+        history_minutes: dict[uuid.UUID, int] = {}
         for stop in locked_stops:
             last_locked[stop.engineer_id] = stop
+            history_minutes[stop.engineer_id] = (
+                history_minutes.get(stop.engineer_id, 0)
+                + requests_by_id[stop.request_id].service_minutes
+            )
         tail_engineers = tuple(
-            self._tail_engineer(engineer, last_locked.get(engineer.id), requests_by_id)
+            self._tail_engineer(
+                engineer,
+                last_locked.get(engineer.id),
+                history_minutes.get(engineer.id, 0),
+                requests_by_id,
+            )
             for engineer in snapshot.engineers
         )
         tail = self._initial.prepare(
@@ -332,8 +345,7 @@ class ReplanNormalizer:
                 (
                     index + 1
                     for index, stop in enumerate(stops)
-                    if latest_departure_at(stop.start, stop.travel_minutes)
-                    < snapshot.calculation_cutoff_at
+                    if stop.start < snapshot.calculation_cutoff_at
                     or requests_by_id[stop.request_id].status in started_statuses
                 ),
                 default=0,
@@ -351,6 +363,7 @@ class ReplanNormalizer:
     def _tail_engineer(
         engineer: EngineerSnapshot,
         last_locked: BasePlanStop | None,
+        history_service_minutes: int,
         requests_by_id: dict[uuid.UUID, RequestSnapshot],
     ) -> EngineerSnapshot:
         if last_locked is None:
@@ -361,4 +374,5 @@ class ReplanNormalizer:
             start_latitude=request.latitude,
             start_longitude=request.longitude,
             ready_at=last_locked.finish,
+            history_service_minutes=history_service_minutes,
         )

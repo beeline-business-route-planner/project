@@ -7,13 +7,14 @@ from datetime import datetime
 from src.config import cfg
 from src.core.algorithm.diagnostics import AlgorithmDiagnostics
 from src.core.algorithm.dto import Engineer, InitialPlanningInput, Job
-from src.core.algorithm.enums import DistributionMode, RuinOperator
+from src.core.algorithm.enums import RuinOperator
 from src.core.algorithm.exc import AlgorithmInputError
 from src.core.algorithm.materialization import ScheduleMaterializer
 from src.core.algorithm.rules import PlanningRules
 from src.core.algorithm.strategies.emergency import EmergencyPlanner
 from src.core.algorithm.strategies.graph import LayeredGraphPlanner
 from src.core.algorithm.strategies.greedy import GreedyPlanner
+from src.core.db.enums import DistributionMode
 
 
 @dataclass(frozen=True)
@@ -231,7 +232,9 @@ class _LnsSearch:
                 self._timings[request_id].priority_score for request_id in schedule.request_ids
             )
             assigned_count += len(schedule.request_ids)
-            used_count += bool(schedule.request_ids)
+            used_count += (
+                bool(schedule.request_ids) or schedule.engineer.history_service_minutes > 0
+            )
             travel_minutes += sum(schedule.travel_in)
             service_loads.append(self._service_minutes(schedule))
         mode_score = (
@@ -258,7 +261,9 @@ class _LnsSearch:
         fraction = self._random.uniform(
             cfg.algorithm.lns_min_removal_fraction, cfg.algorithm.lns_max_removal_fraction
         )
-        removal_count = max(2, min(len(assigned) // 4, int(len(assigned) * fraction)))
+        removal_count = min(
+            len(assigned), max(2, min(len(assigned) // 4, int(len(assigned) * fraction)))
+        )
         removed = self._removed_ids(routes, assigned, removal_count, operator)
         return {
             engineer_id: (
@@ -452,7 +457,10 @@ class _LnsSearch:
         """Штраф режима: открыть новый маршрут (min_engineers) или нагрузить занятого (balanced)."""
 
         if self._min_engineers:
-            return cfg.algorithm.lns_new_route_penalty_minutes if not schedule.request_ids else 0
+            opens_new_engineer = (
+                not schedule.request_ids and schedule.engineer.history_service_minutes == 0
+            )
+            return cfg.algorithm.lns_new_route_penalty_minutes if opens_new_engineer else 0
         return self._service_minutes(schedule) * cfg.algorithm.lns_balance_load_weight
 
     def _best_insertion(self, schedule: _RouteSchedule, request_id: uuid.UUID) -> _Insertion | None:
@@ -754,7 +762,9 @@ class _LnsSearch:
         return cached
 
     def _service_minutes(self, schedule: _RouteSchedule) -> int:
-        return sum(
+        """Работа бригады за день: прожитая история replan и будущие заявки."""
+
+        return schedule.engineer.history_service_minutes + sum(
             self._jobs_by_id[request_id].service_minutes for request_id in schedule.request_ids
         )
 

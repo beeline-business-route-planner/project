@@ -129,7 +129,9 @@ class AlgorithmService:
             AlgorithmAuditError: если результат нарушает инвариант истории или покрытия.
         """
 
-        tail = self._plan(replan_input.tail, variant, None)
+        tail = self._not_worse_than_current(
+            replan_input.tail, self._plan(replan_input.tail, variant, None)
+        )
         result = self._merge_replan(replan_input, tail)
         self._auditor.audit_replan(replan_input, result)
         return result
@@ -145,6 +147,55 @@ class AlgorithmService:
         ordered_routes = self._assign(planning_input, variant, diagnostics)
         if diagnostics is not None:
             diagnostics.finish_assignment()
+        result = self._result(planning_input, ordered_routes, f"{variant.value}-v2")
+        if diagnostics is not None:
+            diagnostics.finish_result_build()
+        self._auditor.audit(planning_input, result)
+        if diagnostics is not None:
+            diagnostics.finish_audit()
+        return result
+
+    def _not_worse_than_current(
+        self,
+        planning_input: InitialPlanningInput,
+        tail: InitialPlanningResult,
+    ) -> InitialPlanningResult:
+        """Возвращает известное решение хвоста, если оно покрывает больше найденного.
+
+        Сравнение идёт только по приоритету и покрытию: цель режима и дорогу оптимизирует
+        стратегия, а известное решение лишь страхует от потери заявок.
+        """
+
+        best = tail
+        jobs_by_id = {job.id: job for job in planning_input.jobs}
+        layers_by_request = PlanningRules.index_layers(planning_input.layers, jobs_by_id)
+        for solution in planning_input.known_solutions:
+            routes = self._materializer.feasible_routes(planning_input, solution, layers_by_request)
+            if routes is None:
+                continue
+            candidate = self._result(planning_input, routes, tail.algorithm_version)
+            if self._coverage_key(candidate, jobs_by_id) > self._coverage_key(best, jobs_by_id):
+                self._auditor.audit(planning_input, candidate)
+                best = candidate
+        return best
+
+    @staticmethod
+    def _coverage_key(
+        result: InitialPlanningResult,
+        jobs_by_id: dict[uuid.UUID, Job],
+    ) -> tuple[int, int]:
+        request_ids = [stop.request_id for route in result.routes for stop in route.stops]
+        return (
+            sum(PlanningRules.priority_score(jobs_by_id[item].priority) for item in request_ids),
+            len(request_ids),
+        )
+
+    def _result(
+        self,
+        planning_input: InitialPlanningInput,
+        ordered_routes: dict[uuid.UUID, tuple[uuid.UUID, ...]],
+        algorithm_version: str,
+    ) -> InitialPlanningResult:
         jobs_by_id = {job.id: job for job in planning_input.jobs}
         engineers_by_id = {engineer.id: engineer for engineer in planning_input.engineers}
         layers_by_request = PlanningRules.index_layers(planning_input.layers, jobs_by_id)
@@ -173,7 +224,7 @@ class AlgorithmService:
             for job in sorted(planning_input.jobs, key=lambda item: str(item.id))
             if job.id not in assigned_ids
         )
-        result = InitialPlanningResult(
+        return InitialPlanningResult(
             region=planning_input.region,
             planning_date=planning_input.planning_date,
             calculation_cutoff_at=planning_input.calculation_cutoff_at,
@@ -181,14 +232,8 @@ class AlgorithmService:
             routes=routes,
             unassigned=unassigned,
             metrics=self._metrics(routes, unassigned, planning_input.engineers),
-            algorithm_version=f"{variant.value}-v2",
+            algorithm_version=algorithm_version,
         )
-        if diagnostics is not None:
-            diagnostics.finish_result_build()
-        self._auditor.audit(planning_input, result)
-        if diagnostics is not None:
-            diagnostics.finish_audit()
-        return result
 
     def _merge_replan(
         self,
@@ -351,6 +396,11 @@ class AlgorithmService:
         if not available_matches:
             return UnassignedReason.NO_AVAILABLE_ENGINEER
         if not any(
+            self._reachable(engineer, job, planning_input, layers_by_request)
+            for engineer in available_matches
+        ):
+            return UnassignedReason.NO_ROUTE
+        if not any(
             self._materializer.materialize(
                 engineer,
                 (job.id,),
@@ -363,6 +413,34 @@ class AlgorithmService:
         ):
             return UnassignedReason.NO_TIME_SLOT
         return UnassignedReason.NO_AVAILABLE_ENGINEER
+
+    @staticmethod
+    def _reachable(
+        engineer: Engineer,
+        job: Job,
+        planning_input: InitialPlanningInput,
+        layers_by_request: dict[uuid.UUID, PlanningLayer],
+    ) -> bool:
+        """Есть ли у инженера хоть один переход в заявку: со старта или с заявки не позже слоя."""
+
+        layer = layers_by_request[job.id]
+        matrix = next(
+            item.travel_matrix
+            for item in layer.matrices
+            if item.vehicle_type == engineer.vehicle_type
+        )
+        sources = [engineer.id] + [
+            other.id
+            for other in planning_input.jobs
+            if other.id != job.id and layers_by_request[other.id].window_start <= layer.window_start
+        ]
+        for source_id in sources:
+            try:
+                if matrix.minutes(source_id, job.id) is not None:
+                    return True
+            except KeyError:
+                continue
+        return False
 
     def _metrics(
         self,

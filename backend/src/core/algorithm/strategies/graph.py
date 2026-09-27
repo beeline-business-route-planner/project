@@ -14,13 +14,13 @@ from src.core.algorithm.dto import (
     PlanningLayer,
     RouteCandidate,
 )
-from src.core.algorithm.enums import DistributionMode
 from src.core.algorithm.exc import AlgorithmInputError
 from src.core.algorithm.materialization import ScheduleMaterializer
 from src.core.algorithm.rules import PlanningRules
 from src.core.algorithm.strategies.baseline import BaselinePlanner
 from src.core.algorithm.strategies.greedy import GreedyPlanner
 from src.core.algorithm.strategies.selection import GlobalRouteSelector
+from src.core.db.enums import DistributionMode
 
 
 @dataclass(frozen=True, slots=True)
@@ -613,6 +613,7 @@ class LayeredGraphPlanner:
                     priority_score=0,
                     travel_minutes=0,
                     service_minutes=0,
+                    history_service_minutes=engineer.history_service_minutes,
                 )
             )
         return tuple(candidates)
@@ -640,6 +641,7 @@ class LayeredGraphPlanner:
                 service_minutes=sum(
                     jobs_by_id[request_id].service_minutes for request_id in state.path
                 ),
+                history_service_minutes=engineer.history_service_minutes,
             )
         )
 
@@ -667,6 +669,7 @@ class LayeredGraphPlanner:
             ),
             travel_minutes=travel_minutes,
             service_minutes=sum(jobs_by_id[request_id].service_minutes for request_id in path),
+            history_service_minutes=engineer.history_service_minutes,
         )
 
     @staticmethod
@@ -825,6 +828,13 @@ class LayeredGraphPlanner:
         from_id: uuid.UUID,
         to_id: uuid.UUID,
     ) -> int:
+        """Время перехода по матрице слоя целевой заявки и транспорта инженера.
+
+        Недостижимая пара получает время заведомо больше любого рабочего дня: такой
+        переход отсекается обычной проверкой окна и смены, а финальный маршрут всё равно
+        строит материализация, которая видит `None` явно.
+        """
+
         matrices = [
             item.travel_matrix
             for item in layer.matrices
@@ -836,8 +846,10 @@ class LayeredGraphPlanner:
                 f"транспорта {engineer.vehicle_type}"
             )
         try:
-            return matrices[0].minutes(from_id, to_id)
+            minutes = matrices[0].minutes(from_id, to_id)
         except (KeyError, IndexError) as exc:
             raise AlgorithmInputError(
                 f"Матрица слоя не покрывает переход {from_id} -> {to_id}"
             ) from exc
+        unreachable_minutes = 7 * 24 * 60
+        return unreachable_minutes if minutes is None else minutes
