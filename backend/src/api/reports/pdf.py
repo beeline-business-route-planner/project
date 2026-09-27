@@ -547,5 +547,7 @@ class DailyPdfRenderer:
                 return "Нет подходящего транспорта"
             case UnassignedReason.NO_TIME_SLOT:
                 return "Нет свободного окна"
+            case UnassignedReason.NO_ROUTE:
+                return "Нет маршрута до адреса"
             case UnassignedReason.NO_AVAILABLE_ENGINEER:
                 return "Нет доступного инженера"
