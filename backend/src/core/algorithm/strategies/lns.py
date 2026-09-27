@@ -11,6 +11,7 @@ from src.core.algorithm.enums import DistributionMode, RuinOperator
 from src.core.algorithm.exc import AlgorithmInputError
 from src.core.algorithm.materialization import ScheduleMaterializer
 from src.core.algorithm.rules import PlanningRules
+from src.core.algorithm.strategies.emergency import EmergencyPlanner
 from src.core.algorithm.strategies.graph import LayeredGraphPlanner
 from src.core.algorithm.strategies.greedy import GreedyPlanner
 
@@ -68,6 +69,7 @@ class LnsPlanner:
 
     def __init__(self, diagnostics: AlgorithmDiagnostics | None = None) -> None:
         self._greedy = GreedyPlanner()
+        self._emergency = EmergencyPlanner()
         self._graph = LayeredGraphPlanner()
         self._materializer = ScheduleMaterializer()
         self._diagnostics = diagnostics
@@ -78,6 +80,9 @@ class LnsPlanner:
         jobs_by_id = {job.id: job for job in planning_input.jobs}
         layers_by_request = PlanningRules.index_layers(planning_input.layers, jobs_by_id)
         starts = [self._greedy.assign(planning_input)]
+        emergency_start = self._emergency_start(planning_input)
+        if emergency_start is not None:
+            starts.append(emergency_start)
         for solution in planning_input.known_solutions:
             routes = self._materializer.feasible_routes(planning_input, solution, layers_by_request)
             if routes is not None:
@@ -93,6 +98,27 @@ class LnsPlanner:
                 ),
             )
         return outcome.routes
+
+    def _emergency_start(
+        self, planning_input: InitialPlanningInput
+    ) -> dict[uuid.UUID, tuple[uuid.UUID, ...]] | None:
+        """Старт с максимумом аварий, дозаполненный greedy.
+
+        Лучший план LNS не опускается ниже старта по ключу, а priority score аварии старше
+        любого покрытия, поэтому итог назначает не меньше аварий, чем точная фаза.
+        """
+
+        emergency_routes = self._emergency.assign(planning_input)
+        if emergency_routes is None:
+            return None
+        routes: dict[uuid.UUID, tuple[uuid.UUID, ...]] = {
+            engineer.id: () for engineer in planning_input.engineers
+        } | emergency_routes
+        assigned = {request_id for route in emergency_routes.values() for request_id in route}
+        self._greedy.complete(
+            [job for job in planning_input.jobs if job.id not in assigned], routes, planning_input
+        )
+        return {engineer_id: route for engineer_id, route in routes.items() if route}
 
 
 class _LnsSearch:
@@ -169,6 +195,7 @@ class _LnsSearch:
             if candidate_key > best_key:
                 best, best_key = candidate, candidate_key
                 improvements_count += 1
+        best = self._descend_between_routes(best)
         return _SearchOutcome(
             routes={
                 engineer_id: schedule.request_ids
@@ -516,6 +543,155 @@ class _LnsSearch:
             assigned.update(path)
             routes[engineer_id] = polished
         return routes
+
+    def _descend_between_routes(
+        self, routes: dict[uuid.UUID, _RouteSchedule]
+    ) -> dict[uuid.UUID, _RouteSchedule]:
+        """Локальный спуск межмаршрутными ходами: перенос, обмен, обмен хвостов.
+
+        Первый найденный в детерминированном порядке ход со строго лучшим полным ключом
+        применяется сразу; спуск идёт до отсутствия улучшений. Изменённые маршруты затем
+        переоптимизирует граф.
+        """
+
+        routes = dict(routes)
+        key = self._key(routes)
+        changed: set[uuid.UUID] = set()
+        while True:
+            move = (
+                self._improving_relocate(routes, key)
+                or self._improving_swap(routes, key)
+                or self._improving_tail_exchange(routes, key)
+            )
+            if move is None:
+                break
+            routes.update(move)
+            changed.update(move)
+            key = self._key(routes)
+        return self._polish(routes, changed)
+
+    def _improving_relocate(
+        self,
+        routes: dict[uuid.UUID, _RouteSchedule],
+        key: tuple[int, int, int, int],
+    ) -> dict[uuid.UUID, _RouteSchedule] | None:
+        ordered = sorted(routes.values(), key=lambda schedule: schedule.engineer.id.int)
+        for source in ordered:
+            for index, request_id in enumerate(source.request_ids):
+                reduced = self._schedule(
+                    source.engineer,
+                    (*source.request_ids[:index], *source.request_ids[index + 1 :]),
+                )
+                if reduced is None:
+                    continue
+                for target in ordered:
+                    if target is source or request_id not in self._eligible_ids[target.engineer.id]:
+                        continue
+                    grown = self._inserted(target, request_id)
+                    if grown is None:
+                        continue
+                    move = {source.engineer.id: reduced, target.engineer.id: grown}
+                    if self._key({**routes, **move}) > key:
+                        return move
+        return None
+
+    def _improving_swap(
+        self,
+        routes: dict[uuid.UUID, _RouteSchedule],
+        key: tuple[int, int, int, int],
+    ) -> dict[uuid.UUID, _RouteSchedule] | None:
+        """Обмен двух заявок одного окна между бригадами, каждая — на свою лучшую позицию."""
+
+        ordered = sorted(routes.values(), key=lambda schedule: schedule.engineer.id.int)
+        for left_index, left in enumerate(ordered):
+            for right in ordered[left_index + 1 :]:
+                for left_position, left_id in enumerate(left.request_ids):
+                    if left_id not in self._eligible_ids[right.engineer.id]:
+                        continue
+                    for right_position, right_id in enumerate(right.request_ids):
+                        if (
+                            right_id not in self._eligible_ids[left.engineer.id]
+                            or self._timings[right_id].window_start
+                            != self._timings[left_id].window_start
+                        ):
+                            continue
+                        move = self._swapped(left, left_position, right, right_position)
+                        if move is not None and self._key({**routes, **move}) > key:
+                            return move
+        return None
+
+    def _swapped(
+        self,
+        left: _RouteSchedule,
+        left_position: int,
+        right: _RouteSchedule,
+        right_position: int,
+    ) -> dict[uuid.UUID, _RouteSchedule] | None:
+        left_id = left.request_ids[left_position]
+        right_id = right.request_ids[right_position]
+        left_reduced = self._schedule(
+            left.engineer,
+            (*left.request_ids[:left_position], *left.request_ids[left_position + 1 :]),
+        )
+        right_reduced = self._schedule(
+            right.engineer,
+            (*right.request_ids[:right_position], *right.request_ids[right_position + 1 :]),
+        )
+        if left_reduced is None or right_reduced is None:
+            return None
+        new_left = self._inserted(left_reduced, right_id)
+        new_right = self._inserted(right_reduced, left_id)
+        if new_left is None or new_right is None:
+            return None
+        return {left.engineer.id: new_left, right.engineer.id: new_right}
+
+    def _improving_tail_exchange(
+        self,
+        routes: dict[uuid.UUID, _RouteSchedule],
+        key: tuple[int, int, int, int],
+    ) -> dict[uuid.UUID, _RouteSchedule] | None:
+        """2-opt*: бригады обмениваются хвостами маршрутов после точек разреза."""
+
+        ordered = sorted(routes.values(), key=lambda schedule: schedule.engineer.id.int)
+        for left_index, left in enumerate(ordered):
+            for right in ordered[left_index + 1 :]:
+                for left_cut in range(len(left.request_ids) + 1):
+                    left_tail = left.request_ids[left_cut:]
+                    if not self._eligible_ids[right.engineer.id].issuperset(left_tail):
+                        continue
+                    for right_cut in range(len(right.request_ids) + 1):
+                        right_tail = right.request_ids[right_cut:]
+                        if not (left_tail or right_tail) or not self._eligible_ids[
+                            left.engineer.id
+                        ].issuperset(right_tail):
+                            continue
+                        new_left = self._schedule(
+                            left.engineer, (*left.request_ids[:left_cut], *right_tail)
+                        )
+                        new_right = self._schedule(
+                            right.engineer, (*right.request_ids[:right_cut], *left_tail)
+                        )
+                        if new_left is None or new_right is None:
+                            continue
+                        move = {left.engineer.id: new_left, right.engineer.id: new_right}
+                        if self._key({**routes, **move}) > key:
+                            return move
+        return None
+
+    def _inserted(self, schedule: _RouteSchedule, request_id: uuid.UUID) -> _RouteSchedule | None:
+        """Вставляет заявку на позицию с наименьшим приростом дороги."""
+
+        insertion = self._best_insertion(schedule, request_id)
+        if insertion is None:
+            return None
+        return self._schedule(
+            schedule.engineer,
+            (
+                *schedule.request_ids[: insertion.position],
+                request_id,
+                *schedule.request_ids[insertion.position :],
+            ),
+        )
 
     def _schedule(
         self, engineer: Engineer, request_ids: tuple[uuid.UUID, ...]
