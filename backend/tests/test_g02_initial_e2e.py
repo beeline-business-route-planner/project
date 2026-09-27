@@ -235,7 +235,7 @@ class InitialEndToEndTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(pending.can_approve)
         self.assertIsNone(pending.diff)
         self.assertIsNotNone(pending.baseline_metrics)
-        self.assertEqual(pending.baseline_metrics.algorithm_version, "baseline-v2")
+        self.assertEqual(pending.baseline_metrics.algorithm_version, "baseline-v3")
         self.assertEqual(pending.baseline_metrics.assigned_requests_count, 1)
         self.assertEqual(pending.metrics.assigned_requests_count, 1)
         self.assertEqual(
@@ -265,7 +265,7 @@ class InitialEndToEndTest(unittest.IsolatedAsyncioTestCase):
         current = await self.current(Region.VOSTOK, today)
         self.assertEqual(current.id, east_second)
         self.assertTrue(current.is_current)
-        self.assertEqual(current.baseline_metrics.algorithm_version, "baseline-v2")
+        self.assertEqual(current.baseline_metrics.algorithm_version, "baseline-v3")
         with self.assertRaises(PlanNotFoundError):
             await self.current(Region.VOSTOK, today - timedelta(days=1))
         with self.assertRaises(PlanNotFoundError):

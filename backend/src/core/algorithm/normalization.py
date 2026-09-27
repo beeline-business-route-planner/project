@@ -19,13 +19,14 @@ from src.core.algorithm.dto import (
     LayerTravelMatrix,
     PlanningLayer,
     ReplanDraft,
+    ReplanEvent,
     ReplanInput,
     ReplanSnapshot,
     RequestSnapshot,
     RoutePoint,
 )
 from src.core.algorithm.exc import AlgorithmInputError, MissingCoordinatesError
-from src.core.db.enums import RequestPriority, RequestStatus
+from src.core.db.enums import ReplanningEventType, RequestPriority, RequestStatus
 
 
 class InitialInputNormalizer:
@@ -223,17 +224,29 @@ class InitialInputNormalizer:
 class ReplanNormalizer:
     """Делит утверждённый план на неизменяемую историю и вход для пересчёта будущего хвоста.
 
-    Остановка фиксируется, если заявка уже в пути, в работе или выполнена либо если её
-    плановое начало работ раньше cutoff. Вместе с ней фиксируются все более ранние остановки того же
-    инженера: прожитая история — всегда префикс маршрута. Хвост инженера начинается из
-    точки последней зафиксированной остановки не раньше её окончания и cutoff; у инженера
-    без истории — из его стартовой точки. Отменённая незафиксированная заявка в хвост не
-    попадает. Недоступный инженер сохраняет историю и не получает будущих остановок.
-    Минуты истории передаются хвосту, чтобы цель режима считалась за весь день.
+    Остановка прожита, если заявка в работе или выполнена, в пути у доступного инженера
+    либо её плановое начало раньше cutoff. Отменённая заявка и заявка «в пути» у выбывшего
+    инженера сами прожитыми не считаются: в конце истории они снимаются с маршрута и
+    отменённая исчезает, а «в пути» уходит в пересчёт; в середине истории остаются как есть.
+    Фиксируется префикс маршрута до последней прожитой остановки. Хвост инженера
+    начинается из точки последней зафиксированной остановки не раньше её окончания и
+    cutoff; у инженера без истории или вернувшегося в строй после неё — из его стартовой
+    точки. Недоступный инженер сохраняет историю и не получает будущих остановок. Минуты
+    истории передаются хвосту, чтобы цель режима считалась за весь день.
     """
 
     def __init__(self) -> None:
         self._initial = InitialInputNormalizer()
+
+    def prepare_event(self, snapshot: ReplanSnapshot, event: ReplanEvent) -> ReplanDraft:
+        """Применяет одно событие к snapshot и готовит replan с ним.
+
+        Raises:
+            AlgorithmInputError: если событие не согласовано со snapshot: время события
+                позже cutoff, цель не найдена, повторяется или переход невозможен.
+        """
+
+        return replace(self.prepare(self._apply_event(snapshot, event)), event=event)
 
     def prepare(self, snapshot: ReplanSnapshot) -> ReplanDraft:
         requests_by_id = {request.id: request for request in snapshot.requests}
@@ -285,14 +298,15 @@ class ReplanNormalizer:
     def build(self, draft: ReplanDraft, matrices: Sequence[LayerMatrix]) -> ReplanInput:
         """Собирает вход хвоста; будущая часть текущего плана передаётся известным решением.
 
-        Если с момента утверждения ничего не изменилось, этот хвост остаётся допустимым,
-        и стратегия не вернёт план хуже текущего.
+        Из неё убраны заявки, которых больше нет в пуле хвоста, и маршруты недоступных
+        инженеров: снятая событием часть не обесценивает остальной текущий план.
         """
 
-        locked_ids = {stop.request_id for stop in draft.locked_stops}
+        tail_job_ids = {job.id for job in draft.tail.jobs}
+        available_ids = {engineer.id for engineer in draft.tail.engineers if engineer.is_available}
         future_by_engineer: dict[uuid.UUID, list[BasePlanStop]] = {}
         for stop in draft.snapshot.base_stops:
-            if stop.request_id not in locked_ids:
+            if stop.request_id in tail_job_ids and stop.engineer_id in available_ids:
                 future_by_engineer.setdefault(stop.engineer_id, []).append(stop)
         current_future = KnownSolution(
             routes=tuple(
@@ -315,7 +329,59 @@ class ReplanNormalizer:
             tail=replace(
                 self._initial.build(draft.tail, matrices), known_solutions=(current_future,)
             ),
+            event=draft.event,
         )
+
+    @staticmethod
+    def _apply_event(snapshot: ReplanSnapshot, event: ReplanEvent) -> ReplanSnapshot:
+        if event.occurred_at > snapshot.calculation_cutoff_at:
+            raise AlgorithmInputError("Событие не может произойти позже cutoff расчёта")
+        request_ids = {request.id for request in snapshot.requests}
+        match event.event_type:
+            case ReplanningEventType.URGENT_REQUEST:
+                urgent = event.urgent_request
+                if urgent is None or urgent.id in request_ids:
+                    raise AlgorithmInputError("Срочная заявка отсутствует или уже есть в плане")
+                return replace(
+                    snapshot,
+                    requests=(*snapshot.requests, replace(urgent, received_at=event.occurred_at)),
+                )
+            case ReplanningEventType.REQUEST_CANCELLED:
+                target = next(
+                    (item for item in snapshot.requests if item.id == event.request_id), None
+                )
+                if target is None or target.status in {
+                    RequestStatus.IN_PROGRESS,
+                    RequestStatus.DONE,
+                    RequestStatus.CANCELLED,
+                }:
+                    raise AlgorithmInputError("Отменить можно только ещё не начатую заявку")
+                return replace(
+                    snapshot,
+                    requests=tuple(
+                        replace(item, status=RequestStatus.CANCELLED) if item is target else item
+                        for item in snapshot.requests
+                    ),
+                )
+            case ReplanningEventType.ENGINEER_UNAVAILABLE | ReplanningEventType.ENGINEER_AVAILABLE:
+                returns = event.event_type == ReplanningEventType.ENGINEER_AVAILABLE
+                engineer = next(
+                    (item for item in snapshot.engineers if item.id == event.engineer_id), None
+                )
+                if engineer is None or engineer.is_available == returns:
+                    raise AlgorithmInputError("Недопустимый переход доступности инженера")
+                changed = replace(
+                    engineer,
+                    is_available=returns,
+                    returned_at=event.occurred_at if returns else engineer.returned_at,
+                )
+                return replace(
+                    snapshot,
+                    engineers=tuple(
+                        changed if item is engineer else item for item in snapshot.engineers
+                    ),
+                )
+        raise AlgorithmInputError(f"Неизвестный тип события: {event.event_type}")
 
     @staticmethod
     def _locked_stops(
@@ -329,6 +395,7 @@ class ReplanNormalizer:
                 последовательность маршрута прерывается или начатая заявка не в плане.
         """
 
+        available_ids = {engineer.id for engineer in snapshot.engineers if engineer.is_available}
         engineer_ids = {engineer.id for engineer in snapshot.engineers}
         started_statuses = {RequestStatus.ON_THE_WAY, RequestStatus.IN_PROGRESS, RequestStatus.DONE}
         stops_by_engineer: dict[uuid.UUID, list[BasePlanStop]] = {}
@@ -345,8 +412,12 @@ class ReplanNormalizer:
                 (
                     index + 1
                     for index, stop in enumerate(stops)
-                    if stop.start < snapshot.calculation_cutoff_at
-                    or requests_by_id[stop.request_id].status in started_statuses
+                    if ReplanNormalizer._lived(
+                        stop,
+                        requests_by_id[stop.request_id].status,
+                        engineer_id in available_ids,
+                        snapshot.calculation_cutoff_at,
+                    )
                 ),
                 default=0,
             )
@@ -360,14 +431,36 @@ class ReplanNormalizer:
         return tuple(locked)
 
     @staticmethod
+    def _lived(
+        stop: BasePlanStop,
+        status: RequestStatus,
+        engineer_available: bool,
+        cutoff_at: datetime,
+    ) -> bool:
+        match status:
+            case RequestStatus.IN_PROGRESS | RequestStatus.DONE:
+                return True
+            case RequestStatus.ON_THE_WAY:
+                return engineer_available
+            case RequestStatus.CANCELLED:
+                return False
+        return stop.start < cutoff_at
+
+    @staticmethod
     def _tail_engineer(
         engineer: EngineerSnapshot,
         last_locked: BasePlanStop | None,
         history_service_minutes: int,
         requests_by_id: dict[uuid.UUID, RequestSnapshot],
     ) -> EngineerSnapshot:
-        if last_locked is None:
-            return engineer
+        if last_locked is None or (
+            engineer.returned_at is not None and last_locked.finish <= engineer.returned_at
+        ):
+            return replace(
+                engineer,
+                ready_at=engineer.returned_at,
+                history_service_minutes=history_service_minutes,
+            )
         request = requests_by_id[last_locked.request_id]
         return replace(
             engineer,

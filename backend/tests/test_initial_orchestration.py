@@ -219,7 +219,7 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             build_initial_input=MagicMock(return_value=planning_input),
             plan_initial=MagicMock(return_value=calculated),
             plan_baseline=MagicMock(
-                return_value=SimpleNamespace(metrics=metrics, algorithm_version="baseline-v2")
+                return_value=SimpleNamespace(metrics=metrics, algorithm_version="baseline-v3")
             ),
         )
         self.service._algorithm = algorithm
