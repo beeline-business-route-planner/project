@@ -80,7 +80,7 @@ class PlanService:
                 self._uow.replanning_events.set_approval_status(
                     event, ApprovalStatus.APPROVED, decided_at
                 )
-                await self._apply_event(event)
+                await self._apply_event(event, plan)
             summary = self._summary(plan, is_current=True)
             await self._uow.commit()
             return summary
@@ -190,7 +190,12 @@ class PlanService:
             if any(stop.planned_start < local_now for stop in stops):
                 raise PlanStopAlreadyStartedError
         else:
-            self._validate_past_stops(stops, base_stops, local_now)
+            self._validate_past_stops(
+                stops,
+                base_stops,
+                local_now,
+                self._released_request_ids(event, base_stops, requests),
+            )
 
     @staticmethod
     def _validate_event_target(
@@ -233,13 +238,46 @@ class PlanService:
         return cutoff.replace(tzinfo=ZoneInfo("Europe/Moscow")).astimezone(UTC).replace(tzinfo=None)
 
     @staticmethod
+    def _released_request_ids(
+        event: ReplanningEvent | None,
+        base_stops: list[PlanStop],
+        requests: list[Request],
+    ) -> frozenset[uuid.UUID]:
+        """Заявки, которые событие законно снимает с уже начавшейся части маршрута.
+
+        Отменённая заявка уходит из плана, даже если к ней уже едут; заявки «в пути» у
+        выбывшего инженера перераспределяются.
+        """
+
+        if event is None:
+            return frozenset()
+        if event.event_type == ReplanningEventType.REQUEST_CANCELLED and event.request_id:
+            return frozenset({event.request_id})
+        if event.event_type == ReplanningEventType.ENGINEER_UNAVAILABLE:
+            on_the_way = {
+                request.id for request in requests if request.status == RequestStatus.ON_THE_WAY
+            }
+            return frozenset(
+                stop.request_id
+                for stop in base_stops
+                if stop.engineer_id == event.engineer_id and stop.request_id in on_the_way
+            )
+        return frozenset()
+
+    @staticmethod
     def _validate_past_stops(
-        stops: list[PlanStop], base_stops: list[PlanStop], now: datetime
+        stops: list[PlanStop],
+        base_stops: list[PlanStop],
+        now: datetime,
+        released_ids: frozenset[uuid.UUID],
     ) -> None:
-        old_by_request = {stop.request_id: stop for stop in base_stops}
+        old_by_request = {
+            stop.request_id: stop for stop in base_stops if stop.request_id not in released_ids
+        }
         new_by_request = {stop.request_id: stop for stop in stops}
         if any(
-            old.planned_start < now and old.request_id not in new_by_request for old in base_stops
+            old.planned_start < now and old.request_id not in new_by_request
+            for old in old_by_request.values()
         ):
             raise PlanStopAlreadyStartedError
         for stop in stops:
@@ -286,7 +324,7 @@ class PlanService:
             raise PlanStateChangedError
         return event
 
-    async def _apply_event(self, event: ReplanningEvent) -> None:
+    async def _apply_event(self, event: ReplanningEvent, plan: Plan) -> None:
         if event.event_type == ReplanningEventType.REQUEST_CANCELLED:
             if event.request_id is None:
                 raise PlanStateChangedError
@@ -307,6 +345,27 @@ class PlanService:
             if engineer.is_available == target_available:
                 raise PlanStateChangedError
             engineer.is_available = target_available
+            if not target_available:
+                await self._reset_released_on_the_way(plan, engineer.id)
+
+    async def _reset_released_on_the_way(self, plan: Plan, engineer_id: uuid.UUID) -> None:
+        """Возвращает в «не отправлена» заявки «в пути», снятые с выбывшего инженера."""
+
+        if plan.based_on_plan_id is None:
+            return
+        kept_ids = {
+            stop.request_id
+            for stop in await self._uow.plan_stops.get_by_plan_id(plan.id)
+            if stop.engineer_id == engineer_id
+        }
+        released_ids = {
+            stop.request_id
+            for stop in await self._uow.plan_stops.get_by_plan_id(plan.based_on_plan_id)
+            if stop.engineer_id == engineer_id and stop.request_id not in kept_ids
+        }
+        for request in await self._uow.requests.get_by_ids_for_update(released_ids):
+            if request.status == RequestStatus.ON_THE_WAY:
+                self._uow.requests.set_status(request, RequestStatus.NOT_SENT)
 
     async def _build_detail(self, plan: Plan, is_current: bool) -> PlanDetailDTO:
         snapshot = await self._load_snapshot(plan)
