@@ -32,9 +32,9 @@ from src.core.algorithm import AlgorithmService
 from src.core.db.enums import ApprovalStatus, Region
 from src.core.db.models import BaselineResult, DataUpload, Plan, PlanStop, Request
 from src.core.db.uow import UnitOfWork
-from src.core.dgis import DgisUnavailableError
 from src.core.dgis.service import DgisMatrix
 from src.core.geocoding.dto import Coordinates
+from src.core.travel_matrix import TravelMatrixUnavailableError
 
 DATABASE_URL = os.environ.get("G02_TEST_DATABASE_URL")
 MOSCOW = ZoneInfo("Europe/Moscow")
@@ -62,20 +62,25 @@ class FakeMatrixService:
         self.calls = 0
         self.fail_on_call = fail_on_call
 
-    async def build_matrix(self, points: list, **kwargs: object) -> DgisMatrix:
-        self.calls += 1
-        if self.calls == self.fail_on_call:
-            raise DgisUnavailableError("Синтетический сбой маршрутизации")
+    async def build(self, points: list, requests: list) -> list[DgisMatrix]:
+        matrices = []
         indexes = {point.id: index for index, point in enumerate(points)}
         size = len(points)
-        return DgisMatrix(
-            indexes,
-            [[0 if row == col else 5 for col in range(size)] for row in range(size)],
-            [
-                [Decimal(0) if row == col else Decimal(1) for col in range(size)]
-                for row in range(size)
-            ],
-        )
+        for _ in requests:
+            self.calls += 1
+            if self.calls == self.fail_on_call:
+                raise TravelMatrixUnavailableError("Синтетический сбой маршрутизации")
+            matrices.append(
+                DgisMatrix(
+                    indexes,
+                    [[0 if row == col else 5 for col in range(size)] for row in range(size)],
+                    [
+                        [Decimal(0) if row == col else Decimal(1) for col in range(size)]
+                        for row in range(size)
+                    ],
+                )
+            )
+        return matrices
 
 
 def workbook(region: str, role: str) -> PlanningUploadFile:

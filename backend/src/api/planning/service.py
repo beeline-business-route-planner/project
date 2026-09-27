@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -22,9 +23,9 @@ from src.api.exc.planning import (
     PlanningRegionPairError,
     PlanningRequestAlreadyCancelled,
     PlanningRoutingUnavailable,
-    PlanningUnreachablePoints,
     PlanningUrgentRequestExists,
     PlanningUrgentRequestInvalid,
+    PlanningWrongDateError,
     RepeatedRequestError,
 )
 from src.api.planning.dto import (
@@ -48,15 +49,17 @@ from src.api.planning.utils import work_norm
 from src.config import cfg
 from src.core.algorithm import (
     AlgorithmService,
+    AlgorithmVariant,
     BasePlanStop,
-    DistributionMode,
     EngineerSnapshot,
     InitialPlanningSnapshot,
     LayerMatrix,
+    LayerMatrixRequest,
     MissingCoordinatesError,
     ReplanResult,
     ReplanSnapshot,
     RequestSnapshot,
+    RoutePoint,
 )
 from src.core.algorithm import (
     InitialPlanningResult as AlgorithmInitialPlanningResult,
@@ -76,21 +79,17 @@ from src.core.db.dto import (
 )
 from src.core.db.enums import (
     ApprovalStatus,
+    DistributionMode,
     PlanKind,
+    PlanStrategy,
     Region,
     ReplanningEventType,
     RequestStatus,
+    UnassignedReason,
 )
 from src.core.db.models import Engineer as EngineerModel
 from src.core.db.models import Request
 from src.core.db.uow import UnitOfWork
-from src.core.dgis import (
-    DgisMatrixService,
-    DgisPoint,
-    DgisUnavailableError,
-    DgisUnreachablePointsError,
-    InvalidDgisResponseError,
-)
 from src.core.geocoding import (
     AddressNotFoundError,
     Coordinates,
@@ -98,6 +97,13 @@ from src.core.geocoding import (
     GeocodingUnavailableError,
 )
 from src.core.s3 import S3Storage, S3UnavailableError
+from src.core.travel_matrix import (
+    InvalidTravelMatrixResponseError,
+    MatrixPoint,
+    MatrixRequest,
+    TravelMatrixService,
+    TravelMatrixUnavailableError,
+)
 from src.core.utils.initial_approval import InitialApprovalPolicy
 
 log = logging.getLogger(__name__)
@@ -112,16 +118,22 @@ class PlanningService:
         geocoding: GeocodingService,
         storage: S3Storage,
         algorithm: AlgorithmService,
-        dgis: DgisMatrixService,
+        travel_matrix: TravelMatrixService,
     ) -> None:
         self._uow = uow
         self._geocoding = geocoding
         self._storage = storage
         self._algorithm = algorithm
-        self._dgis = dgis
+        self._travel_matrix = travel_matrix
 
-    async def replan(self, regions: list[Region]) -> ReplanPlanningResult:
-        results = [await self._run_replan_region(region) for region in regions]
+    async def replan(
+        self,
+        regions: list[Region],
+        mode: DistributionMode | None,
+        strategy: PlanStrategy | None,
+    ) -> ReplanPlanningResult:
+        """Пересчитывает округа; без явных режима и стратегии берёт их из рабочего плана."""
+        results = [await self._run_replan_region(region, mode, strategy) for region in regions]
         successful = sum(item.status == "success" for item in results)
         status: Literal["success", "partial_success", "error"]
         if successful == len(results):
@@ -132,34 +144,26 @@ class PlanningService:
             status = "error"
         return ReplanPlanningResult(status=status, regions=tuple(results))
 
-    async def _run_replan_region(self, region: Region) -> ReplanRegionResult:
+    async def _run_replan_region(
+        self,
+        region: Region,
+        mode: DistributionMode | None,
+        strategy: PlanStrategy | None,
+    ) -> ReplanRegionResult:
         cutoff_at = datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
         try:
             await self._uow.plans.lock_region_day(region, cutoff_at.date())
             base = await self.prepare_replan_base(region, cutoff_at)
-            snapshot = self._to_replan_snapshot(base)
+            plan_mode = mode or base.mode
+            plan_strategy = strategy or base.strategy
+            snapshot = self._to_replan_snapshot(base, plan_mode)
             draft = self._algorithm.prepare_replan(snapshot)
-            points = [
-                DgisPoint(id=point.id, latitude=point.latitude, longitude=point.longitude)
-                for point in draft.tail.points
-            ]
-            matrices = [
-                LayerMatrix(
-                    request=matrix_request,
-                    travel_matrix=await self._dgis.build_matrix(
-                        points,
-                        vehicle_type=matrix_request.vehicle_type,
-                        departure_at=matrix_request.traffic_reference_at,
-                        source_ids=matrix_request.source_ids,
-                        target_ids=matrix_request.target_ids,
-                    ),
-                )
-                for matrix_request in draft.tail.matrix_requests
-            ]
+            matrices = await self._layer_matrices(draft.tail.points, draft.tail.matrix_requests)
             calculated = self._algorithm.plan_replan(
-                self._algorithm.build_replan_input(draft, matrices)
+                self._algorithm.build_replan_input(draft, matrices),
+                AlgorithmVariant(plan_strategy.value),
             )
-            plan_id = await self._persist_replan_result(base, calculated)
+            plan_id = await self._persist_replan_result(base, calculated, plan_strategy)
             await self._uow.flush()
             plan = await self._uow.plans.get_by_id(plan_id)
             if plan is None:
@@ -167,6 +171,8 @@ class PlanningService:
             summary = ReplanPlanSummary(
                 id=plan.id,
                 region=plan.region,
+                mode=plan.mode,
+                strategy=plan.strategy,
                 planning_date=plan.planning_date,
                 created_at=plan.created_at,
                 based_on_plan_id=base.base_plan_id,
@@ -198,7 +204,7 @@ class PlanningService:
             base = await self.prepare_replan_base(request.region, cutoff)
             if await self._uow.replanning_events.get_pending(request.region, cutoff.date()):
                 raise PlanningPendingEventExists
-            snapshot = self._to_replan_snapshot(base)
+            snapshot = self._to_replan_snapshot(base, base.mode)
             target_id = await self._validate_and_prepare_event(request, base, cutoff)
             event_id = self._uow.replanning_events.create(
                 ReplanningEventCreateDTO(
@@ -225,30 +231,15 @@ class PlanningService:
             await self._uow.flush()
             snapshot = await self._apply_to_snapshot(snapshot, request, target_id)
             draft = self._algorithm.prepare_replan(snapshot)
-            points = [
-                DgisPoint(id=point.id, latitude=point.latitude, longitude=point.longitude)
-                for point in draft.tail.points
-            ]
-            matrices = [
-                LayerMatrix(
-                    request=matrix_request,
-                    travel_matrix=await self._dgis.build_matrix(
-                        points,
-                        vehicle_type=matrix_request.vehicle_type,
-                        departure_at=matrix_request.traffic_reference_at,
-                        source_ids=matrix_request.source_ids,
-                        target_ids=matrix_request.target_ids,
-                    ),
-                )
-                for matrix_request in draft.tail.matrix_requests
-            ]
+            matrices = await self._layer_matrices(draft.tail.points, draft.tail.matrix_requests)
             calculated = self._algorithm.plan_replan(
-                self._algorithm.build_replan_input(draft, matrices)
+                self._algorithm.build_replan_input(draft, matrices),
+                AlgorithmVariant(base.strategy.value),
             )
             self._audit_event_result(request, target_id, calculated)
             availability = {item.id: item.is_available for item in snapshot.engineers}
             plan_id = await self._persist_replan_result(
-                base, calculated, event_id=event_id, availability=availability
+                base, calculated, base.strategy, event_id=event_id, availability=availability
             )
             await self._uow.flush()
             plan = await self._uow.plans.get_by_id(plan_id)
@@ -263,6 +254,8 @@ class PlanningService:
                 plan=ReplanPlanSummary(
                     id=plan.id,
                     region=plan.region,
+                    mode=plan.mode,
+                    strategy=plan.strategy,
                     planning_date=plan.planning_date,
                     created_at=plan.created_at,
                     based_on_plan_id=base.base_plan_id,
@@ -280,18 +273,15 @@ class PlanningService:
                 raise PlanningAddressNotFound from exc
             raise PlanningGeocodingUnavailable from exc
         except (
-            DgisUnavailableError,
-            InvalidDgisResponseError,
-            DgisUnreachablePointsError,
+            TravelMatrixUnavailableError,
+            InvalidTravelMatrixResponseError,
             MissingCoordinatesError,
         ) as exc:
             await self._uow.rollback()
-            if isinstance(exc, DgisUnavailableError):
+            if isinstance(exc, TravelMatrixUnavailableError):
                 raise PlanningRoutingUnavailable from exc
-            if isinstance(exc, InvalidDgisResponseError):
+            if isinstance(exc, InvalidTravelMatrixResponseError):
                 raise PlanningInvalidRoutingResponse from exc
-            if isinstance(exc, DgisUnreachablePointsError):
-                raise PlanningUnreachablePoints from exc
             raise PlanningMissingCoordinates from exc
         except Exception:
             await self._uow.rollback()
@@ -436,14 +426,39 @@ class PlanningService:
         ):
             raise ValueError("Недоступный инженер получил новые остановки")
 
+    async def _layer_matrices(
+        self,
+        points: Sequence[RoutePoint],
+        requests: Sequence[LayerMatrixRequest],
+    ) -> list[LayerMatrix]:
+        travel_matrices = await self._travel_matrix.build(
+            [
+                MatrixPoint(id=point.id, latitude=point.latitude, longitude=point.longitude)
+                for point in points
+            ],
+            [
+                MatrixRequest(
+                    vehicle_type=request.vehicle_type,
+                    departure_at=request.traffic_reference_at,
+                    source_ids=request.source_ids,
+                    target_ids=request.target_ids,
+                )
+                for request in requests
+            ],
+        )
+        return [
+            LayerMatrix(request=request, travel_matrix=travel_matrix)
+            for request, travel_matrix in zip(requests, travel_matrices, strict=True)
+        ]
+
     @staticmethod
-    def _to_replan_snapshot(base: ReplanBaseSnapshot) -> ReplanSnapshot:
+    def _to_replan_snapshot(base: ReplanBaseSnapshot, mode: DistributionMode) -> ReplanSnapshot:
         availability = {state.engineer_id: state.is_available for state in base.engineer_states}
         return ReplanSnapshot(
             region=base.region,
             planning_date=base.planning_date,
             calculation_cutoff_at=base.calculation_cutoff_at,
-            mode=DistributionMode.MIN_ENGINEERS,
+            mode=mode,
             requests=tuple(
                 RequestSnapshot(
                     id=item.id,
@@ -456,8 +471,10 @@ class PlanningService:
                     required_skill=item.required_skill,
                     required_vehicle_type=item.required_vehicle_type,
                     status=item.status,
+                    received_at=base.initial_cutoff_at,
                 )
                 for item in base.requests
+                if item.latitude is not None and item.longitude is not None
             ),
             engineers=tuple(
                 EngineerSnapshot(
@@ -491,10 +508,14 @@ class PlanningService:
         self,
         base: ReplanBaseSnapshot,
         calculated: ReplanResult,
+        strategy: PlanStrategy,
         *,
         event_id: uuid.UUID | None = None,
         availability: dict[uuid.UUID, bool] | None = None,
     ) -> uuid.UUID:
+        unlocated_ids = [
+            item.id for item in base.requests if item.latitude is None or item.longitude is None
+        ]
         if availability is None:
             availability = {state.engineer_id: state.is_available for state in base.engineer_states}
         plan_id = self._uow.plans.create(
@@ -506,10 +527,14 @@ class PlanningService:
                 based_on_plan_id=base.base_plan_id,
                 triggered_by_event_id=event_id,
                 calculation_cutoff_at=calculated.calculation_cutoff_at,
+                mode=calculated.mode,
+                strategy=strategy,
                 total_mileage_km=calculated.metrics.total_mileage_km,
                 engineers_used_count=calculated.metrics.engineers_used_count,
                 assigned_requests_count=calculated.metrics.assigned_requests_count,
-                unassigned_requests_count=calculated.metrics.unassigned_requests_count,
+                unassigned_requests_count=(
+                    calculated.metrics.unassigned_requests_count + len(unlocated_ids)
+                ),
                 created_at=datetime.now(UTC).replace(tzinfo=None),
             )
         )
@@ -551,6 +576,12 @@ class PlanningService:
                 )
                 for item in calculated.unassigned
             ]
+            + [
+                PlanUnassignedRequestCreateDTO(
+                    plan_id=plan_id, request_id=request_id, reason=UnassignedReason.NO_ROUTE
+                )
+                for request_id in unlocated_ids
+            ]
         )
         return plan_id
 
@@ -561,7 +592,8 @@ class PlanningService:
         cutoff = cutoff_at or datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
         planning_date = cutoff.date()
         current = await self._uow.plans.get_current(region, planning_date)
-        if current is None or not await self._uow.plans.has_approved_initial(region, planning_date):
+        initial_cutoff_at = await self._uow.plans.get_approved_initial_cutoff(region, planning_date)
+        if current is None or initial_cutoff_at is None:
             raise PlanningCurrentPlanMissing
 
         stops = await self._uow.plan_stops.get_by_plan_id(current.id)
@@ -588,9 +620,12 @@ class PlanningService:
         return ReplanBaseSnapshot(
             base_plan_id=current.id,
             upload_id=current.upload_id,
+            mode=current.mode,
+            strategy=current.strategy,
             region=region,
             planning_date=planning_date,
             calculation_cutoff_at=cutoff,
+            initial_cutoff_at=initial_cutoff_at,
             requests=tuple(
                 RequestDTO.from_orm(item)
                 for item in sorted(requests, key=lambda item: str(item.id))
@@ -625,7 +660,12 @@ class PlanningService:
             ),
         )
 
-    async def import_initial_data(self, files: list[PlanningUploadFile]) -> InitialPlanningResult:
+    async def import_initial_data(
+        self,
+        files: list[PlanningUploadFile],
+        mode: DistributionMode,
+        strategy: PlanStrategy,
+    ) -> InitialPlanningResult:
         if not files:
             raise PlanningFileCountError
         identified = await asyncio.gather(
@@ -656,7 +696,9 @@ class PlanningService:
                     )
                 )
                 continue
-            regions.append(await self._run_region(region, pair["requests"], pair["engineers"]))
+            regions.append(
+                await self._run_region(region, pair["requests"], pair["engineers"], mode, strategy)
+            )
 
         successful = sum(item.status == "success" for item in regions)
         status: Literal["success", "partial_success", "error"]
@@ -673,10 +715,14 @@ class PlanningService:
         region: Region,
         requests_workbook: ParsedWorkbook,
         engineers_workbook: ParsedWorkbook,
+        mode: DistributionMode,
+        strategy: PlanStrategy,
     ) -> PlanningRegionResult:
         uploaded_objects: list[tuple[str, str]] = []
         planning_date = min(request.window_start for request in requests_workbook.requests).date()
         try:
+            if planning_date != datetime.now(ZoneInfo("Europe/Moscow")).date():
+                raise PlanningWrongDateError
             await self._uow.plans.lock_region_day(region, planning_date)
             if await self._uow.plans.has_approved_initial(region, planning_date):
                 await self._uow.rollback()
@@ -707,7 +753,8 @@ class PlanningService:
                 cutoff_at,
                 requests,
                 engineers,
-                DistributionMode.MIN_ENGINEERS,
+                mode,
+                strategy,
             )
             await self._uow.flush()
             plan = await self._uow.plans.get_by_id(plan_id)
@@ -716,6 +763,8 @@ class PlanningService:
             summary = InitialPlanSummary(
                 id=plan.id,
                 region=plan.region,
+                mode=plan.mode,
+                strategy=plan.strategy,
                 planning_date=plan.planning_date,
                 created_at=plan.created_at,
                 approval_deadline=InitialApprovalPolicy.deadline(plan.created_at),
@@ -746,17 +795,21 @@ class PlanningService:
         errors: tuple[tuple[type[Exception], str, str], ...] = (
             (RepeatedRequestError, "duplicate_request", "Повторяются номера заявок"),
             (PlanningFileValidationError, "invalid_file", "Некорректные данные Excel"),
+            (
+                PlanningWrongDateError,
+                "wrong_planning_date",
+                "Дата заявок в таблице не совпадает с сегодняшним днём",
+            ),
             (PlanningRegionPairError, "invalid_region_pair", "Нужна пара Excel округа"),
             (PlanningAddressNotFound, "address_not_found", "Адрес не найден"),
             (PlanningGeocodingUnavailable, "geocoding_unavailable", "Геокодирование недоступно"),
             (S3UnavailableError, "storage_unavailable", "Хранилище файлов недоступно"),
-            (DgisUnavailableError, "routing_unavailable", "Маршрутизация недоступна"),
+            (TravelMatrixUnavailableError, "routing_unavailable", "Маршрутизация недоступна"),
             (
-                InvalidDgisResponseError,
+                InvalidTravelMatrixResponseError,
                 "invalid_routing_response",
                 "Некорректный ответ маршрутизации",
             ),
-            (DgisUnreachablePointsError, "unreachable_points", "Маршрут между точками не найден"),
             (MissingCoordinatesError, "missing_coordinates", "Не определены координаты"),
         )
         for error_type, code, detail in errors:
@@ -773,6 +826,7 @@ class PlanningService:
         requests: list[Request],
         engineers: list[EngineerModel],
         mode: DistributionMode,
+        strategy: PlanStrategy,
     ) -> uuid.UUID:
         draft = self._algorithm.prepare_initial(
             InitialPlanningSnapshot(
@@ -780,31 +834,26 @@ class PlanningService:
                 planning_date=planning_date,
                 calculation_cutoff_at=cutoff_at,
                 mode=mode,
-                requests=tuple(self._to_request_snapshot(request) for request in requests),
+                requests=tuple(
+                    self._to_request_snapshot(request)
+                    for request in requests
+                    if request.latitude is not None and request.longitude is not None
+                ),
                 engineers=tuple(self._to_engineer_snapshot(engineer) for engineer in engineers),
             )
         )
-        points = [
-            DgisPoint(id=point.id, latitude=point.latitude, longitude=point.longitude)
-            for point in draft.points
-        ]
-        matrices = [
-            LayerMatrix(
-                request=matrix_request,
-                travel_matrix=await self._dgis.build_matrix(
-                    points,
-                    vehicle_type=matrix_request.vehicle_type,
-                    departure_at=matrix_request.traffic_reference_at,
-                    source_ids=matrix_request.source_ids,
-                    target_ids=matrix_request.target_ids,
-                ),
-            )
-            for matrix_request in draft.matrix_requests
-        ]
+        matrices = await self._layer_matrices(draft.points, draft.matrix_requests)
         planning_input = self._algorithm.build_initial_input(draft, matrices)
-        calculated = self._algorithm.plan_initial(planning_input)
+        calculated = self._algorithm.plan_initial(planning_input, AlgorithmVariant(strategy.value))
         baseline = self._algorithm.plan_baseline(planning_input)
-        plan_id = await self._persist_initial_result(upload_id, calculated, engineers)
+        unlocated_ids = [
+            request.id
+            for request in requests
+            if request.latitude is None or request.longitude is None
+        ]
+        plan_id = await self._persist_initial_result(
+            upload_id, calculated, strategy, engineers, unlocated_ids
+        )
         self._uow.baseline_results.create(
             BaselineResultCreateDTO(
                 initial_plan_id=plan_id,
@@ -827,8 +876,11 @@ class PlanningService:
         self,
         upload_id: uuid.UUID,
         calculated: AlgorithmInitialPlanningResult,
+        strategy: PlanStrategy,
         engineers: list[EngineerModel],
+        unlocated_ids: list[uuid.UUID],
     ) -> uuid.UUID:
+        """Сохраняет initial; заявки без координат — неназначенные с причиной `no_route`."""
         plan_id = self._uow.plans.create(
             PlanCreateDTO(
                 region=calculated.region,
@@ -838,10 +890,14 @@ class PlanningService:
                 based_on_plan_id=None,
                 triggered_by_event_id=None,
                 calculation_cutoff_at=calculated.calculation_cutoff_at,
+                mode=calculated.mode,
+                strategy=strategy,
                 total_mileage_km=calculated.metrics.total_mileage_km,
                 engineers_used_count=calculated.metrics.engineers_used_count,
                 assigned_requests_count=calculated.metrics.assigned_requests_count,
-                unassigned_requests_count=calculated.metrics.unassigned_requests_count,
+                unassigned_requests_count=(
+                    calculated.metrics.unassigned_requests_count + len(unlocated_ids)
+                ),
                 created_at=datetime.now(UTC).replace(tzinfo=None),
             )
         )
@@ -884,6 +940,12 @@ class PlanningService:
                 )
                 for item in calculated.unassigned
             ]
+            + [
+                PlanUnassignedRequestCreateDTO(
+                    plan_id=plan_id, request_id=request_id, reason=UnassignedReason.NO_ROUTE
+                )
+                for request_id in unlocated_ids
+            ]
         )
         return plan_id
 
@@ -924,14 +986,23 @@ class PlanningService:
         addresses = [requests_workbook.office_address]
         addresses.extend(request.address for request in requests_workbook.requests)
         addresses.extend(engineer.start_point_address for engineer in engineers_workbook.engineers)
+        unique_addresses = list(dict.fromkeys(addresses))
+        points = await asyncio.gather(
+            *(self._geocoding.geocode(address) for address in unique_addresses),
+            return_exceptions=True,
+        )
         coordinates = {}
-        for address in dict.fromkeys(addresses):
-            try:
-                point = await self._geocoding.geocode(address)
-            except AddressNotFoundError as exc:
-                raise PlanningAddressNotFound from exc
-            except GeocodingUnavailableError as exc:
-                raise PlanningGeocodingUnavailable from exc
+        for address, point in zip(unique_addresses, points, strict=True):
+            if isinstance(point, GeocodingUnavailableError):
+                raise PlanningGeocodingUnavailable from point
+            if isinstance(point, AddressNotFoundError):
+                # Без офиса округ не спланировать; остальные ненайденные адреса не роняют
+                # округ: заявка уйдёт в неназначенные, бригада стартует из офиса.
+                if address == requests_workbook.office_address:
+                    raise PlanningAddressNotFound from point
+                continue
+            if isinstance(point, BaseException):
+                raise point
             coordinates[address] = point
         return coordinates
 
@@ -970,6 +1041,11 @@ class PlanningService:
         if requests_workbook.office_address is None:
             raise PlanningFileValidationError
         planning_date = min(request.window_start for request in requests_workbook.requests).date()
+        office = coordinates[requests_workbook.office_address]
+        engineer_starts = {
+            engineer.start_point_address: coordinates.get(engineer.start_point_address, office)
+            for engineer in engineers_workbook.engineers
+        }
 
         request_dtos = [
             RequestCreateDTO(
@@ -980,8 +1056,16 @@ class PlanningService:
                 region=region,
                 district=request.district,
                 address=request.address,
-                latitude=coordinates[request.address].latitude,
-                longitude=coordinates[request.address].longitude,
+                latitude=(
+                    coordinates[request.address].latitude
+                    if request.address in coordinates
+                    else None
+                ),
+                longitude=(
+                    coordinates[request.address].longitude
+                    if request.address in coordinates
+                    else None
+                ),
                 connection_type=request.connection_type,
                 is_gigabit=request.is_gigabit,
                 window_start=request.window_start,
@@ -1000,8 +1084,8 @@ class PlanningService:
                 name=engineer.name,
                 region=region,
                 start_point_address=engineer.start_point_address,
-                start_point_latitude=coordinates[engineer.start_point_address].latitude,
-                start_point_longitude=coordinates[engineer.start_point_address].longitude,
+                start_point_latitude=engineer_starts[engineer.start_point_address].latitude,
+                start_point_longitude=engineer_starts[engineer.start_point_address].longitude,
                 shift_start=datetime.combine(planning_date, engineer.shift_start),
                 shift_end=datetime.combine(planning_date, engineer.shift_end),
                 skills=engineer.skills,

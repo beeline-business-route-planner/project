@@ -12,8 +12,14 @@ from src.api.planning.dto import ReplanRegionResult
 from src.api.planning.schemas import ReplanPlanningRequest
 from src.api.planning.service import PlanningService
 from src.core.algorithm.dto import PlanMetrics, ReplanResult, Route, Stop
-from src.core.algorithm.enums import DistributionMode
-from src.core.db.enums import PlanKind, Region
+from src.core.algorithm import AlgorithmVariant
+from src.core.db.enums import (
+    DistributionMode,
+    PlanKind,
+    PlanStrategy,
+    Region,
+    UnassignedReason,
+)
 
 
 class ReplanOrchestrationTest(unittest.IsolatedAsyncioTestCase):
@@ -42,7 +48,7 @@ class ReplanOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             ]
         )
 
-        result = await self.service.replan(regions)
+        result = await self.service.replan(regions, None, None)
 
         self.assertEqual(result.status, "partial_success")
         self.assertEqual([item.status for item in result.regions], ["success", "error", "success"])
@@ -58,6 +64,10 @@ class ReplanOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             upload_id=uuid.UUID(int=4),
             engineers=(SimpleNamespace(id=engineer_id),),
             engineer_states=(SimpleNamespace(engineer_id=engineer_id, is_available=True),),
+            requests=(
+                SimpleNamespace(id=request_id, latitude=Decimal("55.7"), longitude=Decimal("37.6")),
+                SimpleNamespace(id=uuid.UUID(int=5), latitude=None, longitude=None),
+            ),
         )
         stop = Stop(
             request_id=request_id,
@@ -101,7 +111,7 @@ class ReplanOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             algorithm_version="test",
         )
 
-        plan_id = await self.service._persist_replan_result(base, calculated)
+        plan_id = await self.service._persist_replan_result(base, calculated, PlanStrategy.LNS)
 
         self.assertEqual(plan_id, uuid.UUID(int=10))
         saved_plan = self.uow.plans.create.call_args.args[0]
@@ -109,9 +119,19 @@ class ReplanOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved_plan.based_on_plan_id, base_id)
         self.assertEqual(saved_plan.upload_id, base.upload_id)
         self.assertEqual(saved_plan.calculation_cutoff_at, cutoff)
+        self.assertEqual(
+            (saved_plan.mode, saved_plan.strategy),
+            (DistributionMode.MIN_ENGINEERS, PlanStrategy.LNS),
+        )
         self.assertTrue(self.uow.plan_stops.add_many.call_args.args[0][0].is_locked)
         self.assertEqual(self.uow.plan_stops.add_many.call_args.args[0][0].request_id, request_id)
         self.assertEqual(len(self.uow.plan_engineer_states.add_many.call_args.args[0]), 1)
+        unlocated = self.uow.plan_unassigned_requests.add_many.call_args.args[0]
+        self.assertEqual(
+            [(item.request_id, item.reason) for item in unlocated],
+            [(uuid.UUID(int=5), UnassignedReason.NO_ROUTE)],
+        )
+        self.assertEqual(saved_plan.unassigned_requests_count, 1)
 
         cancelled = replace(
             calculated,
@@ -124,17 +144,26 @@ class ReplanOrchestrationTest(unittest.IsolatedAsyncioTestCase):
                 total_mileage_km=Decimal("0"),
             ),
         )
-        await self.service._persist_replan_result(base, cancelled)
+        await self.service._persist_replan_result(base, cancelled, PlanStrategy.LNS)
         self.assertEqual(self.uow.plan_stops.add_many.call_args.args[0], [])
-        self.assertEqual(self.uow.plan_unassigned_requests.add_many.call_args.args[0], [])
+        self.assertEqual(
+            [item.request_id for item in self.uow.plan_unassigned_requests.add_many.call_args.args[0]],
+            [uuid.UUID(int=5)],
+        )
 
     async def test_region_success_commits_pending_candidate(self) -> None:
         base_id = uuid.UUID(int=1)
         plan_id = uuid.UUID(int=10)
-        base = SimpleNamespace(base_plan_id=base_id)
+        base = SimpleNamespace(
+            base_plan_id=base_id,
+            mode=DistributionMode.BALANCED,
+            strategy=PlanStrategy.GREEDY,
+        )
         plan = SimpleNamespace(
             id=plan_id,
             region=Region.VOSTOK,
+            mode=DistributionMode.BALANCED,
+            strategy=PlanStrategy.LNS,
             planning_date=date(2026, 9, 25),
             created_at=datetime(2026, 9, 25, 9),
             assigned_requests_count=1,
@@ -156,11 +185,15 @@ class ReplanOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             build_replan_input=Mock(return_value=object()),
             plan_replan=Mock(return_value=object()),
         )
+        self.service._travel_matrix = SimpleNamespace(build=AsyncMock(return_value=[]))
 
-        result = await self.service._run_replan_region(Region.VOSTOK)
+        result = await self.service._run_replan_region(Region.VOSTOK, None, PlanStrategy.LNS)
 
         self.assertEqual(result.status, "success")
         self.assertEqual(result.plan_summary.based_on_plan_id, base_id)
+        self.service._to_replan_snapshot.assert_called_once_with(base, DistributionMode.BALANCED)
+        self.assertEqual(self.service._algorithm.plan_replan.call_args.args[1], AlgorithmVariant.LNS)
+        self.assertEqual(self.service._persist_replan_result.call_args.args[2], PlanStrategy.LNS)
         self.uow.commit.assert_awaited_once()
         self.uow.rollback.assert_not_awaited()
         self.uow.plans.lock_region_day.assert_awaited_once()
@@ -170,7 +203,7 @@ class ReplanOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.uow.rollback = AsyncMock()
         self.service.prepare_replan_base = AsyncMock(side_effect=PlanningCurrentPlanMissing)
 
-        result = await self.service._run_replan_region(Region.VOSTOK)
+        result = await self.service._run_replan_region(Region.VOSTOK, None, None)
 
         self.assertEqual(result.status, "error")
         self.assertEqual(result.error_code, "current_plan_missing")
