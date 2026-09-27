@@ -8,6 +8,7 @@ from src.core.db.dto import EngineerDTO, RequestDTO
 from src.core.db.enums import (
     ConnectionType,
     Region,
+    ReplanningEventType,
     RequestTypeBk,
     RequestTypeHd,
     Skill,
@@ -49,6 +50,34 @@ class PlanningRegionResult:
 class InitialPlanningResult:
     status: Literal["success", "partial_success", "error"]
     regions: tuple[PlanningRegionResult, ...]
+
+
+@dataclass(frozen=True)
+class ReplanPlanSummary:
+    id: uuid.UUID
+    region: Region
+    planning_date: date
+    created_at: datetime
+    based_on_plan_id: uuid.UUID
+    assigned_requests_count: int
+    unassigned_requests_count: int
+    engineers_used_count: int
+    total_mileage_km: Decimal
+
+
+@dataclass(frozen=True)
+class ReplanRegionResult:
+    region: Region
+    status: Literal["success", "error"]
+    plan_summary: ReplanPlanSummary | None = None
+    error_code: str | None = None
+    error_detail: str | None = None
+
+
+@dataclass(frozen=True)
+class ReplanPlanningResult:
+    status: Literal["success", "partial_success", "error"]
+    regions: tuple[ReplanRegionResult, ...]
 
 
 @dataclass(frozen=True)
@@ -125,3 +154,40 @@ class ReplanBaseSnapshot:
     engineer_states: tuple[ReplanEngineerState, ...]
     stops: tuple[ReplanStop, ...]
     unassigned: tuple[ReplanUnassigned, ...]
+
+
+@dataclass(frozen=True)
+class UrgentRequestData:
+    external_id: int
+    type_bk: RequestTypeBk
+    type_hd: RequestTypeHd
+    district: str
+    address: str
+    connection_type: ConnectionType | None
+    is_gigabit: bool
+    window_start: datetime
+    window_end: datetime
+    norm_minutes: int
+    norm_minutes_without_travel: int
+    priority: int
+    required_skill: Skill
+    required_vehicle_type: VehicleType | None
+
+
+@dataclass(frozen=True)
+class EventPlanningCommand:
+    region: Region
+    event_type: ReplanningEventType
+    request_id: uuid.UUID | None
+    engineer_id: uuid.UUID | None
+    urgent_request: UrgentRequestData | None
+
+
+@dataclass(frozen=True)
+class EventPlanningResult:
+    event_id: uuid.UUID
+    event_type: ReplanningEventType
+    request_id: uuid.UUID | None
+    engineer_id: uuid.UUID | None
+    occurred_at: datetime
+    plan: ReplanPlanSummary

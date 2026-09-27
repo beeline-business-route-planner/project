@@ -179,6 +179,7 @@ export interface PlanSummary {
   approved_at?: string | null;
   requests_count: number;
   assigned_count: number;
+  distance_meters?: number;
 }
 
 export interface PlanDiffItem {
@@ -199,7 +200,7 @@ export interface PlanMetrics {
   engineers_used: number;
   distance_meters: number;
   avg_load_percent: number;
-  on_time_percent: number;
+  coverage_percent: number;
 }
 
 export interface AuditItem {
@@ -245,6 +246,7 @@ export interface ApiPlanDiffItem {
 export interface ApiErrorBody {
   code: string;
   message: string;
+  detail: string | { msg: string }[];
   details: Record<string, unknown>;
   correlation_id: string;
 }
@@ -264,6 +266,36 @@ export interface WorkspaceData {
 }
 
 export type BackendRegion = "vostok" | "yugo_vostok" | "yugotsentr";
+export type BackendEventType = "urgent_request" | "request_cancelled" | "engineer_unavailable" | "engineer_available";
+export interface BackendUrgentRequest {
+  external_id: number;
+  type_bk: "global_problem" | "additional_order" | "local_request" | "connection";
+  type_hd: "emergency";
+  district: string;
+  address: string;
+  connection_type: null;
+  is_gigabit: boolean;
+  window_start: string;
+  window_end: string;
+  norm_minutes: number;
+  norm_minutes_without_travel: number;
+  priority: 1 | 2;
+  required_skill: BackendSkill;
+  required_vehicle_type: BackendVehicle | null;
+}
+export interface BackendPlanningEvent {
+  region: BackendRegion;
+  event_type: BackendEventType;
+  request_id?: string;
+  engineer_id?: string;
+  urgent_request?: BackendUrgentRequest;
+}
+export interface BackendPlanningResult {
+  status: string;
+  regions: Array<{ region: BackendRegion; status: string; plan_summary: Pick<BackendPlanSummary, "id" | "region" | "planning_date"> | null; error: { code: string; detail: string } | null }>;
+}
+export interface BackendEventResult { event_id: string; event_type: BackendEventType; plan: Pick<BackendPlanSummary, "id" | "region" | "planning_date"> }
+export interface BackendExport { url: string; expires_at: string; filename: string; content_type: string; size_bytes: number }
 export type BackendSkill =
   | "local_works"
   | "connection_and_orders"

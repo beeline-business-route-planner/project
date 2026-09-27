@@ -2,7 +2,7 @@ import io
 import unittest
 import uuid
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
@@ -15,7 +15,9 @@ from src.api.plans.diff_dto import (
     SnapshotRequestDTO,
 )
 from src.api.plans.export import PlanXlsxExporter
+from src.api.exc.plans import PlanExportStorageError
 from src.api.plans.service import PlanExportService
+from src.core.s3 import ExportDownload, ExportKind, S3UnavailableError
 from src.core.db.enums import (
     ApprovalStatus,
     PlanKind,
@@ -186,16 +188,36 @@ class PlanExportServiceTest(unittest.IsolatedAsyncioTestCase):
         snapshot.setUp()
         plans = AsyncMock()
         plans.get_snapshot_by_id.return_value = snapshot.snapshot
-        storage = AsyncMock()
-        storage.presigned_download_url.return_value = "https://example.invalid/export"
+        delivery = AsyncMock()
+        delivery.deliver.return_value = ExportDownload(
+            url="https://example.invalid/export",
+            expires_at=datetime(2026, 9, 23, 10, tzinfo=UTC),
+            filename=f"plan-{snapshot.snapshot.id}.xlsx",
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            size_bytes=123,
+        )
 
-        result = await PlanExportService(plans, storage).export(snapshot.snapshot.id)
+        result = await PlanExportService(plans, delivery).export(snapshot.snapshot.id)
 
         self.assertEqual(result.url, "https://example.invalid/export")
         self.assertIsNotNone(result.expires_at.tzinfo)
         plans.get_snapshot_by_id.assert_awaited_once_with(snapshot.snapshot.id)
-        storage.upload_file.assert_awaited_once()
-        storage.presigned_download_url.assert_awaited_once()
+        arguments = delivery.deliver.await_args.kwargs
+        self.assertEqual(arguments["kind"], ExportKind.PLAN)
+        self.assertEqual(arguments["planning_date"], snapshot.snapshot.planning_date)
+        self.assertEqual(arguments["filename"], f"plan-{snapshot.snapshot.id}.xlsx")
+        workbook = load_workbook(io.BytesIO(arguments["data"]))
+        self.assertEqual(workbook["План"]["B2"].value, str(snapshot.snapshot.id))
+
+    async def test_storage_failure_is_controlled(self) -> None:
+        snapshot = PlanXlsxExporterTest()
+        snapshot.setUp()
+        plans = AsyncMock()
+        plans.get_snapshot_by_id.return_value = snapshot.snapshot
+        delivery = AsyncMock()
+        delivery.deliver.side_effect = S3UnavailableError("unavailable")
+        with self.assertRaises(PlanExportStorageError):
+            await PlanExportService(plans, delivery).export(snapshot.snapshot.id)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import uuid
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -10,13 +11,25 @@ from zoneinfo import ZoneInfo
 from src.api.exc.planning import (
     PlanningAddressNotFound,
     PlanningCurrentPlanMissing,
+    PlanningEngineerStateConflict,
+    PlanningEventTargetMissing,
     PlanningFileCountError,
     PlanningFileValidationError,
     PlanningGeocodingUnavailable,
+    PlanningInvalidRoutingResponse,
+    PlanningMissingCoordinates,
+    PlanningPendingEventExists,
     PlanningRegionPairError,
+    PlanningRequestAlreadyCancelled,
+    PlanningRoutingUnavailable,
+    PlanningUnreachablePoints,
+    PlanningUrgentRequestExists,
+    PlanningUrgentRequestInvalid,
     RepeatedRequestError,
 )
 from src.api.planning.dto import (
+    EventPlanningCommand,
+    EventPlanningResult,
     InitialPlanningResult,
     InitialPlanSummary,
     ParsedWorkbook,
@@ -24,18 +37,25 @@ from src.api.planning.dto import (
     PlanningUploadFile,
     ReplanBaseSnapshot,
     ReplanEngineerState,
+    ReplanPlanningResult,
+    ReplanPlanSummary,
+    ReplanRegionResult,
     ReplanStop,
     ReplanUnassigned,
 )
 from src.api.planning.parser import PlanningWorkbookParser
+from src.api.planning.utils import work_norm
 from src.config import cfg
 from src.core.algorithm import (
     AlgorithmService,
+    BasePlanStop,
     DistributionMode,
     EngineerSnapshot,
     InitialPlanningSnapshot,
     LayerMatrix,
     MissingCoordinatesError,
+    ReplanResult,
+    ReplanSnapshot,
     RequestSnapshot,
 )
 from src.core.algorithm import (
@@ -49,11 +69,18 @@ from src.core.db.dto import (
     PlanEngineerStateCreateDTO,
     PlanStopCreateDTO,
     PlanUnassignedRequestCreateDTO,
+    ReplanningEventCreateDTO,
     RequestCreateDTO,
     RequestDTO,
     UploadedFileCreateDTO,
 )
-from src.core.db.enums import PlanKind, Region
+from src.core.db.enums import (
+    ApprovalStatus,
+    PlanKind,
+    Region,
+    ReplanningEventType,
+    RequestStatus,
+)
 from src.core.db.models import Engineer as EngineerModel
 from src.core.db.models import Request
 from src.core.db.uow import UnitOfWork
@@ -77,7 +104,7 @@ log = logging.getLogger(__name__)
 
 
 class PlanningService:
-    """Создаёт независимые initial-кандидаты для округов из Excel-пар."""
+    """Создаёт независимые initial- и replan-кандидаты для округов."""
 
     def __init__(
         self,
@@ -93,10 +120,444 @@ class PlanningService:
         self._algorithm = algorithm
         self._dgis = dgis
 
+    async def replan(self, regions: list[Region]) -> ReplanPlanningResult:
+        results = [await self._run_replan_region(region) for region in regions]
+        successful = sum(item.status == "success" for item in results)
+        status: Literal["success", "partial_success", "error"]
+        if successful == len(results):
+            status = "success"
+        elif successful:
+            status = "partial_success"
+        else:
+            status = "error"
+        return ReplanPlanningResult(status=status, regions=tuple(results))
+
+    async def _run_replan_region(self, region: Region) -> ReplanRegionResult:
+        cutoff_at = datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
+        try:
+            await self._uow.plans.lock_region_day(region, cutoff_at.date())
+            base = await self.prepare_replan_base(region, cutoff_at)
+            snapshot = self._to_replan_snapshot(base)
+            draft = self._algorithm.prepare_replan(snapshot)
+            points = [
+                DgisPoint(id=point.id, latitude=point.latitude, longitude=point.longitude)
+                for point in draft.tail.points
+            ]
+            matrices = [
+                LayerMatrix(
+                    request=matrix_request,
+                    travel_matrix=await self._dgis.build_matrix(
+                        points,
+                        vehicle_type=matrix_request.vehicle_type,
+                        departure_at=matrix_request.traffic_reference_at,
+                        source_ids=matrix_request.source_ids,
+                        target_ids=matrix_request.target_ids,
+                    ),
+                )
+                for matrix_request in draft.tail.matrix_requests
+            ]
+            calculated = self._algorithm.plan_replan(
+                self._algorithm.build_replan_input(draft, matrices)
+            )
+            plan_id = await self._persist_replan_result(base, calculated)
+            await self._uow.flush()
+            plan = await self._uow.plans.get_by_id(plan_id)
+            if plan is None:
+                raise RuntimeError("Сохранённый план не найден")
+            summary = ReplanPlanSummary(
+                id=plan.id,
+                region=plan.region,
+                planning_date=plan.planning_date,
+                created_at=plan.created_at,
+                based_on_plan_id=base.base_plan_id,
+                assigned_requests_count=plan.assigned_requests_count,
+                unassigned_requests_count=plan.unassigned_requests_count,
+                engineers_used_count=plan.engineers_used_count,
+                total_mileage_km=plan.total_mileage_km,
+            )
+            await self._uow.commit()
+            return ReplanRegionResult(region=region, status="success", plan_summary=summary)
+        except Exception as exc:
+            await self._uow.rollback()
+            if isinstance(exc, PlanningCurrentPlanMissing):
+                code, detail = "current_plan_missing", "Нет утверждённого рабочего плана округа"
+            else:
+                code, detail = self._region_error(exc)
+            if code == "internal_error":
+                log.exception("planning.replan_region_failed", extra={"region": region.value})
+            return ReplanRegionResult(
+                region=region, status="error", error_code=code, error_detail=detail
+            )
+
+    async def create_event(self, request: EventPlanningCommand) -> EventPlanningResult:
+        """Создаёт событие и кандидат плана в одной транзакции округа."""
+        now = datetime.now(ZoneInfo("Europe/Moscow"))
+        cutoff = now.replace(tzinfo=None)
+        try:
+            await self._uow.plans.lock_region_day(request.region, cutoff.date())
+            base = await self.prepare_replan_base(request.region, cutoff)
+            if await self._uow.replanning_events.get_pending(request.region, cutoff.date()):
+                raise PlanningPendingEventExists
+            snapshot = self._to_replan_snapshot(base)
+            target_id = await self._validate_and_prepare_event(request, base, cutoff)
+            event_id = self._uow.replanning_events.create(
+                ReplanningEventCreateDTO(
+                    region=request.region,
+                    planning_date=cutoff.date(),
+                    event_type=request.event_type,
+                    request_id=target_id
+                    if request.event_type
+                    in (
+                        ReplanningEventType.URGENT_REQUEST,
+                        ReplanningEventType.REQUEST_CANCELLED,
+                    )
+                    else None,
+                    engineer_id=target_id
+                    if request.event_type
+                    in (
+                        ReplanningEventType.ENGINEER_UNAVAILABLE,
+                        ReplanningEventType.ENGINEER_AVAILABLE,
+                    )
+                    else None,
+                    occurred_at=now.astimezone(UTC).replace(tzinfo=None),
+                )
+            )
+            await self._uow.flush()
+            snapshot = await self._apply_to_snapshot(snapshot, request, target_id)
+            draft = self._algorithm.prepare_replan(snapshot)
+            points = [
+                DgisPoint(id=point.id, latitude=point.latitude, longitude=point.longitude)
+                for point in draft.tail.points
+            ]
+            matrices = [
+                LayerMatrix(
+                    request=matrix_request,
+                    travel_matrix=await self._dgis.build_matrix(
+                        points,
+                        vehicle_type=matrix_request.vehicle_type,
+                        departure_at=matrix_request.traffic_reference_at,
+                        source_ids=matrix_request.source_ids,
+                        target_ids=matrix_request.target_ids,
+                    ),
+                )
+                for matrix_request in draft.tail.matrix_requests
+            ]
+            calculated = self._algorithm.plan_replan(
+                self._algorithm.build_replan_input(draft, matrices)
+            )
+            self._audit_event_result(request, target_id, calculated)
+            availability = {item.id: item.is_available for item in snapshot.engineers}
+            plan_id = await self._persist_replan_result(
+                base, calculated, event_id=event_id, availability=availability
+            )
+            await self._uow.flush()
+            plan = await self._uow.plans.get_by_id(plan_id)
+            if plan is None:
+                raise RuntimeError("Сохранённый event plan не найден")
+            result = EventPlanningResult(
+                event_id=event_id,
+                event_type=request.event_type,
+                request_id=target_id if request.request_id or request.urgent_request else None,
+                engineer_id=target_id if request.engineer_id else None,
+                occurred_at=now.astimezone(UTC).replace(tzinfo=None),
+                plan=ReplanPlanSummary(
+                    id=plan.id,
+                    region=plan.region,
+                    planning_date=plan.planning_date,
+                    created_at=plan.created_at,
+                    based_on_plan_id=base.base_plan_id,
+                    assigned_requests_count=plan.assigned_requests_count,
+                    unassigned_requests_count=plan.unassigned_requests_count,
+                    engineers_used_count=plan.engineers_used_count,
+                    total_mileage_km=plan.total_mileage_km,
+                ),
+            )
+            await self._uow.commit()
+            return result
+        except (AddressNotFoundError, GeocodingUnavailableError) as exc:
+            await self._uow.rollback()
+            if isinstance(exc, AddressNotFoundError):
+                raise PlanningAddressNotFound from exc
+            raise PlanningGeocodingUnavailable from exc
+        except (
+            DgisUnavailableError,
+            InvalidDgisResponseError,
+            DgisUnreachablePointsError,
+            MissingCoordinatesError,
+        ) as exc:
+            await self._uow.rollback()
+            if isinstance(exc, DgisUnavailableError):
+                raise PlanningRoutingUnavailable from exc
+            if isinstance(exc, InvalidDgisResponseError):
+                raise PlanningInvalidRoutingResponse from exc
+            if isinstance(exc, DgisUnreachablePointsError):
+                raise PlanningUnreachablePoints from exc
+            raise PlanningMissingCoordinates from exc
+        except Exception:
+            await self._uow.rollback()
+            raise
+
+    async def _validate_and_prepare_event(
+        self, request: EventPlanningCommand, base: ReplanBaseSnapshot, cutoff: datetime
+    ) -> uuid.UUID:
+        if request.event_type == ReplanningEventType.URGENT_REQUEST:
+            payload = request.urgent_request
+            if payload is None:
+                raise PlanningUrgentRequestInvalid
+            norm = work_norm(payload.type_bk)
+            if (
+                int(norm.priority) != payload.priority
+                or payload.priority not in (1, 2)
+                or norm.total_minutes != payload.norm_minutes
+                or norm.service_minutes != payload.norm_minutes_without_travel
+                or norm.required_skill != payload.required_skill
+                or payload.window_start.date() != base.planning_date
+                or payload.window_end.date() != base.planning_date
+                or payload.window_end <= cutoff
+            ):
+                raise PlanningUrgentRequestInvalid
+            same_ids = await self._uow.requests.list_by_external_id(
+                base.region, base.planning_date, payload.external_id
+            )
+            for existing in same_ids:
+                event = await self._uow.replanning_events.get_by_request_id(existing.id)
+                if event is None or event.approval_status != ApprovalStatus.REJECTED:
+                    raise PlanningUrgentRequestExists
+            coordinates = await self._geocoding.geocode(payload.address)
+            model = Request()
+            model.upload_id = None
+            model.external_id = payload.external_id
+            model.type_bk = payload.type_bk
+            model.type_hd = payload.type_hd
+            model.region = base.region
+            model.district = payload.district
+            model.address = payload.address
+            model.latitude = coordinates.latitude
+            model.longitude = coordinates.longitude
+            model.connection_type = payload.connection_type
+            model.is_gigabit = payload.is_gigabit
+            model.window_start = payload.window_start
+            model.window_end = payload.window_end
+            model.norm_minutes = payload.norm_minutes
+            model.norm_minutes_without_travel = payload.norm_minutes_without_travel
+            model.priority = payload.priority
+            model.required_skill = payload.required_skill
+            model.required_vehicle_type = payload.required_vehicle_type
+            model.status = RequestStatus.NOT_SENT
+            model.id = uuid.uuid7()
+            self._uow.requests.add(model)
+            await self._uow.flush()
+            return model.id
+
+        if request.event_type == ReplanningEventType.REQUEST_CANCELLED:
+            target = request.request_id
+            item = next((item for item in base.requests if item.id == target), None)
+            if item is None and target is not None:
+                persisted = await self._uow.requests.get_by_id(target)
+                if (
+                    persisted is not None
+                    and persisted.region == base.region
+                    and persisted.window_start.date() == base.planning_date
+                    and persisted.status == RequestStatus.CANCELLED
+                ):
+                    raise PlanningRequestAlreadyCancelled
+            if (
+                item is None
+                or item.region != base.region
+                or item.window_start.date() != base.planning_date
+            ):
+                raise PlanningEventTargetMissing
+            if item.status == RequestStatus.CANCELLED:
+                raise PlanningRequestAlreadyCancelled
+            return item.id
+
+        target = request.engineer_id
+        engineer_item = next((item for item in base.engineers if item.id == target), None)
+        if (
+            engineer_item is None
+            or engineer_item.region != base.region
+            or engineer_item.shift_start.date() != base.planning_date
+        ):
+            raise PlanningEventTargetMissing
+        expected = request.event_type == ReplanningEventType.ENGINEER_AVAILABLE
+        if engineer_item.is_available == expected:
+            raise PlanningEngineerStateConflict
+        return engineer_item.id
+
+    async def _apply_to_snapshot(
+        self, snapshot: ReplanSnapshot, request: EventPlanningCommand, target_id: uuid.UUID
+    ) -> ReplanSnapshot:
+        if request.event_type == ReplanningEventType.URGENT_REQUEST:
+            payload = request.urgent_request
+            if payload is None:
+                raise PlanningUrgentRequestInvalid
+            model = await self._uow.requests.get_by_id(target_id)
+            if model is None:
+                raise RuntimeError("Срочная заявка не сохранена")
+            return replace(
+                snapshot,
+                requests=(*snapshot.requests, self._to_request_snapshot(model)),
+            )
+        if request.event_type == ReplanningEventType.REQUEST_CANCELLED:
+            return replace(
+                snapshot,
+                requests=tuple(
+                    replace(item, status=RequestStatus.CANCELLED) if item.id == target_id else item
+                    for item in snapshot.requests
+                ),
+            )
+        available = request.event_type == ReplanningEventType.ENGINEER_AVAILABLE
+        return replace(
+            snapshot,
+            engineers=tuple(
+                replace(item, is_available=available) if item.id == target_id else item
+                for item in snapshot.engineers
+            ),
+        )
+
+    @staticmethod
+    def _audit_event_result(
+        request: EventPlanningCommand, target_id: uuid.UUID, result: ReplanResult
+    ) -> None:
+        stops = [stop for route in result.routes for stop in route.stops]
+        assigned = {stop.request_id for stop in stops}
+        unassigned = {item.job_id for item in result.unassigned}
+        if request.event_type == ReplanningEventType.URGENT_REQUEST:
+            if (target_id in assigned) == (target_id in unassigned):
+                raise ValueError("Срочная заявка должна быть назначена или не назначена")
+        elif request.event_type == ReplanningEventType.REQUEST_CANCELLED:
+            if target_id in unassigned or any(
+                stop.request_id == target_id and not stop.is_locked for stop in stops
+            ):
+                raise ValueError("Отменённая заявка попала в изменяемый хвост")
+        elif request.event_type == ReplanningEventType.ENGINEER_UNAVAILABLE and any(
+            route.engineer_id == target_id and any(not stop.is_locked for stop in route.stops)
+            for route in result.routes
+        ):
+            raise ValueError("Недоступный инженер получил новые остановки")
+
+    @staticmethod
+    def _to_replan_snapshot(base: ReplanBaseSnapshot) -> ReplanSnapshot:
+        availability = {state.engineer_id: state.is_available for state in base.engineer_states}
+        return ReplanSnapshot(
+            region=base.region,
+            planning_date=base.planning_date,
+            calculation_cutoff_at=base.calculation_cutoff_at,
+            mode=DistributionMode.MIN_ENGINEERS,
+            requests=tuple(
+                RequestSnapshot(
+                    id=item.id,
+                    latitude=item.latitude,
+                    longitude=item.longitude,
+                    window_start=item.window_start,
+                    window_end=item.window_end,
+                    service_minutes=item.norm_minutes_without_travel,
+                    priority=item.priority,
+                    required_skill=item.required_skill,
+                    required_vehicle_type=item.required_vehicle_type,
+                    status=item.status,
+                )
+                for item in base.requests
+            ),
+            engineers=tuple(
+                EngineerSnapshot(
+                    id=item.id,
+                    start_latitude=item.start_point_latitude,
+                    start_longitude=item.start_point_longitude,
+                    shift_start=item.shift_start,
+                    shift_end=item.shift_end,
+                    skills=frozenset(item.skills),
+                    vehicle_type=item.vehicle_type,
+                    is_available=availability[item.id],
+                )
+                for item in base.engineers
+            ),
+            base_stops=tuple(
+                BasePlanStop(
+                    engineer_id=item.engineer_id,
+                    request_id=item.request_id,
+                    sequence_number=item.sequence_number,
+                    arrival=item.planned_arrival,
+                    start=item.planned_start,
+                    finish=item.planned_finish,
+                    travel_minutes=item.travel_minutes,
+                    distance_km=item.distance_km,
+                )
+                for item in base.stops
+            ),
+        )
+
+    async def _persist_replan_result(
+        self,
+        base: ReplanBaseSnapshot,
+        calculated: ReplanResult,
+        *,
+        event_id: uuid.UUID | None = None,
+        availability: dict[uuid.UUID, bool] | None = None,
+    ) -> uuid.UUID:
+        if availability is None:
+            availability = {state.engineer_id: state.is_available for state in base.engineer_states}
+        plan_id = self._uow.plans.create(
+            PlanCreateDTO(
+                region=calculated.region,
+                planning_date=calculated.planning_date,
+                upload_id=base.upload_id,
+                kind=PlanKind.EVENT_REPLAN if event_id else PlanKind.REPLAN,
+                based_on_plan_id=base.base_plan_id,
+                triggered_by_event_id=event_id,
+                calculation_cutoff_at=calculated.calculation_cutoff_at,
+                total_mileage_km=calculated.metrics.total_mileage_km,
+                engineers_used_count=calculated.metrics.engineers_used_count,
+                assigned_requests_count=calculated.metrics.assigned_requests_count,
+                unassigned_requests_count=calculated.metrics.unassigned_requests_count,
+                created_at=datetime.now(UTC).replace(tzinfo=None),
+            )
+        )
+        await self._uow.flush()
+        self._uow.plan_engineer_states.add_many(
+            [
+                PlanEngineerStateCreateDTO(
+                    plan_id=plan_id,
+                    engineer_id=engineer.id,
+                    is_available=availability[engineer.id],
+                )
+                for engineer in base.engineers
+            ]
+        )
+        self._uow.plan_stops.add_many(
+            [
+                PlanStopCreateDTO(
+                    plan_id=plan_id,
+                    engineer_id=route.engineer_id,
+                    request_id=stop.request_id,
+                    sequence_number=stop.sequence_number,
+                    planned_arrival=stop.arrival,
+                    planned_start=stop.start,
+                    planned_finish=stop.finish,
+                    travel_minutes=stop.travel_minutes,
+                    distance_km=stop.distance_km,
+                    is_locked=stop.is_locked,
+                )
+                for route in calculated.routes
+                for stop in route.stops
+            ]
+        )
+        self._uow.plan_unassigned_requests.add_many(
+            [
+                PlanUnassignedRequestCreateDTO(
+                    plan_id=plan_id,
+                    request_id=item.job_id,
+                    reason=item.reason,
+                )
+                for item in calculated.unassigned
+            ]
+        )
+        return plan_id
+
     async def prepare_replan_base(
         self, region: Region, cutoff_at: datetime | None = None
     ) -> ReplanBaseSnapshot:
-        """Фиксирует current и полный вход округа для будущего расчёта A03."""
+        """Фиксирует current и полный вход округа для расчёта replan."""
         cutoff = cutoff_at or datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
         planning_date = cutoff.date()
         current = await self._uow.plans.get_current(region, planning_date)

@@ -1,8 +1,6 @@
 import { useMemo, useState } from "react";
 import {
   AlertTriangle,
-  ArrowUpRight,
-  CheckCircle2,
   ChevronRight,
   Clock3,
   Filter,
@@ -12,9 +10,13 @@ import {
   Siren,
   SlidersHorizontal,
   UserRoundCheck,
-  UsersRound,
   X,
 } from "lucide-react";
+import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
+import { CheckCircleIcon } from "@phosphor-icons/react/dist/csr/CheckCircle";
+import { TimerIcon } from "@phosphor-icons/react/dist/csr/Timer";
+import { UsersThreeIcon } from "@phosphor-icons/react/dist/csr/UsersThree";
+import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 import type { RequestStatus } from "../api/types";
 import type { PlannerController } from "../hooks/usePlanner";
 import { MapPanel } from "../components/MapPanel";
@@ -34,6 +36,7 @@ type ListTab = "requests" | "engineers";
 
 export function Dashboard({ planner }: { planner: PlannerController }) {
   const { data } = planner;
+  const canOperate = planner.source === "api";
   const [tab, setTab] = useState<ListTab>("requests");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<RequestStatus | "all">("all");
@@ -87,17 +90,17 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
         <div>
           <span className="eyebrow">Оперативный контроль</span>
           <h1>Рабочий день</h1>
-          <p>План <strong>{data.plans.find((plan) => plan.id === data.activePlanId)?.code ?? "—"}</strong> · обновлён в 14:22</p>
+          <p>План <strong>{data.plans.find((plan) => plan.id === data.activePlanId)?.code ?? "—"}</strong> · создан {formatTime(data.plans.find((plan) => plan.id === data.activePlanId)?.created_at)}</p>
         </div>
-        <button className="button primary" onClick={() => setUrgentOpen(true)}><Plus size={17} /> Новая заявка</button>
+        <button className="button primary" disabled={!canOperate} title={!canOperate ? "Создание заявки требует backend; для презентации включите VITE_DEMO_MODE=true" : undefined} onClick={() => setUrgentOpen(true)}><Plus size={17} /> Новая заявка</button>
       </div>
 
       <section className="kpi-grid day-kpis">
-        <article><span className="kpi-icon yellow"><Clock3 size={18} /></span><div><b>{counts.active}</b><span>В работе</span></div><em>сейчас</em></article>
-        <article><span className="kpi-icon violet"><ArrowUpRight size={18} /></span><div><b>{counts.enRoute}</b><span>В пути</span></div><em>по графику</em></article>
-        <article className={counts.overdue ? "attention" : ""}><span className="kpi-icon coral"><AlertTriangle size={18} /></span><div><b>{counts.overdue}</b><span>Просрочено</span></div><em>нужно внимание</em></article>
-        <article><span className="kpi-icon green"><CheckCircle2 size={18} /></span><div><b>{counts.done}<small>/{data.requests.length}</small></b><span>Выполнено</span></div><em>{Math.round(counts.done / data.requests.length * 100)}% дня</em></article>
-        <article><span className="kpi-icon blue"><UsersRound size={18} /></span><div><b>{data.metrics.engineers_used}<small>/{data.engineers.length}</small></b><span>На линии</span></div><em>{data.metrics.avg_load_percent}% загрузка</em></article>
+        <article><span className="kpi-icon yellow"><TimerIcon size={21} weight="duotone" /></span><div><b>{counts.active}</b><span>В работе</span></div><em>сейчас</em></article>
+        <article><span className="kpi-icon violet"><ArrowUpRightIcon size={21} weight="bold" /></span><div><b>{counts.enRoute}</b><span>В пути</span></div><em>по графику</em></article>
+        <article className={counts.overdue ? "attention" : ""}><span className="kpi-icon coral"><WarningCircleIcon size={21} weight="duotone" /></span><div><b>{counts.overdue}</b><span>Просрочено</span></div><em>нужно внимание</em></article>
+        <article><span className="kpi-icon green"><CheckCircleIcon size={21} weight="duotone" /></span><div><b>{counts.done}<small>/{data.requests.length}</small></b><span>Выполнено</span></div><em>{Math.round(counts.done / data.requests.length * 100)}% дня</em></article>
+        <article><span className="kpi-icon blue"><UsersThreeIcon size={21} weight="duotone" /></span><div><b>{data.metrics.engineers_used}<small>/{data.engineers.length}</small></b><span>На линии</span></div><em>{data.metrics.avg_load_percent}% загрузка</em></article>
       </section>
 
       <section className="operations-grid">
@@ -150,6 +153,7 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
               request={selectedRequest}
               engineer={data.engineers.find((item) => item.id === selectedRequest.engineer_id) ?? null}
               onStatus={(status) => void planner.updateRequestStatus(selectedRequest.id, status)}
+              canUpdateStatus={false}
               onClose={() => { setSelectedRequestId(null); setSelectedEngineerId(null); void planner.loadDetailedRoute(null); }}
             />
           ) : selectedEngineer ? (
@@ -170,10 +174,11 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
   );
 }
 
-function RequestDetails({ request, engineer, onStatus, onClose }: {
+function RequestDetails({ request, engineer, onStatus, onClose, canUpdateStatus }: {
   request: PlannerController["data"]["requests"][number];
   engineer: PlannerController["data"]["engineers"][number] | null;
   onStatus: (status: RequestStatus) => void;
+  canUpdateStatus: boolean;
   onClose: () => void;
 }) {
   return (
@@ -186,9 +191,9 @@ function RequestDetails({ request, engineer, onStatus, onClose }: {
       {engineer ? (
         <div className="details-block assigned-card"><label>Исполнитель</label><div><Avatar name={engineer.name} color={engineer.color} /><p><strong>{engineer.name}</strong><span><TransportIcon transport={engineer.transport} /> {transportLabels[engineer.transport]}</span></p><em>{formatTime(request.arrival_at)}</em></div></div>
       ) : <div className="warning-card"><AlertTriangle size={17} /><div><strong>Не назначена</strong><span>{request.unassigned_reason}</span></div></div>}
-      <div className="explanation-card"><span className="explanation-icon">AI</span><div><strong>Почему так</strong><p>{request.explanation}</p></div></div>
-      <div className="details-block status-control"><label>Зафиксировать факт</label><select value={request.status} onChange={(event) => onStatus(event.target.value as RequestStatus)}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
-      <div className="timeline-mini"><span className="done"><i />Заявка поступила<em>07:31</em></span><span className={request.engineer_id ? "done" : ""}><i />Назначена в план<em>08:12</em></span><span className={request.status === "COMPLETED" ? "done" : "current"}><i />{statusLabels[request.status]}<em>{formatTime(request.arrival_at)}</em></span></div>
+      <div className="explanation-card"><span className="explanation-icon">i</span><div><strong>Почему так</strong><p>{request.explanation}</p></div></div>
+      <div className="details-block status-control"><label>Статус заявки</label><select disabled={!canUpdateStatus} title={!canUpdateStatus ? "Backend пока не предоставляет изменение фактического статуса" : undefined} value={request.status} onChange={(event) => onStatus(event.target.value as RequestStatus)}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{!canUpdateStatus ? <small>Изменение фактического статуса пока не поддерживается API.</small> : null}</div>
+      <div className="timeline-mini">{canUpdateStatus ? <><span className="done"><i />Заявка поступила<em>07:31</em></span><span className={request.engineer_id ? "done" : ""}><i />Назначена в план<em>08:12</em></span></> : null}<span className={request.status === "COMPLETED" ? "done" : "current"}><i />{statusLabels[request.status]}<em>{request.arrival_at ? `План ${formatTime(request.arrival_at)}` : ""}</em></span></div>
     </div>
   );
 }
@@ -206,21 +211,22 @@ function EngineerDetails({ engineer, requests, onRequest, onClose }: {
       <div className="skill-chips">{engineer.skills.map((skill) => <span key={skill}><SkillIcon skill={skill} />{skillLabels[skill]}</span>)}</div>
       <div className="detail-three"><div><b>{requests.length}</b><span>заявок</span></div><div><b>{formatDistance(engineer.distance_meters)}</b><span>маршрут</span></div><div><b>{Math.round(engineer.load_minutes / 480 * 100)}%</b><span>загрузка</span></div></div>
       <div className="load-bar"><i style={{ width: `${Math.min(100, engineer.load_minutes / 4.8)}%`, background: engineer.color }} /></div>
-      <div className="route-list"><label>Маршрут на день</label>{requests.map((request, index) => <button key={request.id} onClick={() => onRequest(request.id)}><span className="route-index" style={{ borderColor: engineer.color }}>{index + 1}</span><div><strong>{formatTime(request.window_start)} · {request.external_id}</strong><span>{request.address}</span></div><StatusPill status={request.status} /></button>)}</div>
+      <div className="route-list"><label>Маршрут на день</label>{requests.map((request, index) => <button key={request.id} onClick={() => onRequest(request.id)}><span className="route-index" style={{ borderColor: engineer.color }}>{index + 1}</span><div><strong>{formatTime(request.arrival_at ?? request.window_start)} · {request.external_id}</strong><span>{request.address}</span></div><StatusPill status={request.status} /></button>)}</div>
     </div>
   );
 }
 
 function UrgentRequestModal({ onClose, onSubmit, date }: { onClose: () => void; onSubmit: (payload: Record<string, unknown>) => Promise<void>; date: string }) {
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ external_id: `URGENT-${Math.floor(100 + Math.random() * 900)}`, address: "Москва, ", district: "ЮВАО", start: "15:00", end: "17:00" });
+  const [form, setForm] = useState({ external_id: String(Date.now()).slice(-9), address: "Москва, ", district: "ЮВАО", start: "15:00", end: "17:00" });
+  const [formError, setFormError] = useState<string | null>(null);
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <form className="modal-card urgent-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => { event.preventDefault(); setSaving(true); await onSubmit({ external_id: form.external_id, address: form.address, district: form.district, window_start: `${date}T${form.start}:00+03:00`, window_end: `${date}T${form.end}:00+03:00`, service_minutes: 100, required_skill: "emergency", required_transport: "car" }); setSaving(false); }}>
-        <div className="modal-head"><span className="modal-icon coral"><Siren size={20} /></span><div><h2>Новая срочная заявка</h2><p>После сохранения система предложит перепланирование.</p></div><button type="button" className="icon-button" onClick={onClose}><X size={18} /></button></div>
-        <div className="form-grid"><label><span>ID заявки</span><input required value={form.external_id} onChange={(event) => setForm({ ...form, external_id: event.target.value })} /></label><label><span>Район</span><select value={form.district} onChange={(event) => setForm({ ...form, district: event.target.value })}><option>ЮВАО</option><option>ВАО</option><option>ЮАО</option></select></label><label className="wide"><span>Адрес</span><input required value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label><label><span>Начало окна</span><input type="time" value={form.start} onChange={(event) => setForm({ ...form, start: event.target.value })} /></label><label><span>Конец окна</span><input type="time" value={form.end} onChange={(event) => setForm({ ...form, end: event.target.value })} /></label></div>
-        <div className="constraint-note"><UserRoundCheck size={17} /><span>Требования: навык «Авария», автомобиль, норматив 100 минут.</span></div>
-        <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>Отмена</button><button className="button primary" disabled={saving}>{saving ? "Сохраняем…" : "Создать и пересчитать"}</button></div>
+      <form className="modal-card urgent-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => { event.preventDefault(); if (form.end <= form.start) { setFormError("Конец окна должен быть позже начала"); return; } setSaving(true); setFormError(null); try { await onSubmit({ external_id: Number(form.external_id), address: form.address, district: form.district, window_start: `${date}T${form.start}:00`, window_end: `${date}T${form.end}:00` }); } catch (error) { setFormError(error instanceof Error ? error.message : "Не удалось создать заявку"); } finally { setSaving(false); } }}>
+        <div className="modal-head"><span className="modal-icon coral"><Siren size={20} /></span><div><h2>Новая срочная заявка</h2><p>После сохранения backend пересчитает план.</p></div><button type="button" className="icon-button" onClick={onClose}><X size={18} /></button></div>
+        <div className="form-grid"><label><span>ID заявки</span><input required type="number" min="1" value={form.external_id} onChange={(event) => setForm({ ...form, external_id: event.target.value })} /></label><label><span>Район</span><select value={form.district} onChange={(event) => setForm({ ...form, district: event.target.value })}><option>ЮВАО</option><option>ВАО</option><option>ЮАО</option></select></label><label className="wide"><span>Адрес</span><input required value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label><label><span>Начало окна</span><input type="time" value={form.start} onChange={(event) => setForm({ ...form, start: event.target.value })} /></label><label><span>Конец окна</span><input type="time" value={form.end} onChange={(event) => setForm({ ...form, end: event.target.value })} /></label></div>
+        <div className="constraint-note"><UserRoundCheck size={17} /><span>Требования: навык «Авария», автомобиль, норматив 100 минут (80 минут работы и 20 минут дороги).</span></div>
+        {formError ? <p className="form-error" role="alert">{formError}</p> : null}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>Отмена</button><button className="button primary" disabled={saving}>{saving ? "Сохраняем…" : "Создать и пересчитать"}</button></div>
       </form>
     </div>
   );

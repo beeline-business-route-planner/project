@@ -4,6 +4,9 @@ import { backend } from "../api/services";
 import type {
   BackendEngineerDetail,
   BackendEngineerTile,
+  BackendEventType,
+  BackendPlanningEvent,
+  BackendUrgentRequest,
   BackendPlanDetail,
   BackendPlanSummary,
   BackendRegion,
@@ -108,6 +111,7 @@ function normalizePlans(plans: BackendPlanSummary[]): PlanSummary[] {
       approved_at: plan.approved_at,
       requests_count: plan.assigned_requests_count + plan.unassigned_requests_count,
       assigned_count: plan.assigned_requests_count,
+      distance_meters: number(plan.total_mileage_km) * 1000,
     }));
 }
 
@@ -121,8 +125,8 @@ function normalizeMetrics(plan: BackendPlanDetail, requests: RequestItem[]): Pla
     engineers_used: raw.engineers_used_count,
     distance_meters: number(raw.total_mileage_km) * 1000,
     avg_load_percent: Math.round(avg <= 1 ? avg * 100 : avg),
-    on_time_percent: requests.length
-      ? Math.round((raw.assigned_requests_count / requests.length) * 100)
+    coverage_percent: raw.assigned_requests_count + raw.unassigned_requests_count
+      ? Math.round(raw.assigned_requests_count / (raw.assigned_requests_count + raw.unassigned_requests_count) * 100)
       : 0,
   };
 }
@@ -249,7 +253,7 @@ export function usePlanner() {
     noticeTimer.current = window.setTimeout(() => setNotice(null), 4200);
   }, []);
 
-  const loadApi = useCallback(async (scenarioOverride?: string, dateOverride?: string) => {
+  const loadApi = useCallback(async (scenarioOverride?: string, dateOverride?: string, planId?: string, strict = false) => {
     setLoading(true);
     setError(null);
     try {
@@ -261,6 +265,7 @@ export function usePlanner() {
         ? dateOverride
         : summaries.find((plan) => plan.is_current)?.planning_date ?? availableDates[0];
       const selectedSummary =
+        summaries.find((plan) => plan.id === planId) ??
         summaries.find((plan) => plan.is_current && plan.planning_date === planningDate) ??
         summaries.find((plan) => plan.planning_date === planningDate) ??
         summaries[0];
@@ -295,21 +300,23 @@ export function usePlanner() {
         audit: plans.map((item) => ({
           id: `audit-${item.id}`,
           timestamp: item.created_at,
-          actor: "backend",
+          actor: "Система",
           action: item.status === "approved" ? "План утверждён" : "Версия плана создана",
           entity: "plan",
           entity_id: item.code,
-          details: "Событие сформировано из актуального жизненного цикла плана.",
+          details: "Запись восстановлена из истории версий плана; отдельный журнал действий backend не предоставляет.",
         })),
         diff: diffFromPlan(plan, engineers),
       });
       setSource("api");
     } catch (requestError) {
       const demoMode = import.meta.env.VITE_DEMO_MODE ?? "auto";
-      if (demoMode === "false") {
-        setError(errorText(requestError));
+      if (strict || demoMode === "false") {
+        const message = errorText(requestError);
+        setError(message);
+        if (strict) throw requestError;
       } else {
-        setError(null);
+        setError(`Показаны демонстрационные данные: ${errorText(requestError)}`);
         setData(demoWorkspace);
         setSource("demo");
       }
@@ -386,6 +393,7 @@ export function usePlanner() {
       apiUnavailable("Изменение статуса");
       return;
     }
+    if ((import.meta.env.VITE_DEMO_MODE ?? "auto") !== "true") throw new Error("Изменение статуса требует backend endpoint");
     setData((current) => ({
       ...current,
       requests: current.requests.map((request) => request.id === requestId ? { ...request, status } : request),
@@ -393,35 +401,42 @@ export function usePlanner() {
     showNotice("Статус заявки обновлён");
   }, [apiUnavailable, showNotice, source]);
 
-  const importDataset = useCallback(async (file: File) => {
-    if (source === "api") {
-      const result = await backend.importInitial([file]);
-      const imported = result.regions.find((item) => item.status === "success" && item.plan_summary);
-      if (!imported) {
-        const reason = result.regions.find((item) => item.error)?.error?.detail;
-        throw new Error(reason ?? "Backend не создал план ни для одного региона");
-      }
-      await loadApi(imported.region, imported.plan_summary?.planning_date);
+  const importDataset = useCallback(async (files: File[]) => {
+    if ((import.meta.env.VITE_DEMO_MODE ?? "auto") === "true") throw new Error("Импорт требует подключения backend");
+    if (files.length !== 2) throw new Error("Выберите два Excel-файла одного округа: заявки и инженеры");
+    const result = await backend.importInitial(files);
+    const imported = result.regions.find((item) => item.status === "success" && item.plan_summary);
+    if (!imported) {
+      const reason = result.regions.find((item) => item.error)?.error?.detail;
+      throw new Error(reason ?? "Backend не создал план ни для одного региона");
     }
-    showNotice(`Файл «${file.name}» принят`);
-  }, [loadApi, showNotice, source]);
+    await loadApi(imported.region, imported.plan_summary?.planning_date, imported.plan_summary?.id, true);
+    showNotice("Пара Excel-файлов принята, план рассчитан");
+  }, [loadApi, showNotice]);
 
   const runPlanning = useCallback(async (isReplan: boolean) => {
     if (source === "api") {
-      apiUnavailable(isReplan ? "Перепланирование" : "Новый расчёт");
-      return data.activePlanId;
+      const region = regionOf(data.scenarioId);
+      const result = await backend.replan([region]);
+      const completed = result.regions.find((item) => item.region === region && item.status === "success" && item.plan_summary);
+      if (!completed?.plan_summary) throw new Error(result.regions[0]?.error?.detail ?? "Backend не создал новый план");
+      await loadApi(region, completed.plan_summary.planning_date, completed.plan_summary.id, true);
+      showNotice("Новый вариант плана рассчитан");
+      return completed.plan_summary.id;
     }
-    showNotice(isReplan ? "Новый вариант рассчитан за 2,8 с" : "План рассчитан за 2,8 с");
+    if ((import.meta.env.VITE_DEMO_MODE ?? "auto") !== "true") throw new Error("Для расчёта подключите backend и загрузите исходные данные");
+    showNotice(isReplan ? "Демонстрационный вариант рассчитан" : "Демонстрационный план рассчитан");
     return "plan-draft";
-  }, [apiUnavailable, data.activePlanId, showNotice, source]);
+  }, [data.scenarioId, loadApi, showNotice, source]);
 
   const approvePlan = useCallback(async (plan: PlanSummary) => {
     if (source === "api") {
       await backend.approvePlan(plan.id);
-      await loadApi(data.scenarioId, data.planningDate);
+      await loadApi(data.scenarioId, data.planningDate, plan.id, true);
       showNotice(`План ${plan.code} утверждён`);
       return;
     }
+    if ((import.meta.env.VITE_DEMO_MODE ?? "auto") !== "true") throw new Error("Утверждение плана требует подключения backend");
     setData((current) => ({
       ...current,
       activePlanId: plan.id,
@@ -435,9 +450,28 @@ export function usePlanner() {
 
   const createUrgentRequest = useCallback(async (payload: Record<string, unknown>) => {
     if (source === "api") {
-      apiUnavailable("Создание срочной заявки");
+      const urgent: BackendUrgentRequest = {
+        external_id: Number(payload.external_id),
+        type_bk: "global_problem",
+        type_hd: "emergency",
+        district: String(payload.district ?? ""),
+        address: String(payload.address ?? ""),
+        connection_type: null,
+        is_gigabit: false,
+        window_start: String(payload.window_start),
+        window_end: String(payload.window_end),
+        norm_minutes: 100,
+        norm_minutes_without_travel: 80,
+        priority: 1,
+        required_skill: "emergency_works",
+        required_vehicle_type: "car",
+      };
+      const result = await backend.event({ region: regionOf(data.scenarioId), event_type: "urgent_request", urgent_request: urgent });
+      await loadApi(data.scenarioId, result.plan.planning_date, result.plan.id, true);
+      showNotice("Срочная заявка создана, план пересчитан");
       return;
     }
+    if ((import.meta.env.VITE_DEMO_MODE ?? "auto") !== "true") throw new Error("Создание заявки требует подключения backend");
     const request: RequestItem = {
       id: `req-${Date.now()}`,
       external_id: String(payload.external_id ?? "URGENT-DEMO"),
@@ -463,31 +497,45 @@ export function usePlanner() {
     };
     setData((current) => ({ ...current, requests: [request, ...current.requests] }));
     showNotice("Срочная заявка создана");
-  }, [apiUnavailable, showNotice, source]);
+  }, [data.scenarioId, loadApi, showNotice, source]);
 
-  const createDayEvent = useCallback(async (_eventType: string, _payload: Record<string, unknown>) => {
-    if (source === "api") apiUnavailable("Событие рабочего дня");
-    else showNotice("Событие принято, новый вариант плана рассчитан");
-  }, [apiUnavailable, showNotice, source]);
+  const createDayEvent = useCallback(async (eventType: BackendEventType, payload: { engineer_id?: string; request_id?: string }) => {
+    if (source === "api") {
+      const event: BackendPlanningEvent = { region: regionOf(data.scenarioId), event_type: eventType, ...payload };
+      const result = await backend.event(event);
+      await loadApi(data.scenarioId, result.plan.planning_date, result.plan.id, true);
+    } else if ((import.meta.env.VITE_DEMO_MODE ?? "auto") !== "true") {
+      throw new Error("Событие рабочего дня требует подключения backend");
+    }
+    showNotice("Событие принято, новый вариант плана рассчитан");
+  }, [data.scenarioId, loadApi, showNotice, source]);
 
-  const comparePlans = useCallback(async (_oldPlanId: string, newPlanId: string) => {
+  const comparePlans = useCallback(async (oldPlanId: string, newPlanId: string) => {
     if (source === "api") {
       const plan = await backend.plan(newPlanId);
-      setData((current) => ({ ...current, diff: diffFromPlan(plan, current.engineers) }));
+      if (plan.based_on_plan_id !== oldPlanId) throw new Error("Детальное сравнение доступно только для связанных версий");
+      await loadApi(data.scenarioId, plan.planning_date, newPlanId, true);
     }
     showNotice("Сравнение планов открыто в разделе планирования");
-  }, [showNotice, source]);
+  }, [data.scenarioId, loadApi, showNotice, source]);
 
   const manualChange = useCallback(async (_requestId: string, _engineerId: string, _startAt: string) => {
     if (source === "api") apiUnavailable("Ручное изменение плана");
-    else showNotice("Ручное изменение сохранено в новом черновике");
+    else if ((import.meta.env.VITE_DEMO_MODE ?? "auto") === "true") showNotice("Демонстрационное изменение создано");
+    else throw new Error("Ручное изменение требует backend endpoint");
   }, [apiUnavailable, showNotice, source]);
 
   const downloadReport = useCallback(async (format: "xlsx" | "pdf") => {
-    showNotice(source === "api"
-      ? `Экспорт ${format.toUpperCase()}: endpoint ещё не опубликован`
-      : `В API-режиме будет загружен ${format.toUpperCase()}-отчёт`);
-  }, [showNotice, source]);
+    if (source !== "api") {
+      showNotice("В демо-режиме выгрузка недоступна");
+      return;
+    }
+    const exportResult = format === "xlsx"
+      ? await backend.exportPlan(data.activePlanId)
+      : await backend.exportDailyReport(data.planningDate);
+    window.location.assign(exportResult.url);
+    showNotice(`Загрузка ${exportResult.filename} началась`);
+  }, [data.activePlanId, data.planningDate, showNotice, source]);
 
   return {
     data,
@@ -508,6 +556,7 @@ export function usePlanner() {
     manualChange,
     comparePlans,
     downloadReport,
+    openPlan: (planId: string) => loadApi(data.scenarioId, data.planningDate, planId, true),
     refresh: () => loadApi(data.scenarioId, data.planningDate),
     dismissError: () => setError(null),
     showNotice,

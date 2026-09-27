@@ -33,6 +33,20 @@ class PlanRepository(BaseRepository[Plan]):
         )
         return result.first()
 
+    async def list_approved_for_day(
+        self, planning_date: date, approved_before: datetime
+    ) -> list[Plan]:
+        result = await self._session.scalars(
+            select(Plan)
+            .where(
+                Plan.planning_date == planning_date,
+                Plan.approval_status == ApprovalStatus.APPROVED,
+                Plan.approved_at <= approved_before,
+            )
+            .order_by(Plan.region, Plan.approved_at, Plan.id)
+        )
+        return list(result.all())
+
     async def list_by_region(self, region: Region) -> list[Plan]:
         result = await self._session.scalars(
             select(Plan)

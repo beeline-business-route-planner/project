@@ -12,6 +12,12 @@ from src.core.db.repositories.base import BaseRepository
 class ReplanningEventRepository(BaseRepository[ReplanningEvent]):
     model = ReplanningEvent
 
+    async def get_by_request_id(self, request_id: uuid.UUID) -> ReplanningEvent | None:
+        result = await self._session.scalars(
+            select(ReplanningEvent).where(ReplanningEvent.request_id == request_id).limit(1)
+        )
+        return result.first()
+
     async def get_pending(self, region: Region, planning_date: date) -> ReplanningEvent | None:
         result = await self._session.scalars(
             select(ReplanningEvent)
@@ -23,6 +29,20 @@ class ReplanningEventRepository(BaseRepository[ReplanningEvent]):
             .limit(1)
         )
         return result.first()
+
+    async def list_approved_for_day(
+        self, planning_date: date, approved_before: datetime
+    ) -> list[ReplanningEvent]:
+        result = await self._session.scalars(
+            select(ReplanningEvent)
+            .where(
+                ReplanningEvent.planning_date == planning_date,
+                ReplanningEvent.approval_status == ApprovalStatus.APPROVED,
+                ReplanningEvent.approved_at <= approved_before,
+            )
+            .order_by(ReplanningEvent.region, ReplanningEvent.approved_at, ReplanningEvent.id)
+        )
+        return list(result.all())
 
     async def get_latest_approved_for_engineer(
         self, engineer_id: uuid.UUID, planning_date: date
