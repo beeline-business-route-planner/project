@@ -31,7 +31,6 @@ from src.core.s3 import (
     S3UnavailableError,
 )
 from src.core.utils.initial_approval import InitialApprovalPolicy
-from src.core.utils.plan_time import latest_departure_at
 
 
 class PlanService:
@@ -240,16 +239,12 @@ class PlanService:
         old_by_request = {stop.request_id: stop for stop in base_stops}
         new_by_request = {stop.request_id: stop for stop in stops}
         if any(
-            latest_departure_at(old.planned_start, old.travel_minutes) < now
-            and old.request_id not in new_by_request
-            for old in base_stops
+            old.planned_start < now and old.request_id not in new_by_request for old in base_stops
         ):
             raise PlanStopAlreadyStartedError
         for stop in stops:
             old = old_by_request.get(stop.request_id)
-            if latest_departure_at(stop.planned_start, stop.travel_minutes) >= now and (
-                old is None or latest_departure_at(old.planned_start, old.travel_minutes) >= now
-            ):
+            if stop.planned_start >= now and (old is None or old.planned_start >= now):
                 continue
             if (
                 old is None
