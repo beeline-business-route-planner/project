@@ -65,6 +65,7 @@ const unassignedLabels: Record<string, string> = {
   no_matching_skill: "Нет инженера с нужной квалификацией",
   no_matching_vehicle: "Нет подходящего транспорта",
   no_time_slot: "Нет совместимого временного окна",
+  no_route: "Нет маршрута до адреса",
   no_available_engineer: "Нет доступного инженера",
 };
 

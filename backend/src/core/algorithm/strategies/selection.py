@@ -3,7 +3,7 @@ from contextlib import suppress
 
 from src.config import cfg
 from src.core.algorithm.dto import CandidateSelectionResult, RouteCandidate, SelectionKey
-from src.core.algorithm.enums import DistributionMode
+from src.core.db.enums import DistributionMode
 
 
 class _SearchBudgetExhausted(Exception):
@@ -93,10 +93,10 @@ class GlobalRouteSelector:
                     (
                         priority_score + candidate.priority_score,
                         assigned_count + len(candidate.request_ids),
-                        used_count + bool(candidate.request_ids),
+                        used_count + self._is_used(candidate),
                         travel_minutes + candidate.travel_minutes,
                     ),
-                    (*service_loads, candidate.service_minutes),
+                    (*service_loads, self._day_load(candidate)),
                     (*selected, candidate),
                 )
 
@@ -113,6 +113,16 @@ class GlobalRouteSelector:
             conflict_prunes_count=conflict_prunes_count,
             bound_prunes_count=bound_prunes_count,
         )
+
+    @staticmethod
+    def _is_used(candidate: RouteCandidate) -> bool:
+        """Бригада задействована в плане дня: есть будущие заявки или прожитая история."""
+
+        return bool(candidate.request_ids) or candidate.history_service_minutes > 0
+
+    @staticmethod
+    def _day_load(candidate: RouteCandidate) -> int:
+        return candidate.service_minutes + candidate.history_service_minutes
 
     @staticmethod
     def _candidate_order(candidate: RouteCandidate) -> tuple[int, int, int]:
@@ -176,9 +186,9 @@ class GlobalRouteSelector:
     ) -> SelectionKey:
         priority_score = sum(candidate.priority_score for candidate in candidates)
         assigned_count = sum(len(candidate.request_ids) for candidate in candidates)
-        used_count = sum(bool(candidate.request_ids) for candidate in candidates)
+        used_count = sum(GlobalRouteSelector._is_used(candidate) for candidate in candidates)
         travel_minutes = sum(candidate.travel_minutes for candidate in candidates)
-        service_loads = [candidate.service_minutes for candidate in candidates]
+        service_loads = [GlobalRouteSelector._day_load(candidate) for candidate in candidates]
         load_spread = max(service_loads, default=0) - min(service_loads, default=0)
         mode_score = -used_count if mode == DistributionMode.MIN_ENGINEERS else -load_spread
         tie_breaker = tuple(

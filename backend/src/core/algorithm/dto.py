@@ -4,16 +4,22 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol
 
-from src.core.algorithm.enums import DistributionMode
-from src.core.db.enums import Region, RequestStatus, Skill, UnassignedReason, VehicleType
+from src.core.db.enums import (
+    DistributionMode,
+    Region,
+    RequestStatus,
+    Skill,
+    UnassignedReason,
+    VehicleType,
+)
 
 
 class TravelMatrix(Protocol):
-    """Прогноз времени и расстояния, полученный вне алгоритма."""
+    """Прогноз времени и расстояния, полученный вне алгоритма; `None` — маршрута нет."""
 
-    def minutes(self, from_id: uuid.UUID, to_id: uuid.UUID) -> int: ...
+    def minutes(self, from_id: uuid.UUID, to_id: uuid.UUID) -> int | None: ...
 
-    def kilometers(self, from_id: uuid.UUID, to_id: uuid.UUID) -> Decimal: ...
+    def kilometers(self, from_id: uuid.UUID, to_id: uuid.UUID) -> Decimal | None: ...
 
 
 @dataclass(frozen=True)
@@ -30,6 +36,8 @@ class RequestSnapshot:
     required_skill: Skill
     required_vehicle_type: VehicleType | None
     status: RequestStatus = RequestStatus.NOT_SENT
+    received_at: datetime | None = None
+    """Момент поступления заявки, от которого отсчитывается SLA аварии; `None` — cutoff."""
 
 
 @dataclass(frozen=True)
@@ -46,6 +54,8 @@ class EngineerSnapshot:
     is_available: bool
     ready_at: datetime | None = None
     """Не раньше этого момента инженер свободен в стартовой точке (конец прожитой истории)."""
+    history_service_minutes: int = 0
+    """Минуты работы в зафиксированной истории дня; больше нуля — бригада уже задействована."""
 
 
 @dataclass(frozen=True)
@@ -110,6 +120,8 @@ class Engineer:
     skills: frozenset[Skill]
     vehicle_type: VehicleType
     is_available: bool
+    history_service_minutes: int = 0
+    """Работа в зафиксированной истории replan: цель режима считается за весь день."""
 
 
 @dataclass(frozen=True)
@@ -247,6 +259,7 @@ class RouteCandidate:
     priority_score: int
     travel_minutes: int
     service_minutes: int
+    history_service_minutes: int = 0
 
 
 @dataclass(frozen=True, order=True)

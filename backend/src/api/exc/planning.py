@@ -22,6 +22,11 @@ class PlanningFileValidationError(Exception):
     pass
 
 
+@http_error(status_code=422, detail="Дата заявок в таблице не совпадает с сегодняшним рабочим днём")
+class PlanningWrongDateError(Exception):
+    pass
+
+
 @http_error(
     status_code=409, detail="В таблицах есть повторяющиеся или уже загруженные номера заявок"
 )
@@ -53,11 +58,6 @@ class PlanningRoutingUnavailable(Exception):
 
 @http_error(status_code=502, detail="Сервис маршрутизации вернул некорректный ответ")
 class PlanningInvalidRoutingResponse(Exception):
-    pass
-
-
-@http_error(status_code=422, detail="Между двумя точками маршрута не найден путь")
-class PlanningUnreachablePoints(Exception):
     pass
 
 

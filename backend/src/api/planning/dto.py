@@ -7,6 +7,8 @@ from typing import Literal
 from src.core.db.dto import EngineerDTO, RequestDTO
 from src.core.db.enums import (
     ConnectionType,
+    DistributionMode,
+    PlanStrategy,
     Region,
     ReplanningEventType,
     RequestTypeBk,
@@ -28,6 +30,8 @@ class PlanningUploadFile:
 class InitialPlanSummary:
     id: uuid.UUID
     region: Region
+    mode: DistributionMode
+    strategy: PlanStrategy
     planning_date: date
     created_at: datetime
     approval_deadline: datetime
@@ -56,6 +60,8 @@ class InitialPlanningResult:
 class ReplanPlanSummary:
     id: uuid.UUID
     region: Region
+    mode: DistributionMode
+    strategy: PlanStrategy
     planning_date: date
     created_at: datetime
     based_on_plan_id: uuid.UUID
@@ -146,9 +152,13 @@ class ReplanEngineerState:
 class ReplanBaseSnapshot:
     base_plan_id: uuid.UUID
     upload_id: uuid.UUID
+    mode: DistributionMode
+    strategy: PlanStrategy
     region: Region
     planning_date: date
     calculation_cutoff_at: datetime
+    initial_cutoff_at: datetime
+    """Cutoff утверждённого initial: момент поступления заявок дня для SLA аварий."""
     requests: tuple[RequestDTO, ...]
     engineers: tuple[EngineerDTO, ...]
     engineer_states: tuple[ReplanEngineerState, ...]

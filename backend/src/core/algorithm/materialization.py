@@ -94,6 +94,8 @@ class ScheduleMaterializer:
                 raise AlgorithmInputError(
                     f"Матрица слоя не покрывает переход {previous_id} -> {request_id}"
                 ) from exc
+            if travel_minutes is None or distance_km is None:
+                return None
             arrival = previous_finish + timedelta(minutes=travel_minutes)
             start = max(arrival, job.release_at, cutoff_at)
             finish = start + timedelta(minutes=job.service_minutes)

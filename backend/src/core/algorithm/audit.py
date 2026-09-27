@@ -220,6 +220,8 @@ class ResultAuditor:
             raise AlgorithmAuditError("Для маршрута отсутствует транспортная матрица")
         expected_travel = matching_matrices[0].minutes(previous_id, job.id)
         expected_distance = matching_matrices[0].kilometers(previous_id, job.id)
+        if expected_travel is None or expected_distance is None:
+            raise AlgorithmAuditError("Маршрут проходит через недостижимый переход")
         expected_arrival = previous_finish + timedelta(minutes=expected_travel)
         expected_start = max(expected_arrival, job.release_at, cutoff_at)
         expected_finish = expected_start + timedelta(minutes=job.service_minutes)

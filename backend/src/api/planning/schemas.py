@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from src.core.db.enums import (
     ApprovalStatus,
     ConnectionType,
+    DistributionMode,
     PlanKind,
+    PlanStrategy,
     Region,
     ReplanningEventType,
     RequestTypeBk,
@@ -22,6 +24,8 @@ from src.core.utils.time import as_utc
 class InitialPlanSummaryResponse(BaseModel):
     id: uuid.UUID
     region: Region
+    mode: DistributionMode
+    strategy: PlanStrategy
     kind: PlanKind = PlanKind.INITIAL
     approval_status: ApprovalStatus = ApprovalStatus.PENDING
     planning_date: date
@@ -57,6 +61,8 @@ class InitialPlanningResponse(BaseModel):
 
 class ReplanPlanningRequest(BaseModel):
     regions: list[Region]
+    mode: DistributionMode | None = None
+    strategy: PlanStrategy | None = None
 
     @model_validator(mode="after")
     def validate_regions(self) -> ReplanPlanningRequest:
@@ -68,6 +74,8 @@ class ReplanPlanningRequest(BaseModel):
 class ReplanPlanSummaryResponse(BaseModel):
     id: uuid.UUID
     region: Region
+    mode: DistributionMode
+    strategy: PlanStrategy
     kind: PlanKind = PlanKind.REPLAN
     approval_status: ApprovalStatus = ApprovalStatus.PENDING
     planning_date: date

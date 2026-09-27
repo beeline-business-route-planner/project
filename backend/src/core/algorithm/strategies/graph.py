@@ -14,30 +14,42 @@ from src.core.algorithm.dto import (
     PlanningLayer,
     RouteCandidate,
 )
-from src.core.algorithm.enums import DistributionMode
 from src.core.algorithm.exc import AlgorithmInputError
 from src.core.algorithm.materialization import ScheduleMaterializer
 from src.core.algorithm.rules import PlanningRules
 from src.core.algorithm.strategies.baseline import BaselinePlanner
 from src.core.algorithm.strategies.greedy import GreedyPlanner
 from src.core.algorithm.strategies.selection import GlobalRouteSelector
+from src.core.db.enums import DistributionMode
 
 
 @dataclass(frozen=True, slots=True)
 class _GraphState:
     """Достижимое состояние маршрута после нуля или нескольких заявок слоя.
 
-    Время хранится целыми микросекундами, а путь дублируется целыми UUID: граф сравнивает
-    сотни тысяч состояний, и арифметика datetime/хэширование UUID доминируют во времени.
+    Время хранится целыми микросекундами, а последняя точка и путь — ещё и целыми UUID: граф
+    сравнивает сотни тысяч состояний, и арифметика datetime/хэширование UUID доминируют во
+    времени. Маска посещённых заявок слоя живёт только внутри слоя рядом с состоянием.
     """
 
-    mask: int
-    last_id: uuid.UUID
+    last_int: int
     finish_us: int
     travel_minutes: int
     priority_score: int
     path: tuple[uuid.UUID, ...]
     path_ints: tuple[int, ...]
+
+
+@dataclass(slots=True)
+class _LayerSearchCounts:
+    """Счётчики перебора одного слоя для диагностики."""
+
+    input_states_count: int
+    transition_attempts_count: int = 0
+    feasible_transitions_count: int = 0
+    rejected_by_time_count: int = 0
+    rejected_by_pareto_count: int = 0
+    pruned_by_pareto_count: int = 0
 
 
 class LayeredGraphPlanner:
@@ -377,8 +389,7 @@ class LayeredGraphPlanner:
         shift_end_us = self.timestamp_us(engineer.shift_end)
         states = [
             _GraphState(
-                mask=0,
-                last_id=engineer.id,
+                last_int=engineer.id.int,
                 finish_us=self.timestamp_us(max(engineer.available_from, cutoff_at)),
                 travel_minutes=0,
                 priority_score=0,
@@ -404,68 +415,10 @@ class LayeredGraphPlanner:
                     str(job.id),
                 ),
             )
-            transitions = [
-                (
-                    1 << position,
-                    job,
-                    layers_by_request[job.id],
-                    self.timestamp_us(job.release_at),
-                    self.timestamp_us(job.latest_start_at),
-                    job.service_minutes * 60_000_000,
-                    PlanningRules.priority_score(job.priority),
-                )
-                for position, job in enumerate(bucket)
-            ]
-            all_states = list(states)
-            input_states_count = len(states)
-            transition_attempts_count = 0
-            feasible_transitions_count = 0
-            rejected_by_time_count = 0
-            rejected_by_pareto_count = 0
-            pruned_by_pareto_count = 0
-            frontier = [replace(state, mask=0) for state in states]
-            for _ in range(len(bucket)):
-                labels: dict[tuple[int, int, int, int], list[_GraphState]] = {}
-                for state in frontier:
-                    for bit, job, layer, release_us, latest_us, service_us, score in transitions:
-                        if state.mask & bit:
-                            continue
-                        transition_attempts_count += 1
-                        travel = self._cached_travel_minutes(layer, engineer, state.last_id, job.id)
-                        start = max(state.finish_us + travel * 60_000_000, release_us, cutoff_us)
-                        finish = start + service_us
-                        if start > latest_us or finish > shift_end_us:
-                            rejected_by_time_count += 1
-                            continue
-                        feasible_transitions_count += 1
-                        path_ints = (*state.path_ints, job.id.int)
-                        priority_score = state.priority_score + score
-                        group = labels.setdefault(
-                            (state.mask | bit, job.id.int, len(path_ints), priority_score), []
-                        )
-                        travel_minutes = state.travel_minutes + travel
-                        accepted, pruned_count = self._add_pareto(
-                            group, finish, travel_minutes, path_ints
-                        )
-                        if not accepted:
-                            rejected_by_pareto_count += 1
-                            continue
-                        pruned_by_pareto_count += pruned_count
-                        group.append(
-                            _GraphState(
-                                mask=state.mask | bit,
-                                last_id=job.id,
-                                finish_us=finish,
-                                travel_minutes=travel_minutes,
-                                priority_score=priority_score,
-                                path=(*state.path, job.id),
-                                path_ints=path_ints,
-                            )
-                        )
-                frontier = [state for group in labels.values() for state in group]
-                all_states.extend(frontier)
-                if not frontier:
-                    break
+            counts = _LayerSearchCounts(input_states_count=len(states))
+            all_states = self._expand_layer(
+                engineer, bucket, states, layers_by_request, cutoff_us, shift_end_us, counts
+            )
             states = self._layer_frontier(all_states)
             if self._diagnostics is not None:
                 self._diagnostics.add_layer(
@@ -475,17 +428,137 @@ class LayeredGraphPlanner:
                     window_start=layer_key[0],
                     window_end=layer_key[1],
                     jobs_count=len(bucket),
-                    input_states_count=input_states_count,
-                    transition_attempts_count=transition_attempts_count,
-                    feasible_transitions_count=feasible_transitions_count,
-                    rejected_by_time_count=rejected_by_time_count,
-                    rejected_by_pareto_count=rejected_by_pareto_count,
-                    pruned_by_pareto_count=pruned_by_pareto_count,
+                    input_states_count=counts.input_states_count,
+                    transition_attempts_count=counts.transition_attempts_count,
+                    feasible_transitions_count=counts.feasible_transitions_count,
+                    rejected_by_time_count=counts.rejected_by_time_count,
+                    rejected_by_pareto_count=counts.rejected_by_pareto_count,
+                    pruned_by_pareto_count=counts.pruned_by_pareto_count,
                     candidates_count=len(all_states),
                     output_states_count=len(states),
                 )
 
         return tuple(sorted(states, key=self._state_key, reverse=True))
+
+    def _expand_layer(
+        self,
+        engineer: Engineer,
+        bucket: Sequence[Job],
+        states: Sequence[_GraphState],
+        layers_by_request: dict[uuid.UUID, PlanningLayer],
+        cutoff_us: int,
+        shift_end_us: int,
+        counts: _LayerSearchCounts,
+    ) -> list[_GraphState]:
+        """Перебирает заявки одного слоя от входных состояний.
+
+        Returns:
+            Входные состояния и все недоминируемые внутри слоя продолжения.
+        """
+
+        transitions = [
+            (
+                index,
+                1 << index,
+                job,
+                job.id.int,
+                layers_by_request[job.id],
+                self.timestamp_us(job.release_at),
+                self.timestamp_us(job.latest_start_at),
+                job.service_minutes * 60_000_000,
+                PlanningRules.priority_score(job.priority),
+            )
+            for index, job in enumerate(bucket)
+        ]
+        # Время перехода «последняя точка → заявка слоя» заполняется лениво: к матрице
+        # идут ровно те пары, которые перебор действительно проверяет.
+        travel_rows: dict[int, list[int | None]] = {}
+        layer_latest_us = max(transition[6] for transition in transitions)
+        all_states = list(states)
+        transition_attempts_count = 0
+        feasible_transitions_count = 0
+        rejected_by_time_count = 0
+        rejected_by_pareto_count = 0
+        pruned_by_pareto_count = 0
+        frontier = [(0, state) for state in states]
+        for _ in range(len(bucket)):
+            labels: dict[tuple[int, int, int, int], list[tuple[int, _GraphState]]] = {}
+            for mask, state in frontier:
+                # Начало не раньше finish, поэтому состояние, закончившее позже крайнего
+                # начала любой заявки слоя, никуда не переходит.
+                if state.finish_us > layer_latest_us:
+                    skipped_count = len(bucket) - mask.bit_count()
+                    transition_attempts_count += skipped_count
+                    rejected_by_time_count += skipped_count
+                    continue
+                row = travel_rows.get(state.last_int)
+                if row is None:
+                    row = travel_rows[state.last_int] = [None] * len(bucket)
+                last_id = state.path[-1] if state.path else engineer.id
+                for (
+                    index,
+                    bit,
+                    job,
+                    job_int,
+                    layer,
+                    release_us,
+                    latest_us,
+                    service_us,
+                    score,
+                ) in transitions:
+                    if mask & bit:
+                        continue
+                    transition_attempts_count += 1
+                    if state.finish_us > latest_us:
+                        rejected_by_time_count += 1
+                        continue
+                    travel = row[index]
+                    if travel is None:
+                        travel = row[index] = self._cached_travel_minutes(
+                            layer, engineer, last_id, job.id
+                        )
+                    start = max(state.finish_us + travel * 60_000_000, release_us, cutoff_us)
+                    finish = start + service_us
+                    if start > latest_us or finish > shift_end_us:
+                        rejected_by_time_count += 1
+                        continue
+                    feasible_transitions_count += 1
+                    path_ints = (*state.path_ints, job_int)
+                    priority_score = state.priority_score + score
+                    group = labels.setdefault(
+                        (mask | bit, job_int, len(path_ints), priority_score), []
+                    )
+                    travel_minutes = state.travel_minutes + travel
+                    accepted, pruned_count = self._add_pareto(
+                        group, finish, travel_minutes, path_ints
+                    )
+                    if not accepted:
+                        rejected_by_pareto_count += 1
+                        continue
+                    pruned_by_pareto_count += pruned_count
+                    group.append(
+                        (
+                            mask | bit,
+                            _GraphState(
+                                last_int=job_int,
+                                finish_us=finish,
+                                travel_minutes=travel_minutes,
+                                priority_score=priority_score,
+                                path=(*state.path, job.id),
+                                path_ints=path_ints,
+                            ),
+                        )
+                    )
+            frontier = [item for group in labels.values() for item in group]
+            all_states.extend(state for _, state in frontier)
+            if not frontier:
+                break
+        counts.transition_attempts_count = transition_attempts_count
+        counts.feasible_transitions_count = feasible_transitions_count
+        counts.rejected_by_time_count = rejected_by_time_count
+        counts.rejected_by_pareto_count = rejected_by_pareto_count
+        counts.pruned_by_pareto_count = pruned_by_pareto_count
+        return all_states
 
     def _route_candidates(
         self,
@@ -540,6 +613,7 @@ class LayeredGraphPlanner:
                     priority_score=0,
                     travel_minutes=0,
                     service_minutes=0,
+                    history_service_minutes=engineer.history_service_minutes,
                 )
             )
         return tuple(candidates)
@@ -567,6 +641,7 @@ class LayeredGraphPlanner:
                 service_minutes=sum(
                     jobs_by_id[request_id].service_minutes for request_id in state.path
                 ),
+                history_service_minutes=engineer.history_service_minutes,
             )
         )
 
@@ -594,6 +669,7 @@ class LayeredGraphPlanner:
             ),
             travel_minutes=travel_minutes,
             service_minutes=sum(jobs_by_id[request_id].service_minutes for request_id in path),
+            history_service_minutes=engineer.history_service_minutes,
         )
 
     @staticmethod
@@ -621,7 +697,7 @@ class LayeredGraphPlanner:
 
     @staticmethod
     def _add_pareto(
-        labels: list[_GraphState],
+        labels: list[tuple[int, _GraphState]],
         finish_us: int,
         travel_minutes: int,
         path_ints: tuple[int, ...],
@@ -635,7 +711,7 @@ class LayeredGraphPlanner:
             Принят ли кандидат и сколько меток он вытеснил (+1 за себя, как в диагностике).
         """
 
-        for state in labels:
+        for _, state in labels:
             if (
                 state.finish_us <= finish_us
                 and state.travel_minutes <= travel_minutes
@@ -648,8 +724,8 @@ class LayeredGraphPlanner:
                 return False, 0
         previous_count = len(labels)
         labels[:] = [
-            state
-            for state in labels
+            (mask, state)
+            for mask, state in labels
             if not (
                 finish_us <= state.finish_us
                 and travel_minutes <= state.travel_minutes
@@ -675,25 +751,42 @@ class LayeredGraphPlanner:
         """
 
         by_last: dict[
-            uuid.UUID,
+            int,
             tuple[list[_GraphState], dict[tuple[int, int], tuple[list[int], list[int]]]],
         ] = {}
         for candidate in sorted(candidates, key=self._state_key, reverse=True):
-            kept, staircases = by_last.setdefault(candidate.last_id, ([], {}))
+            kept, staircases = by_last.setdefault(candidate.last_int, ([], {}))
             count = len(candidate.path)
-            if any(
-                (index := bisect_right(finishes, candidate.finish_us))
-                and travels[index - 1] <= candidate.travel_minutes
-                for (priority_score, class_count), (finishes, travels) in staircases.items()
-                if priority_score >= candidate.priority_score and class_count >= count
-            ):
+            score = candidate.priority_score
+            finish_us = candidate.finish_us
+            travel_minutes = candidate.travel_minutes
+            if self._dominated_by_staircases(staircases, score, count, finish_us, travel_minutes):
                 continue
-            finishes, travels = staircases.setdefault((candidate.priority_score, count), ([], []))
-            index = bisect_right(finishes, candidate.finish_us)
-            finishes.insert(index, candidate.finish_us)
-            travels.insert(index, candidate.travel_minutes)
-            kept.append(replace(candidate, mask=0))
+            finishes, travels = staircases.setdefault((score, count), ([], []))
+            index = bisect_right(finishes, finish_us)
+            finishes.insert(index, finish_us)
+            travels.insert(index, travel_minutes)
+            kept.append(candidate)
         return [state for kept, _ in by_last.values() for state in kept]
+
+    @staticmethod
+    def _dominated_by_staircases(
+        staircases: dict[tuple[int, int], tuple[list[int], list[int]]],
+        score: int,
+        count: int,
+        finish_us: int,
+        travel_minutes: int,
+    ) -> bool:
+        """Есть ли принятое состояние с не меньшими score и числом заявок, закончившее не
+        позже и с не большей дорогой."""
+
+        for (class_score, class_count), (finishes, travels) in staircases.items():
+            if class_score < score or class_count < count:
+                continue
+            index = bisect_right(finishes, finish_us)
+            if index and travels[index - 1] <= travel_minutes:
+                return True
+        return False
 
     @staticmethod
     def _state_key(state: _GraphState) -> tuple[int, int, int, int, tuple[int, ...]]:
@@ -735,6 +828,13 @@ class LayeredGraphPlanner:
         from_id: uuid.UUID,
         to_id: uuid.UUID,
     ) -> int:
+        """Время перехода по матрице слоя целевой заявки и транспорта инженера.
+
+        Недостижимая пара получает время заведомо больше любого рабочего дня: такой
+        переход отсекается обычной проверкой окна и смены, а финальный маршрут всё равно
+        строит материализация, которая видит `None` явно.
+        """
+
         matrices = [
             item.travel_matrix
             for item in layer.matrices
@@ -746,8 +846,10 @@ class LayeredGraphPlanner:
                 f"транспорта {engineer.vehicle_type}"
             )
         try:
-            return matrices[0].minutes(from_id, to_id)
+            minutes = matrices[0].minutes(from_id, to_id)
         except (KeyError, IndexError) as exc:
             raise AlgorithmInputError(
                 f"Матрица слоя не покрывает переход {from_id} -> {to_id}"
             ) from exc
+        unreachable_minutes = 7 * 24 * 60
+        return unreachable_minutes if minutes is None else minutes

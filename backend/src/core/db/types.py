@@ -3,7 +3,9 @@ import sqlalchemy as sa
 from src.core.db.enums import (
     ApprovalStatus,
     ConnectionType,
+    DistributionMode,
     PlanKind,
+    PlanStrategy,
     Region,
     ReplanningEventType,
     RequestStatus,
@@ -26,3 +28,5 @@ region_enum = sa.Enum(Region, name="region")
 plan_kind_enum = sa.Enum(PlanKind, name="plan_kind")
 replanning_event_type_enum = sa.Enum(ReplanningEventType, name="replanning_event_type")
 unassigned_reason_enum = sa.Enum(UnassignedReason, name="unassigned_reason")
+distribution_mode_enum = sa.Enum(DistributionMode, name="distribution_mode")
+plan_strategy_enum = sa.Enum(PlanStrategy, name="plan_strategy")

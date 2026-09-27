@@ -24,6 +24,7 @@ from src.core.di import (
     RequestsProvider,
     RoutingProvider,
     S3Provider,
+    TravelMatrixProvider,
 )
 from src.core.logging import setup_logging
 from src.core.metrics import PrometheusMiddleware, http_requests_total
@@ -37,6 +38,7 @@ container = make_async_container(
     GeocodingProvider(),
     RoutingProvider(),
     DgisProvider(),
+    TravelMatrixProvider(),
     AlgorithmProvider(),
     PlanningProvider(),
     PlansProvider(),
