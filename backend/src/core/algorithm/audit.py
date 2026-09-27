@@ -227,7 +227,7 @@ class ResultAuditor:
         expected_finish = expected_start + timedelta(minutes=job.service_minutes)
         expected_values = (
             expected_travel,
-            expected_distance,
+            PlanningRules.stop_distance(expected_distance),
             expected_arrival,
             expected_start,
             expected_finish,

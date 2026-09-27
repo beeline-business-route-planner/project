@@ -109,7 +109,7 @@ class ScheduleMaterializer:
                     start=start,
                     finish=finish,
                     travel_minutes=travel_minutes,
-                    distance_km=distance_km,
+                    distance_km=PlanningRules.stop_distance(distance_km),
                 )
             )
             previous_id = request_id
