@@ -23,25 +23,38 @@ export_retention_hours = 24
 max_export_size_bytes = 10000000
 
 [geocoding]
-base_url = "https://nominatim.openstreetmap.org"
-user_agent = "beeline-business-route-planner/0.1 (+https://github.com/beeline-business-route-planner/project)"
-timeout_seconds = 15.0
-min_request_interval_seconds = 1.0
-country_codes = "ru"
+base_url = "https://suggestions.dadata.ru"
+api_key = ""
+timeout_seconds = 10.0
+max_concurrent_requests = 10
+max_qc_geo = 1
+suggestions_count = 5
 
 [routing]
-base_url = "https://router.project-osrm.org"
-profile = "driving"
+car_table_url = "https://router.project-osrm.org/table/v1/driving"
+foot_table_url = "https://routing.openstreetmap.de/routed-foot/table/v1/driving"
+bike_table_url = "https://routing.openstreetmap.de/routed-bike/table/v1/driving"
+user_agent = "beeline-business-route-planner/0.1"
 timeout_seconds = 60.0
 travel_buffer_multiplier = 1.10
 max_table_coordinates = 100
+public_transport_speed_kmh = 20.0
+public_transport_wait_minutes = 10
+
+[travel_matrix]
+# osrm — без пробок, бесплатно; dgis — с пробками, нужен dgis.api_key
+provider = "osrm"
 
 [dgis]
 base_url = "https://routing.api.2gis.com"
 api_key = ""
 api_version = "2.0"
 timeout_seconds = 60.0
-max_matrix_points = 25
+max_matrix_sources = 10
+max_matrix_targets = 10
+rate_limit_retries = 4
+rate_limit_backoff_seconds = 2.0
+public_transport_types = ["bus", "trolleybus", "tram", "metro", "shuttle_bus", "suburban_train"]
 
 [planning]
 max_file_size_bytes = 10000000

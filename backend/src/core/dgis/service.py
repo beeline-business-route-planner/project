@@ -1,3 +1,4 @@
+import asyncio
 import math
 import uuid
 from collections.abc import Sequence
@@ -13,7 +14,6 @@ from src.core.dgis.client import DgisClient
 from src.core.dgis.dto import DgisPoint
 from src.core.dgis.exc import (
     DgisUnavailableError,
-    DgisUnreachablePointsError,
     InvalidDgisResponseError,
 )
 
@@ -31,17 +31,13 @@ class DgisMatrix:
         self._travel_minutes = travel_minutes
         self._distance_km = distance_km
 
-    def minutes(self, from_id: uuid.UUID, to_id: uuid.UUID) -> int:
-        value = self._travel_minutes[self._index_by_id[from_id]][self._index_by_id[to_id]]
-        if value is None:
-            raise DgisUnreachablePointsError(from_id, to_id)
-        return value
+    def minutes(self, from_id: uuid.UUID, to_id: uuid.UUID) -> int | None:
+        """Время в пути; `None` — 2ГИС не нашёл маршрут между точками."""
 
-    def kilometers(self, from_id: uuid.UUID, to_id: uuid.UUID) -> Decimal:
-        value = self._distance_km[self._index_by_id[from_id]][self._index_by_id[to_id]]
-        if value is None:
-            raise DgisUnreachablePointsError(from_id, to_id)
-        return value
+        return self._travel_minutes[self._index_by_id[from_id]][self._index_by_id[to_id]]
+
+    def kilometers(self, from_id: uuid.UUID, to_id: uuid.UUID) -> Decimal | None:
+        return self._distance_km[self._index_by_id[from_id]][self._index_by_id[to_id]]
 
 
 class DgisMatrixService:
@@ -152,15 +148,18 @@ class DgisMatrixService:
             payload["start_time"] = aware_departure.isoformat()
             if transport in {"driving", "taxi", "truck", "motorcycle"}:
                 payload["type"] = "statistics"
+        if transport == "public_transport":
+            payload["public_transport_params"] = {
+                "transport": cfg.dgis.public_transport_types,
+                "enable_schedule": departure_at is not None,
+            }
         try:
-            response = await self._client.get().post(
-                "/get_dist_matrix",
-                params={"key": cfg.dgis.api_key, "version": cfg.dgis.api_version},
-                json=payload,
-            )
+            response = await self._post_matrix(payload)
             response.raise_for_status()
             body = response.json()
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == httpx.codes.TOO_MANY_REQUESTS:
+                raise DgisUnavailableError("Исчерпан лимит запросов 2ГИС") from exc
             raise InvalidDgisResponseError(
                 f"2ГИС отклонил запрос со статусом {exc.response.status_code}"
             ) from exc
@@ -173,6 +172,29 @@ class DgisMatrixService:
         if not isinstance(routes, list):
             raise InvalidDgisResponseError("В ответе 2ГИС отсутствует массив routes")
         return routes, source_by_local, target_by_local
+
+    async def _post_matrix(self, payload: dict[str, object]) -> httpx.Response:
+        """Отправляет запрос матрицы; при 429 тарифа повторяет с растущей паузой.
+
+        Запрос идемпотентен, поэтому повтор безопасен; число попыток и пауза — в конфиге.
+        """
+
+        delay = cfg.dgis.rate_limit_backoff_seconds
+        for _ in range(cfg.dgis.rate_limit_retries):
+            response = await self._client.get().post(
+                "/get_dist_matrix",
+                params={"key": cfg.dgis.api_key, "version": cfg.dgis.api_version},
+                json=payload,
+            )
+            if response.status_code != httpx.codes.TOO_MANY_REQUESTS:
+                return response
+            await asyncio.sleep(delay)
+            delay *= 2
+        return await self._client.get().post(
+            "/get_dist_matrix",
+            params={"key": cfg.dgis.api_key, "version": cfg.dgis.api_version},
+            json=payload,
+        )
 
     def _merge_block(
         self,
@@ -196,7 +218,9 @@ class DgisMatrixService:
             if pair in seen_pairs:
                 raise InvalidDgisResponseError("2ГИС вернул дубликат пары маршрута")
             seen_pairs.add(pair)
-            if raw_route.get("status") == "FAIL":
+            # Кроме FAIL, 2ГИС возвращает, например, PLATFORMS_NOT_FOUND с нулевыми
+            # duration/distance: это отсутствие маршрута, а не мгновенный переезд.
+            if raw_route.get("status") != "OK":
                 continue
             duration = raw_route.get("duration")
             distance = raw_route.get("distance")
@@ -211,48 +235,21 @@ class DgisMatrixService:
         if len(seen_pairs) != expected_pairs:
             raise InvalidDgisResponseError("2ГИС вернул неполную матрицу")
 
+    @staticmethod
     def _matrix_blocks(
-        self, source_indexes: list[int], target_indexes: list[int]
+        source_indexes: list[int], target_indexes: list[int]
     ) -> list[tuple[list[int], list[int]]]:
-        limit = cfg.dgis.max_matrix_points
-        if limit < 2:
-            raise ValueError("dgis.max_matrix_points должен быть не меньше 2")
-        best_blocks: list[tuple[list[int], list[int]]] | None = None
-        max_target_chunk = min(len(target_indexes), limit - 1)
-        for target_chunk_size in range(1, max_target_chunk + 1):
-            blocks = self._blocks_for_target_size(
-                source_indexes,
-                target_indexes,
-                limit,
-                target_chunk_size,
-            )
-            if best_blocks is None or len(blocks) < len(best_blocks):
-                best_blocks = blocks
-        if best_blocks is None:
-            raise ValueError("Не удалось разбить матрицу на допустимые блоки")
-        return best_blocks
+        """Режет матрицу на блоки в пределах тарифа 2ГИС: источники × цели одного запроса."""
 
-    def _blocks_for_target_size(
-        self,
-        source_indexes: list[int],
-        target_indexes: list[int],
-        limit: int,
-        target_chunk_size: int,
-    ) -> list[tuple[list[int], list[int]]]:
-        blocks: list[tuple[list[int], list[int]]] = []
-        for target_start in range(0, len(target_indexes), target_chunk_size):
-            target_chunk = target_indexes[target_start : target_start + target_chunk_size]
-            target_set = set(target_chunk)
-            overlapping_sources = [index for index in source_indexes if index in target_set]
-            external_sources = [index for index in source_indexes if index not in target_set]
-            external_capacity = limit - len(target_set)
-            first_sources = [
-                *overlapping_sources,
-                *external_sources[:external_capacity],
-            ]
-            if first_sources:
-                blocks.append((first_sources, target_chunk))
-            for source_start in range(external_capacity, len(external_sources), external_capacity):
-                source_chunk = external_sources[source_start : source_start + external_capacity]
-                blocks.append((source_chunk, target_chunk))
-        return blocks
+        max_sources = cfg.dgis.max_matrix_sources
+        max_targets = cfg.dgis.max_matrix_targets
+        if max_sources < 1 or max_targets < 1:
+            raise ValueError("Лимиты матрицы 2ГИС должны быть положительными")
+        return [
+            (
+                source_indexes[source_start : source_start + max_sources],
+                target_indexes[target_start : target_start + max_targets],
+            )
+            for target_start in range(0, len(target_indexes), max_targets)
+            for source_start in range(0, len(source_indexes), max_sources)
+        ]

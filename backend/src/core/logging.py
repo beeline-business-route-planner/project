@@ -61,3 +61,5 @@ def setup_logging(level: str = "INFO") -> None:
     root.addHandler(handler)
 
     logging.getLogger("uvicorn.access").setLevel(logging.CRITICAL)
+    # httpx пишет полный URL запроса на INFO, а в query геокодера — адрес клиента.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
