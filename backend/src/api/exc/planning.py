@@ -86,6 +86,11 @@ class PlanningRequestAlreadyCancelled(Exception):
     pass
 
 
+@http_error(status_code=409, detail="Заявка уже в работе или выполнена, её нельзя отменить")
+class PlanningRequestAlreadyStarted(Exception):
+    pass
+
+
 @http_error(status_code=409, detail="Инженер уже находится в запрошенном состоянии")
 class PlanningEngineerStateConflict(Exception):
     pass

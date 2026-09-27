@@ -107,6 +107,9 @@ class ReplanPreparationTest(unittest.IsolatedAsyncioTestCase):
                 )
             ),
             requests=SimpleNamespace(get_by_ids=AsyncMock(return_value=[self.request])),
+            replanning_events=SimpleNamespace(
+                list_approved_for_region_day=AsyncMock(return_value=[])
+            ),
             engineers=SimpleNamespace(get_by_ids=AsyncMock(return_value=[self.engineer])),
             commit=AsyncMock(),
             rollback=AsyncMock(),

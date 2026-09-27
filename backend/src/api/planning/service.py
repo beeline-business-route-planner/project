@@ -2,7 +2,6 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Sequence
-from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -22,6 +21,7 @@ from src.api.exc.planning import (
     PlanningPendingEventExists,
     PlanningRegionPairError,
     PlanningRequestAlreadyCancelled,
+    PlanningRequestAlreadyStarted,
     PlanningRoutingUnavailable,
     PlanningUrgentRequestExists,
     PlanningUrgentRequestInvalid,
@@ -29,6 +29,7 @@ from src.api.exc.planning import (
     RepeatedRequestError,
 )
 from src.api.planning.dto import (
+    ApprovedEventFact,
     EventPlanningCommand,
     EventPlanningResult,
     InitialPlanningResult,
@@ -56,6 +57,7 @@ from src.core.algorithm import (
     LayerMatrix,
     LayerMatrixRequest,
     MissingCoordinatesError,
+    ReplanEvent,
     ReplanResult,
     ReplanSnapshot,
     RequestSnapshot,
@@ -229,15 +231,15 @@ class PlanningService:
                 )
             )
             await self._uow.flush()
-            snapshot = await self._apply_to_snapshot(snapshot, request, target_id)
-            draft = self._algorithm.prepare_replan(snapshot)
+            draft = self._algorithm.prepare_event_replan(
+                snapshot, await self._to_replan_event(request, target_id, cutoff)
+            )
             matrices = await self._layer_matrices(draft.tail.points, draft.tail.matrix_requests)
             calculated = self._algorithm.plan_replan(
                 self._algorithm.build_replan_input(draft, matrices),
                 AlgorithmVariant(base.strategy.value),
             )
-            self._audit_event_result(request, target_id, calculated)
-            availability = {item.id: item.is_available for item in snapshot.engineers}
+            availability = {item.id: item.is_available for item in draft.snapshot.engineers}
             plan_id = await self._persist_replan_result(
                 base, calculated, base.strategy, event_id=event_id, availability=availability
             )
@@ -340,26 +342,7 @@ class PlanningService:
             return model.id
 
         if request.event_type == ReplanningEventType.REQUEST_CANCELLED:
-            target = request.request_id
-            item = next((item for item in base.requests if item.id == target), None)
-            if item is None and target is not None:
-                persisted = await self._uow.requests.get_by_id(target)
-                if (
-                    persisted is not None
-                    and persisted.region == base.region
-                    and persisted.window_start.date() == base.planning_date
-                    and persisted.status == RequestStatus.CANCELLED
-                ):
-                    raise PlanningRequestAlreadyCancelled
-            if (
-                item is None
-                or item.region != base.region
-                or item.window_start.date() != base.planning_date
-            ):
-                raise PlanningEventTargetMissing
-            if item.status == RequestStatus.CANCELLED:
-                raise PlanningRequestAlreadyCancelled
-            return item.id
+            return await self._validate_cancel_target(request.request_id, base)
 
         target = request.engineer_id
         engineer_item = next((item for item in base.engineers if item.id == target), None)
@@ -374,57 +357,51 @@ class PlanningService:
             raise PlanningEngineerStateConflict
         return engineer_item.id
 
-    async def _apply_to_snapshot(
-        self, snapshot: ReplanSnapshot, request: EventPlanningCommand, target_id: uuid.UUID
-    ) -> ReplanSnapshot:
-        if request.event_type == ReplanningEventType.URGENT_REQUEST:
-            payload = request.urgent_request
-            if payload is None:
-                raise PlanningUrgentRequestInvalid
-            model = await self._uow.requests.get_by_id(target_id)
-            if model is None:
-                raise RuntimeError("Срочная заявка не сохранена")
-            return replace(
-                snapshot,
-                requests=(*snapshot.requests, self._to_request_snapshot(model)),
-            )
-        if request.event_type == ReplanningEventType.REQUEST_CANCELLED:
-            return replace(
-                snapshot,
-                requests=tuple(
-                    replace(item, status=RequestStatus.CANCELLED) if item.id == target_id else item
-                    for item in snapshot.requests
-                ),
-            )
-        available = request.event_type == ReplanningEventType.ENGINEER_AVAILABLE
-        return replace(
-            snapshot,
-            engineers=tuple(
-                replace(item, is_available=available) if item.id == target_id else item
-                for item in snapshot.engineers
-            ),
-        )
-
-    @staticmethod
-    def _audit_event_result(
-        request: EventPlanningCommand, target_id: uuid.UUID, result: ReplanResult
-    ) -> None:
-        stops = [stop for route in result.routes for stop in route.stops]
-        assigned = {stop.request_id for stop in stops}
-        unassigned = {item.job_id for item in result.unassigned}
-        if request.event_type == ReplanningEventType.URGENT_REQUEST:
-            if (target_id in assigned) == (target_id in unassigned):
-                raise ValueError("Срочная заявка должна быть назначена или не назначена")
-        elif request.event_type == ReplanningEventType.REQUEST_CANCELLED:
-            if target_id in unassigned or any(
-                stop.request_id == target_id and not stop.is_locked for stop in stops
+    async def _validate_cancel_target(
+        self, target: uuid.UUID | None, base: ReplanBaseSnapshot
+    ) -> uuid.UUID:
+        item = next((item for item in base.requests if item.id == target), None)
+        if item is None and target is not None:
+            persisted = await self._uow.requests.get_by_id(target)
+            if (
+                persisted is not None
+                and persisted.region == base.region
+                and persisted.window_start.date() == base.planning_date
+                and persisted.status == RequestStatus.CANCELLED
             ):
-                raise ValueError("Отменённая заявка попала в изменяемый хвост")
-        elif request.event_type == ReplanningEventType.ENGINEER_UNAVAILABLE and any(
-            route.engineer_id == target_id and any(not stop.is_locked for stop in route.stops)
-            for route in result.routes
+                raise PlanningRequestAlreadyCancelled
+        if (
+            item is None
+            or item.region != base.region
+            or item.window_start.date() != base.planning_date
         ):
-            raise ValueError("Недоступный инженер получил новые остановки")
+            raise PlanningEventTargetMissing
+        if item.status == RequestStatus.CANCELLED:
+            raise PlanningRequestAlreadyCancelled
+        if item.status in (RequestStatus.IN_PROGRESS, RequestStatus.DONE):
+            raise PlanningRequestAlreadyStarted
+        return item.id
+
+    async def _to_replan_event(
+        self, request: EventPlanningCommand, target_id: uuid.UUID, occurred_at: datetime
+    ) -> ReplanEvent:
+        match request.event_type:
+            case ReplanningEventType.URGENT_REQUEST:
+                model = await self._uow.requests.get_by_id(target_id)
+                if model is None:
+                    raise RuntimeError("Срочная заявка не сохранена")
+                return ReplanEvent(
+                    event_type=request.event_type,
+                    occurred_at=occurred_at,
+                    urgent_request=self._to_request_snapshot(model),
+                )
+            case ReplanningEventType.REQUEST_CANCELLED:
+                return ReplanEvent(
+                    event_type=request.event_type, occurred_at=occurred_at, request_id=target_id
+                )
+        return ReplanEvent(
+            event_type=request.event_type, occurred_at=occurred_at, engineer_id=target_id
+        )
 
     async def _layer_matrices(
         self,
@@ -453,7 +430,25 @@ class PlanningService:
 
     @staticmethod
     def _to_replan_snapshot(base: ReplanBaseSnapshot, mode: DistributionMode) -> ReplanSnapshot:
+        """Собирает snapshot replan из утверждённого плана и фактов событий дня.
+
+        Срочная заявка поступила в момент своего события, остальные — к cutoff initial.
+        Инженер, последним событием которого было возвращение в строй, получает его время.
+        """
         availability = {state.engineer_id: state.is_available for state in base.engineer_states}
+        urgent_received_at = {
+            event.request_id: event.occurred_at
+            for event in base.approved_events
+            if event.event_type == ReplanningEventType.URGENT_REQUEST
+        }
+        returned_at: dict[uuid.UUID, datetime | None] = {}
+        for event in base.approved_events:
+            if event.engineer_id is not None:
+                returned_at[event.engineer_id] = (
+                    event.occurred_at
+                    if event.event_type == ReplanningEventType.ENGINEER_AVAILABLE
+                    else None
+                )
         return ReplanSnapshot(
             region=base.region,
             planning_date=base.planning_date,
@@ -471,7 +466,7 @@ class PlanningService:
                     required_skill=item.required_skill,
                     required_vehicle_type=item.required_vehicle_type,
                     status=item.status,
-                    received_at=base.initial_cutoff_at,
+                    received_at=urgent_received_at.get(item.id, base.initial_cutoff_at),
                 )
                 for item in base.requests
                 if item.latitude is not None and item.longitude is not None
@@ -486,6 +481,7 @@ class PlanningService:
                     skills=frozenset(item.skills),
                     vehicle_type=item.vehicle_type,
                     is_available=availability[item.id],
+                    returned_at=returned_at.get(item.id),
                 )
                 for item in base.engineers
             ),
@@ -605,6 +601,9 @@ class PlanningService:
         }
         requests = await self._uow.requests.get_by_ids(request_ids)
         engineers = await self._uow.engineers.get_by_ids(engineer_ids)
+        events = await self._uow.replanning_events.list_approved_for_region_day(
+            region, planning_date
+        )
 
         if (
             len(requests) != len(request_ids)
@@ -626,6 +625,17 @@ class PlanningService:
             planning_date=planning_date,
             calculation_cutoff_at=cutoff,
             initial_cutoff_at=initial_cutoff_at,
+            approved_events=tuple(
+                ApprovedEventFact(
+                    event_type=event.event_type,
+                    request_id=event.request_id,
+                    engineer_id=event.engineer_id,
+                    occurred_at=event.occurred_at.replace(tzinfo=UTC)
+                    .astimezone(ZoneInfo("Europe/Moscow"))
+                    .replace(tzinfo=None),
+                )
+                for event in events
+            ),
             requests=tuple(
                 RequestDTO.from_orm(item)
                 for item in sorted(requests, key=lambda item: str(item.id))

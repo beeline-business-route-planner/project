@@ -44,6 +44,20 @@ class ReplanningEventRepository(BaseRepository[ReplanningEvent]):
         )
         return list(result.all())
 
+    async def list_approved_for_region_day(
+        self, region: Region, planning_date: date
+    ) -> list[ReplanningEvent]:
+        result = await self._session.scalars(
+            select(ReplanningEvent)
+            .where(
+                ReplanningEvent.region == region,
+                ReplanningEvent.planning_date == planning_date,
+                ReplanningEvent.approval_status == ApprovalStatus.APPROVED,
+            )
+            .order_by(ReplanningEvent.approved_at, ReplanningEvent.id)
+        )
+        return list(result.all())
+
     async def get_latest_approved_for_engineer(
         self, engineer_id: uuid.UUID, planning_date: date
     ) -> ReplanningEvent | None:

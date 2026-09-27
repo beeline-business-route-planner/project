@@ -7,6 +7,7 @@ from typing import Protocol
 from src.core.db.enums import (
     DistributionMode,
     Region,
+    ReplanningEventType,
     RequestStatus,
     Skill,
     UnassignedReason,
@@ -56,6 +57,8 @@ class EngineerSnapshot:
     """Не раньше этого момента инженер свободен в стартовой точке (конец прожитой истории)."""
     history_service_minutes: int = 0
     """Минуты работы в зафиксированной истории дня; больше нуля — бригада уже задействована."""
+    returned_at: datetime | None = None
+    """Момент последнего возвращения в строй: после него инженер стартует из своей точки."""
 
 
 @dataclass(frozen=True)
@@ -372,6 +375,22 @@ class ReplanSnapshot:
 
 
 @dataclass(frozen=True)
+class ReplanEvent:
+    """Одно валидированное внештатное событие, применяемое к snapshot event replan.
+
+    Цель задаётся ровно одним полем по типу: `urgent_request` — полная новая заявка,
+    `request_cancelled` — `request_id`, `engineer_unavailable`/`engineer_available` —
+    `engineer_id`.
+    """
+
+    event_type: ReplanningEventType
+    occurred_at: datetime
+    urgent_request: RequestSnapshot | None = None
+    request_id: uuid.UUID | None = None
+    engineer_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
 class ReplanDraft:
     """Зафиксированная история и черновик будущего хвоста, ожидающий матриц."""
 
@@ -379,6 +398,7 @@ class ReplanDraft:
     locked_stops: tuple[BasePlanStop, ...]
     cancelled_request_ids: frozenset[uuid.UUID]
     tail: InitialPlanningDraft
+    event: ReplanEvent | None = None
 
 
 @dataclass(frozen=True)
@@ -389,6 +409,7 @@ class ReplanInput:
     locked_stops: tuple[BasePlanStop, ...]
     cancelled_request_ids: frozenset[uuid.UUID]
     tail: InitialPlanningInput
+    event: ReplanEvent | None = None
 
 
 @dataclass(frozen=True)

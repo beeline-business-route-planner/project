@@ -143,6 +143,16 @@ class ReplanUnassigned:
 
 
 @dataclass(frozen=True)
+class ApprovedEventFact:
+    """Утверждённое событие дня; `occurred_at` — московское время, как у cutoff."""
+
+    event_type: ReplanningEventType
+    request_id: uuid.UUID | None
+    engineer_id: uuid.UUID | None
+    occurred_at: datetime
+
+
+@dataclass(frozen=True)
 class ReplanEngineerState:
     engineer_id: uuid.UUID
     is_available: bool
@@ -159,6 +169,8 @@ class ReplanBaseSnapshot:
     calculation_cutoff_at: datetime
     initial_cutoff_at: datetime
     """Cutoff утверждённого initial: момент поступления заявок дня для SLA аварий."""
+    approved_events: tuple[ApprovedEventFact, ...]
+    """Утверждённые события дня по порядку утверждения."""
     requests: tuple[RequestDTO, ...]
     engineers: tuple[EngineerDTO, ...]
     engineer_states: tuple[ReplanEngineerState, ...]
