@@ -4,6 +4,7 @@ postgres_password = "change-me"
 postgres_db = "app"
 postgres_host = "localhost"
 postgres_port = 5432
+# alembic_postgres_host = "localhost"  # хост БД для alembic, если отличается от postgres_host
 
 [s3]
 endpoint_url = "http://localhost:9000"
