@@ -32,8 +32,8 @@ class RequestCreateDTO:
     region: Region
     district: str
     address: str
-    latitude: Decimal
-    longitude: Decimal
+    latitude: Decimal | None
+    longitude: Decimal | None
     connection_type: ConnectionType | None
     is_gigabit: bool
     window_start: datetime

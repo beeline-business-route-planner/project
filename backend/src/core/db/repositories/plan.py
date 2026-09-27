@@ -111,6 +111,20 @@ class PlanRepository(BaseRepository[Plan]):
         )
         return result is not None
 
+    async def get_approved_initial_cutoff(
+        self, region: Region, planning_date: date
+    ) -> datetime | None:
+        return await self._session.scalar(
+            select(Plan.calculation_cutoff_at)
+            .where(
+                Plan.region == region,
+                Plan.planning_date == planning_date,
+                Plan.kind == PlanKind.INITIAL,
+                Plan.approval_status == ApprovalStatus.APPROVED,
+            )
+            .limit(1)
+        )
+
     @staticmethod
     def set_approval_status(
         plan: Plan, status: ApprovalStatus, decided_at: datetime | None
@@ -131,6 +145,8 @@ class PlanRepository(BaseRepository[Plan]):
         model.based_on_plan_id = plan.based_on_plan_id
         model.triggered_by_event_id = plan.triggered_by_event_id
         model.calculation_cutoff_at = plan.calculation_cutoff_at
+        model.mode = plan.mode
+        model.strategy = plan.strategy
         model.total_mileage_km = plan.total_mileage_km
         model.engineers_used_count = plan.engineers_used_count
         model.assigned_requests_count = plan.assigned_requests_count
