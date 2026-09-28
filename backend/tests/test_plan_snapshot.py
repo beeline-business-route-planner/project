@@ -1,10 +1,11 @@
 import unittest
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from src.api.plans.presenter import PlanPresenter
 from src.api.plans.service import PlanService
 from src.api.plans.snapshot import PlanSnapshotAssembler
 from src.core.db.enums import (
@@ -85,7 +86,12 @@ class PlanSnapshotAssemblerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({item.request_id for item in snapshot.requests}, {imported.id, urgent.id})
         self.assertEqual(snapshot.metrics.engineers_used_count, 1)
         self.assertEqual(snapshot.metrics.unassigned_requests_count, 1)
-        self.assertTrue(next(item for item in snapshot.engineers if item.engineer_id == used.id).is_available)
+        self.assertTrue(
+            next(item for item in snapshot.engineers if item.engineer_id == used.id).is_available
+        )
+        detail = PlanPresenter.build_detail(snapshot, False, None, None, None, time(9), time(18))
+        self.assertEqual([item.engineer_id for item in detail.engineers], [used.id, unused.id])
+        self.assertEqual(detail.engineers[1].assigned_requests_count, 0)
 
     async def test_plan_service_loads_requests_by_plan_membership(self) -> None:
         upload_id = uuid.UUID(int=50)
