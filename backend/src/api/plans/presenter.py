@@ -77,7 +77,6 @@ class PlanPresenter:
                     stops=tuple(tiles_by_id[item.request_id] for item in engineer.requests),
                 )
                 for engineer in sorted(snapshot.engineers, key=lambda item: item.name)
-                if engineer.requests
             ),
             diff=diff,
         )
