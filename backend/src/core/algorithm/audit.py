@@ -359,6 +359,8 @@ class ResultAuditor:
         """Сверяет агрегаты плана с маршрутами; одно определение для initial и replan."""
 
         routed_ids = {route.engineer_id for route in routes}
+        if len(routed_ids) != len(routes):
+            raise AlgorithmAuditError("У инженера больше одного маршрута в плане")
         counted = sum(
             available or engineer_id in routed_ids
             for engineer_id, available in availability.items()
