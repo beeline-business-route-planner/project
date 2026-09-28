@@ -10,6 +10,7 @@ from src.core.db.enums import VehicleType
 from src.core.dgis import DgisUnavailableError
 from src.core.routing import RoutingClient, RoutingPoint, RoutingService
 from src.core.travel_matrix import (
+    InvalidTravelMatrixResponseError,
     MatrixPoint,
     MatrixRequest,
     TravelMatrixService,
@@ -18,6 +19,34 @@ from src.core.travel_matrix import (
 
 
 class OsrmMatricesTest(unittest.IsolatedAsyncioTestCase):
+    async def test_malformed_osrm_matrix_is_reported_as_provider_error(self) -> None:
+        session = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={"code": "Ok", "durations": [[0]], "distances": [[0]]},
+                )
+            )
+        )
+        self.addAsyncCleanup(session.aclose)
+        points = [
+            MatrixPoint(uuid.UUID(int=index), Decimal("55.7"), Decimal("37.6")) for index in (1, 2)
+        ]
+        request = MatrixRequest(
+            VehicleType.CAR,
+            datetime(2026, 9, 28, 11),
+            frozenset({points[0].id}),
+            frozenset({points[1].id}),
+        )
+        with (
+            patch.object(cfg.travel_matrix, "provider", "osrm"),
+            patch.object(cfg.routing, "car_table_url", "https://car.test/table"),
+            self.assertRaises(InvalidTravelMatrixResponseError),
+        ):
+            await TravelMatrixService(Mock(), RoutingService(RoutingClient(session))).build(
+                points, [request]
+            )
+
     async def test_each_profile_is_requested_once_and_public_transport_is_derived(self) -> None:
         seconds = {"car": 600, "foot": 3000, "bike": 1200}
         meters = {"car": 10_000, "foot": 3_000, "bike": 9_000}

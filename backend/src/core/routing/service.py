@@ -179,7 +179,15 @@ class RoutingService:
 
         durations = payload.get("durations")
         distances = payload.get("distances")
-        if not isinstance(durations, list) or not isinstance(distances, list):
+        size = len(points)
+        if (
+            not isinstance(durations, list)
+            or not isinstance(distances, list)
+            or len(durations) != size
+            or len(distances) != size
+            or any(not isinstance(row, list) or len(row) != size for row in durations)
+            or any(not isinstance(row, list) or len(row) != size for row in distances)
+        ):
             raise InvalidRoutingResponseError("Провайдер вернул некорректный формат матрицы")
 
         try:
