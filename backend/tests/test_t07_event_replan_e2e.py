@@ -5,6 +5,7 @@ import unittest
 import uuid
 from datetime import datetime, timedelta
 from io import BytesIO
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from fastapi import UploadFile
@@ -23,14 +24,16 @@ from src.api.exc.planning import (
     PlanningUrgentRequestExists,
     PlanningUrgentRequestInvalid,
 )
-from src.api.exc.plans import PlanStateChangedError
+from src.api.exc.plans import PlanNotPendingError, PlanStateChangedError
 from src.api.planning.router import create_event, import_initial_planning_data
 from src.api.planning.schemas import EventPlanningRequest, UrgentRequestPayload
 from src.api.planning.service import PlanningService
 from src.api.plans.diff import PlanDiffEngine
 from src.api.plans.export import PlanXlsxExporter
 from src.api.plans.service import PlanService
+from src.api.reports.service import DailyReportService
 from src.core.algorithm import AlgorithmService
+from src.core.algorithm.exc import AlgorithmAuditError
 from src.core.db.enums import (
     ApprovalStatus,
     PlanKind,
@@ -143,6 +146,27 @@ class EventReplanEndToEndTest(unittest.IsolatedAsyncioTestCase):
             )
 
         async with self.sessions() as session:
+            with patch.object(
+                AlgorithmService, "plan_replan", side_effect=AlgorithmAuditError("audit failed")
+            ):
+                with self.assertRaises(AlgorithmAuditError):
+                    await create_event(urgent, self.planning(session))
+        async with self.sessions() as session:
+            with patch.object(UnitOfWork, "commit", side_effect=RuntimeError("database failed")):
+                with self.assertRaises(RuntimeError):
+                    await create_event(urgent, self.planning(session))
+        async with self.sessions() as session:
+            self.assertEqual(
+                await session.scalar(select(func.count()).select_from(ReplanningEvent)), 0
+            )
+            self.assertEqual(await session.scalar(select(func.count()).select_from(Plan)), 1)
+            self.assertIsNone(
+                (
+                    await session.scalars(select(Request).where(Request.external_id == 987654321))
+                ).first()
+            )
+
+        async with self.sessions() as session:
             pending = await create_event(urgent, self.planning(session))
         self.assertEqual(pending.plan.kind, PlanKind.EVENT_REPLAN)
         self.assertEqual(pending.plan.based_on_plan_id, base_id)
@@ -176,11 +200,25 @@ class EventReplanEndToEndTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(current.id, base_id)
             rejected_event = await session.get(ReplanningEvent, pending.event_id)
             self.assertEqual(rejected_event.approval_status, ApprovalStatus.REJECTED)
+            base_snapshot = await self.planning(session).prepare_replan_base(Region.VOSTOK)
+            self.assertFalse(base_snapshot.approved_events)
+            report = await DailyReportService(UnitOfWork(session)).build_snapshot(now.date())
+            self.assertFalse(report.regions[0].events)
 
         async with self.sessions() as session:
             approved_urgent = await create_event(urgent, self.planning(session))
         async with self.sessions() as session:
             await PlanService(UnitOfWork(session)).approve(approved_urgent.plan.id)
+        async with self.sessions() as session:
+            base_snapshot = await self.planning(session).prepare_replan_base(Region.VOSTOK)
+            self.assertEqual(len(base_snapshot.approved_events), 1)
+            self.assertEqual(
+                base_snapshot.approved_events[0].request_id, approved_urgent.request_id
+            )
+            report = await DailyReportService(UnitOfWork(session)).build_snapshot(now.date())
+            self.assertEqual(
+                [item.id for item in report.regions[0].events], [approved_urgent.event_id]
+            )
         async with self.sessions() as session:
             with self.assertRaises(PlanningUrgentRequestExists):
                 await create_event(urgent, self.planning(session))
@@ -228,6 +266,10 @@ class EventReplanEndToEndTest(unittest.IsolatedAsyncioTestCase):
                     self.planning(session),
                 )
         async with self.sessions() as session:
+            active_request = await session.get(Request, request_id)
+            active_request.status = RequestStatus.ON_THE_WAY
+            await session.commit()
+        async with self.sessions() as session:
             cancelled = await create_event(
                 EventPlanningRequest(
                     region=Region.VOSTOK,
@@ -236,8 +278,8 @@ class EventReplanEndToEndTest(unittest.IsolatedAsyncioTestCase):
                 ),
                 self.planning(session),
             )
-            self.assertNotEqual(
-                (await session.get(Request, request_id)).status, RequestStatus.CANCELLED
+            self.assertEqual(
+                (await session.get(Request, request_id)).status, RequestStatus.ON_THE_WAY
             )
         async with self.sessions() as session:
             await PlanService(UnitOfWork(session)).approve(cancelled.plan.id)
@@ -316,6 +358,42 @@ class EventReplanEndToEndTest(unittest.IsolatedAsyncioTestCase):
                     ),
                     self.planning(session),
                 )
+
+        async with self.sessions() as session:
+            unavailable_again = await create_event(
+                EventPlanningRequest(
+                    region=Region.VOSTOK,
+                    event_type=ReplanningEventType.ENGINEER_UNAVAILABLE,
+                    engineer_id=engineer_id,
+                ),
+                self.planning(session),
+            )
+        async with self.sessions() as session:
+            await PlanService(UnitOfWork(session)).approve(unavailable_again.plan.id)
+            self.assertFalse((await session.get(Engineer, engineer_id)).is_available)
+
+        async with self.sessions() as session:
+            ordinary = await self.planning(session).replan([Region.VOSTOK], None, None)
+            self.assertEqual(ordinary.status, "success")
+            ordinary_id = ordinary.regions[0].plan_summary.id
+        async with self.sessions() as session:
+            stale_event = await create_event(
+                EventPlanningRequest(
+                    region=Region.VOSTOK,
+                    event_type=ReplanningEventType.ENGINEER_AVAILABLE,
+                    engineer_id=engineer_id,
+                ),
+                self.planning(session),
+            )
+        async with self.sessions() as session:
+            await PlanService(UnitOfWork(session)).approve(ordinary_id)
+        async with self.sessions() as session:
+            with self.assertRaises(PlanNotPendingError):
+                await PlanService(UnitOfWork(session)).approve(stale_event.plan.id)
+            stale_plan = await session.get(Plan, stale_event.plan.id)
+            stale_fact = await session.get(ReplanningEvent, stale_event.event_id)
+            self.assertEqual(stale_plan.approval_status, ApprovalStatus.REJECTED)
+            self.assertEqual(stale_fact.approval_status, ApprovalStatus.REJECTED)
 
 
 class EventRequestValidationTest(unittest.TestCase):
