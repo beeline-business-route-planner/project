@@ -16,6 +16,8 @@ from src.core.algorithm import (
     ReplanSnapshot,
     RequestSnapshot,
 )
+from src.core.algorithm.audit import ResultAuditor
+from src.core.algorithm.exc import AlgorithmAuditError
 from src.core.db.enums import (
     DistributionMode,
     Region,
@@ -70,6 +72,41 @@ class AlgorithmEdgeCaseTest(unittest.TestCase):
                 self.assertEqual(
                     result.metrics.assigned_requests_count + len(result.unassigned), 20
                 )
+
+    def test_audit_rejects_duplicate_routes_for_one_engineer(self) -> None:
+        first_request = self._request(10)
+        second_request = self._request(16)
+        engineer = self._engineer(1)
+        first = self._initial((first_request,), (engineer,), AlgorithmVariant.GREEDY)
+        second = self._initial((second_request,), (engineer,), AlgorithmVariant.GREEDY)
+        service = AlgorithmService()
+        draft = service.prepare_initial(
+            InitialPlanningSnapshot(
+                region=Region.VOSTOK,
+                planning_date=self.day,
+                calculation_cutoff_at=datetime.combine(self.day, time(9)),
+                mode=DistributionMode.MIN_ENGINEERS,
+                requests=(first_request, second_request),
+                engineers=(engineer,),
+            )
+        )
+        planning_input = service.build_initial_input(
+            draft,
+            [
+                LayerMatrix(request=item, travel_matrix=_GridMatrix())
+                for item in draft.matrix_requests
+            ],
+        )
+        routes = first.routes + second.routes
+        self.assertEqual(routes[0].stops[0].start, routes[1].stops[0].start)
+        invalid = replace(
+            first,
+            routes=routes,
+            unassigned=(),
+            metrics=service._metrics(routes, (), planning_input.engineers),
+        )
+        with self.assertRaises(AlgorithmAuditError):
+            ResultAuditor().audit(planning_input, invalid)
 
     def test_skill_and_vehicle_mismatch_reasons(self) -> None:
         requests = (
