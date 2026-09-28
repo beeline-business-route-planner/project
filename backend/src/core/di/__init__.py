@@ -9,6 +9,7 @@ from src.core.di.requests import RequestsProvider
 from src.core.di.routing import RoutingProvider
 from src.core.di.s3 import S3Provider
 from src.core.di.session import DbProvider
+from src.core.di.travel_matrix import TravelMatrixProvider
 
 __all__ = [
     "AlgorithmProvider",
@@ -22,4 +23,5 @@ __all__ = [
     "ReportsProvider",
     "RoutingProvider",
     "S3Provider",
+    "TravelMatrixProvider",
 ]

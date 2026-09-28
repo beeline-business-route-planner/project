@@ -1,6 +1,6 @@
 from datetime import time
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import (
@@ -73,26 +73,33 @@ class S3Config(BaseModel):
 
 
 class GeocodingConfig(BaseModel):
-    base_url: str = "https://nominatim.openstreetmap.org"
-    user_agent: str = (
-        "beeline-business-route-planner/0.1 "
-        "(+https://github.com/beeline-business-route-planner/project)"
-    )
-    timeout_seconds: float = 15.0
-    min_request_interval_seconds: float = 1.0
-    country_codes: str = "ru"
+    base_url: str = "https://suggestions.dadata.ru"
+    api_key: str = ""
+    timeout_seconds: float = 10.0
+    max_concurrent_requests: int = Field(default=10, gt=0)
+    max_qc_geo: int = Field(default=1, ge=0, le=5)
+    suggestions_count: int = Field(default=5, ge=1, le=20)
 
 
 class RoutingConfig(BaseModel):
-    base_url: str = "https://router.project-osrm.org"
-    profile: str = "driving"
+    """OSRM Table API: отдельный сервер на профиль, пробки не учитываются."""
+
+    car_table_url: str = "https://router.project-osrm.org/table/v1/driving"
+    foot_table_url: str = "https://routing.openstreetmap.de/routed-foot/table/v1/driving"
+    bike_table_url: str = "https://routing.openstreetmap.de/routed-bike/table/v1/driving"
+    user_agent: str = "beeline-business-route-planner/0.1"
     timeout_seconds: float = 60.0
     travel_buffer_multiplier: float = 1.10
-    # Измеренный лимит публичного demo-сервера (router.project-osrm.org):
-    # 100 точек - "200 OK", 101 - "400 TooBig". Самостоятельный инстанс
-    # (см. docs/ROUTING.md) обычно без этого лимита — значение тогда можно
-    # поднять через конфиг, не трогая код.
+    # Измеренный лимит публичных серверов OSRM: 100 точек — "200 OK", 101 — "400 TooBig".
     max_table_coordinates: int = 100
+    public_transport_speed_kmh: float = Field(default=20.0, gt=0)
+    public_transport_wait_minutes: int = Field(default=10, ge=0)
+
+
+class TravelMatrixConfig(BaseModel):
+    """Провайдер матриц времени и расстояния для алгоритма."""
+
+    provider: Literal["osrm", "dgis"] = "osrm"
 
 
 class DgisConfig(BaseModel):
@@ -100,7 +107,20 @@ class DgisConfig(BaseModel):
     api_key: str = ""
     api_version: str = "2.0"
     timeout_seconds: float = 60.0
-    max_matrix_points: int = 25
+    max_matrix_sources: int = 10
+    max_matrix_targets: int = 10
+    rate_limit_retries: int = Field(default=4, ge=0)
+    rate_limit_backoff_seconds: float = Field(default=2.0, gt=0)
+    public_transport_types: list[str] = Field(
+        default_factory=lambda: [
+            "bus",
+            "trolleybus",
+            "tram",
+            "metro",
+            "shuttle_bus",
+            "suburban_train",
+        ]
+    )
 
 
 class PlanningConfig(BaseModel):
@@ -118,14 +138,15 @@ class AlgorithmConfig(BaseModel):
     route_candidate_improvement_rounds: int = 2
     route_candidates_per_improvement_round: int = 4
     selection_node_budget: int = 5000
-    lns_iterations: int = 60
+    lns_iterations: int = 95
     lns_random_seed: int = 20260925
     lns_min_removal_fraction: float = 0.08
     lns_max_removal_fraction: float = 0.3
     lns_insertion_noise: float = 0.15
     lns_acceptance_threshold: float = 0.02
     lns_new_route_penalty_minutes: int = 10_000
-    lns_balance_load_weight: float = 0.25
+    lns_balance_load_weight: float = 0.5
+    emergency_phase_state_budget: int = 50_000
 
 
 class LoggingConfig(BaseModel):
@@ -143,6 +164,7 @@ class Config(BaseSettings):
     s3: S3Config = Field(default_factory=S3Config)
     geocoding: GeocodingConfig = Field(default_factory=GeocodingConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
+    travel_matrix: TravelMatrixConfig = Field(default_factory=TravelMatrixConfig)
     dgis: DgisConfig = Field(default_factory=DgisConfig)
     planning: PlanningConfig = Field(default_factory=PlanningConfig)
     algorithm: AlgorithmConfig = Field(default_factory=AlgorithmConfig)

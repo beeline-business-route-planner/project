@@ -110,19 +110,18 @@ class ReplanDecisionIntegrationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PlanStopAlreadyStartedError):
             await self.service._validate_approval(self.plan, self.now, self.created_at)
 
-    def test_departed_stop_cannot_change_before_work_starts(self) -> None:
+    def test_waiting_stop_can_change_before_work_starts(self) -> None:
         base = self._waiting_stop()
         changed = SimpleNamespace(**vars(base))
         changed.planned_start += timedelta(minutes=10)
         changed.planned_finish += timedelta(minutes=10)
         changed.is_locked = False
-        with self.assertRaises(PlanStopAlreadyStartedError):
-            PlanService._validate_past_stops([changed], [base], self.now)
+        PlanService._validate_past_stops([changed], [base], self.now, frozenset())
 
     def test_identical_departed_stop_can_be_approved_before_work_starts(self) -> None:
         base = self._waiting_stop()
         copied = SimpleNamespace(**vars(base))
-        PlanService._validate_past_stops([copied], [base], self.now)
+        PlanService._validate_past_stops([copied], [base], self.now, frozenset())
 
     def _waiting_stop(self) -> SimpleNamespace:
         return SimpleNamespace(

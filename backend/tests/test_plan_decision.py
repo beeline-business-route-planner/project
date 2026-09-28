@@ -79,16 +79,16 @@ class PastStopDecisionTest(unittest.TestCase):
         return SimpleNamespace(**values)
 
     def test_exact_locked_history_is_allowed(self) -> None:
-        PlanService._validate_past_stops([self._stop()], [self._stop()], self.now)
+        PlanService._validate_past_stops([self._stop()], [self._stop()], self.now, frozenset())
 
     def test_removed_past_stop_is_rejected(self) -> None:
         with self.assertRaises(PlanStopAlreadyStartedError):
-            PlanService._validate_past_stops([], [self._stop()], self.now)
+            PlanService._validate_past_stops([], [self._stop()], self.now, frozenset())
 
     def test_changed_past_stop_is_rejected(self) -> None:
         with self.assertRaises(PlanStopAlreadyStartedError):
             PlanService._validate_past_stops(
-                [self._stop(travel_minutes=12)], [self._stop()], self.now
+                [self._stop(travel_minutes=12)], [self._stop()], self.now, frozenset()
             )
 
     def test_rescheduled_past_stop_is_rejected(self) -> None:
@@ -97,10 +97,15 @@ class PastStopDecisionTest(unittest.TestCase):
                 [self._stop(planned_start=self.now + timedelta(minutes=10))],
                 [self._stop()],
                 self.now,
+                frozenset(),
             )
+
+    def test_stop_released_by_event_may_leave_past(self) -> None:
+        stop = self._stop()
+        PlanService._validate_past_stops([], [stop], self.now, frozenset({stop.request_id}))
 
     def test_unlocked_past_stop_is_rejected(self) -> None:
         with self.assertRaises(PlanStopAlreadyStartedError):
             PlanService._validate_past_stops(
-                [self._stop(is_locked=False)], [self._stop()], self.now
+                [self._stop(is_locked=False)], [self._stop()], self.now, frozenset()
             )

@@ -91,7 +91,7 @@ class ReplanPreparationTest(unittest.IsolatedAsyncioTestCase):
         self.uow = SimpleNamespace(
             plans=SimpleNamespace(
                 get_current=AsyncMock(return_value=self.plan),
-                has_approved_initial=AsyncMock(return_value=True),
+                get_approved_initial_cutoff=AsyncMock(return_value=datetime(2026, 9, 23, 9, 30)),
             ),
             plan_stops=SimpleNamespace(get_by_plan_id=AsyncMock(return_value=[self.stop])),
             plan_unassigned_requests=SimpleNamespace(get_by_plan_id=AsyncMock(return_value=[])),
@@ -107,6 +107,9 @@ class ReplanPreparationTest(unittest.IsolatedAsyncioTestCase):
                 )
             ),
             requests=SimpleNamespace(get_by_ids=AsyncMock(return_value=[self.request])),
+            replanning_events=SimpleNamespace(
+                list_approved_for_region_day=AsyncMock(return_value=[])
+            ),
             engineers=SimpleNamespace(get_by_ids=AsyncMock(return_value=[self.engineer])),
             commit=AsyncMock(),
             rollback=AsyncMock(),
@@ -119,6 +122,7 @@ class ReplanPreparationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.base_plan_id, self.plan.id)
         self.assertEqual(snapshot.upload_id, self.plan.upload_id)
         self.assertEqual(snapshot.calculation_cutoff_at, self.cutoff)
+        self.assertEqual(snapshot.initial_cutoff_at, datetime(2026, 9, 23, 9, 30))
         self.assertEqual(snapshot.requests[0].id, self.request.id)
         self.assertEqual(snapshot.engineers[0].id, self.engineer.id)
         self.assertEqual(snapshot.stops[0].planned_start, self.stop.planned_start)
@@ -134,7 +138,7 @@ class ReplanPreparationTest(unittest.IsolatedAsyncioTestCase):
         self.uow.plan_stops.get_by_plan_id.assert_not_awaited()
 
     async def test_missing_initial_is_region_conflict(self) -> None:
-        self.uow.plans.has_approved_initial.return_value = False
+        self.uow.plans.get_approved_initial_cutoff.return_value = None
         with self.assertRaises(PlanningCurrentPlanMissing):
             await self.service.prepare_replan_base(Region.VOSTOK, self.cutoff)
 

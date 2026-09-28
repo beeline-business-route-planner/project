@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Sequence
+from decimal import ROUND_HALF_UP, Decimal
 
 from src.config import cfg
 from src.core.algorithm.dto import Engineer, Job, PlanningLayer
@@ -56,3 +57,13 @@ class PlanningRules:
         if priority not in {1, 2, 3}:
             raise AlgorithmInputError("Приоритет заявки должен быть от 1 до 3")
         return cfg.algorithm.priority_tier_weight ** (3 - priority)
+
+    @staticmethod
+    def stop_distance(kilometers: Decimal) -> Decimal:
+        """Расстояние перехода с точностью хранения остановки (0,01 км).
+
+        Округление на входе, а не на итогах: пробег маршрута и плана — точная сумма
+        сохранённых остановок, и сохранённые агрегаты сходятся с маршрутами.
+        """
+
+        return kilometers.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)

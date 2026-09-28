@@ -1,5 +1,7 @@
+import asyncio
 import unittest
 import uuid
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
@@ -7,17 +9,31 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from openpyxl import Workbook
-from src.api.exc.planning import PlanningFileValidationError
+from src.api.exc.planning import PlanningAddressNotFound, PlanningFileValidationError
 from src.api.planning.dto import ParsedWorkbook, PlanningRegionResult, PlanningUploadFile
 from src.api.planning.parser import PlanningWorkbookParser
 from src.api.planning.service import PlanningService
-from src.core.db.enums import Region
-from src.core.dgis import DgisUnavailableError
+from src.core.algorithm import AlgorithmVariant
+from src.core.db.enums import DistributionMode, PlanStrategy, Region
+from src.core.geocoding import AddressNotFoundError, Coordinates
+from src.core.travel_matrix import TravelMatrixUnavailableError
 from src.core.s3 import S3UnavailableError
+
+
+class _BookDayClock(datetime):
+    """Часы сервиса, для которых «сегодня» — день тестовых книг."""
+
+    @classmethod
+    def now(cls, tz=None):  # type: ignore[no-untyped-def]
+        return datetime(2026, 9, 25, 11)
 
 
 class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        self.settings = (DistributionMode.MIN_ENGINEERS, PlanStrategy.LNS)
+        clock = patch("src.api.planning.service.datetime", _BookDayClock)
+        clock.start()
+        self.addCleanup(clock.stop)
         self.plans = SimpleNamespace(
             lock_region_day=AsyncMock(),
             has_approved_initial=AsyncMock(return_value=False),
@@ -104,12 +120,25 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             ),
             patch("src.api.planning.service.PlanningWorkbookParser.parse", side_effect=parse),
         ):
-            result = await self.service.import_initial_data(files)
+            result = await self.service.import_initial_data(files, *self.settings)
 
         self.assertEqual(result.status, "partial_success")
         self.assertEqual(result.regions[0].error_code, "invalid_file")
         self.assertEqual(result.regions[1].status, "success")
         self.service._run_region.assert_awaited_once()
+
+    async def test_book_of_other_day_is_rejected_before_external_calls(self) -> None:
+        self.service._persist_region = AsyncMock()
+        with patch("src.api.planning.service.datetime") as clock:
+            clock.now.return_value = datetime(2026, 9, 27, 11)
+            result = await self.service._run_region(
+                Region.VOSTOK, self.request_book, self.engineer_book, *self.settings
+            )
+
+        self.assertEqual(result.error_code, "wrong_planning_date")
+        self.service._prepare_region.assert_not_awaited()
+        self.service._persist_region.assert_not_awaited()
+        self.plans.lock_region_day.assert_not_awaited()
 
     async def test_success_commits_after_calculation_with_one_cutoff(self) -> None:
         plan_id = uuid.uuid7()
@@ -133,6 +162,8 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.plans.get_by_id.return_value = SimpleNamespace(
             id=plan_id,
             region=Region.VOSTOK,
+            mode=DistributionMode.MIN_ENGINEERS,
+            strategy=PlanStrategy.LNS,
             planning_date=date(2026, 9, 25),
             created_at=datetime(2026, 9, 25, 11),
             assigned_requests_count=1,
@@ -143,17 +174,17 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         with patch("src.api.planning.service.datetime") as clock:
 
             def now(tz):
-                events.append("cutoff")
+                events.append("now")
                 return datetime(2026, 9, 25, 11)
 
             clock.now.side_effect = now
             result = await self.service._run_region(
-                Region.VOSTOK, self.request_book, self.engineer_book
+                Region.VOSTOK, self.request_book, self.engineer_book, *self.settings
             )
 
         self.assertEqual(result.status, "success")
         self.assertEqual(result.plan_summary.id, plan_id)
-        self.assertEqual(events, ["geocode", "persist", "cutoff", "calculate"])
+        self.assertEqual(events, ["now", "geocode", "persist", "now", "calculate"])
         self.assertEqual(self.uow.flush.await_count, 2)
         self.uow.commit.assert_awaited_once()
         self.uow.rollback.assert_not_awaited()
@@ -177,6 +208,7 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             region=Region.VOSTOK,
             planning_date=date(2026, 9, 25),
             calculation_cutoff_at=cutoff,
+            mode=DistributionMode.BALANCED,
             metrics=metrics,
             routes=(),
             unassigned=(),
@@ -187,10 +219,11 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             build_initial_input=MagicMock(return_value=planning_input),
             plan_initial=MagicMock(return_value=calculated),
             plan_baseline=MagicMock(
-                return_value=SimpleNamespace(metrics=metrics, algorithm_version="baseline-v2")
+                return_value=SimpleNamespace(metrics=metrics, algorithm_version="baseline-v3")
             ),
         )
         self.service._algorithm = algorithm
+        self.service._travel_matrix = SimpleNamespace(build=AsyncMock(return_value=[]))
         self.uow.plans.create = MagicMock(return_value=plan_id)
         self.uow.baseline_results = SimpleNamespace(create=MagicMock())
         self.uow.plan_engineer_states = SimpleNamespace(add_many=MagicMock())
@@ -198,14 +231,28 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.uow.plan_unassigned_requests = SimpleNamespace(add_many=MagicMock())
 
         result = await self.service._calculate_and_persist_initial(
-            uuid.uuid7(), Region.VOSTOK, date(2026, 9, 25), cutoff, [], [], object()
+            uuid.uuid7(),
+            Region.VOSTOK,
+            date(2026, 9, 25),
+            cutoff,
+            [],
+            [],
+            DistributionMode.BALANCED,
+            PlanStrategy.GREEDY,
         )
 
         self.assertEqual(result, plan_id)
         self.assertEqual(algorithm.prepare_initial.call_args.args[0].calculation_cutoff_at, cutoff)
-        algorithm.plan_initial.assert_called_once_with(planning_input)
+        self.assertEqual(
+            algorithm.prepare_initial.call_args.args[0].mode, DistributionMode.BALANCED
+        )
+        algorithm.plan_initial.assert_called_once_with(planning_input, AlgorithmVariant.GREEDY)
         algorithm.plan_baseline.assert_called_once_with(planning_input)
-        self.assertEqual(self.uow.plans.create.call_args.args[0].calculation_cutoff_at, cutoff)
+        saved_plan = self.uow.plans.create.call_args.args[0]
+        self.assertEqual(saved_plan.calculation_cutoff_at, cutoff)
+        self.assertEqual(
+            (saved_plan.mode, saved_plan.strategy), (DistributionMode.BALANCED, PlanStrategy.GREEDY)
+        )
         self.assertEqual(
             self.uow.baseline_results.create.call_args.args[0].initial_plan_id, plan_id
         )
@@ -220,11 +267,11 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
 
         self.service._persist_region = AsyncMock(side_effect=persist)
         self.service._calculate_and_persist_initial = AsyncMock(
-            side_effect=DgisUnavailableError("routing failed")
+            side_effect=TravelMatrixUnavailableError("routing failed")
         )
 
         result = await self.service._run_region(
-            Region.VOSTOK, self.request_book, self.engineer_book
+            Region.VOSTOK, self.request_book, self.engineer_book, *self.settings
         )
 
         self.assertEqual(result.status, "error")
@@ -255,11 +302,13 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         plan_id = uuid.uuid7()
         self.service._persist_region = AsyncMock(side_effect=persist)
         self.service._calculate_and_persist_initial = AsyncMock(
-            side_effect=[DgisUnavailableError("routing failed"), plan_id]
+            side_effect=[TravelMatrixUnavailableError("routing failed"), plan_id]
         )
         self.plans.get_by_id.return_value = SimpleNamespace(
             id=plan_id,
             region=Region.YUGOTSENTR,
+            mode=DistributionMode.MIN_ENGINEERS,
+            strategy=PlanStrategy.LNS,
             planning_date=date(2026, 9, 25),
             created_at=datetime(2026, 9, 25, 11),
             assigned_requests_count=1,
@@ -274,7 +323,7 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
             ),
             patch("src.api.planning.service.PlanningWorkbookParser.parse", side_effect=parse),
         ):
-            result = await self.service.import_initial_data(files)
+            result = await self.service.import_initial_data(files, *self.settings)
 
         self.assertEqual(result.status, "partial_success")
         self.assertEqual([item.status for item in result.regions], ["error", "success"])
@@ -288,12 +337,14 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
     async def test_cleanup_still_runs_when_database_rollback_fails(self) -> None:
         self.service._persist_region = AsyncMock(return_value=(uuid.uuid7(), [], []))
         self.service._calculate_and_persist_initial = AsyncMock(
-            side_effect=DgisUnavailableError("routing failed")
+            side_effect=TravelMatrixUnavailableError("routing failed")
         )
         self.uow.rollback.side_effect = RuntimeError("database connection lost")
 
         with self.assertRaises(RuntimeError):
-            await self.service._run_region(Region.VOSTOK, self.request_book, self.engineer_book)
+            await self.service._run_region(
+                Region.VOSTOK, self.request_book, self.engineer_book, *self.settings
+            )
 
         self.service._delete_uploaded_objects.assert_awaited_once()
         self.uow.commit.assert_not_awaited()
@@ -301,12 +352,12 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
     async def test_cleanup_failure_is_visible_in_region_result(self) -> None:
         self.service._persist_region = AsyncMock(return_value=(uuid.uuid7(), [], []))
         self.service._calculate_and_persist_initial = AsyncMock(
-            side_effect=DgisUnavailableError("routing failed")
+            side_effect=TravelMatrixUnavailableError("routing failed")
         )
         self.service._delete_uploaded_objects.return_value = False
 
         result = await self.service._run_region(
-            Region.VOSTOK, self.request_book, self.engineer_book
+            Region.VOSTOK, self.request_book, self.engineer_book, *self.settings
         )
 
         self.assertEqual(result.error_code, "storage_cleanup_failed")
@@ -324,11 +375,43 @@ class InitialOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.delete_file.await_count, 2)
         sleep.assert_awaited_once()
 
+    async def test_region_addresses_are_geocoded_concurrently_and_tolerate_misses(self) -> None:
+        active = 0
+        peak = 0
+
+        class SlowGeocoder:
+            async def geocode(self, address: str) -> Coordinates:
+                nonlocal active, peak
+                active += 1
+                peak = max(peak, active)
+                await asyncio.sleep(0.01)
+                active -= 1
+                if address == "missing":
+                    raise AddressNotFoundError(address)
+                return Coordinates(Decimal("55.7"), Decimal("37.6"))
+
+        requests = tuple(SimpleNamespace(address=f"address {index}") for index in range(5))
+        book = replace(self.request_book, requests=requests)
+        self.service._geocoding = SlowGeocoder()
+
+        coordinates = await PlanningService._prepare_region(self.service, book, self.engineer_book)
+
+        self.assertEqual(set(coordinates), {"office", *(item.address for item in requests)})
+        self.assertGreater(peak, 1)
+        with_missing = replace(book, requests=(*requests, SimpleNamespace(address="missing")))
+        coordinates = await PlanningService._prepare_region(
+            self.service, with_missing, self.engineer_book
+        )
+        self.assertNotIn("missing", coordinates)
+        missing_office = replace(book, office_address="missing")
+        with self.assertRaises(PlanningAddressNotFound):
+            await PlanningService._prepare_region(self.service, missing_office, self.engineer_book)
+
     async def test_approved_initial_rejects_upload_before_external_calls(self) -> None:
         self.plans.has_approved_initial.return_value = True
 
         result = await self.service._run_region(
-            Region.VOSTOK, self.request_book, self.engineer_book
+            Region.VOSTOK, self.request_book, self.engineer_book, *self.settings
         )
 
         self.assertEqual(result.error_code, "initial_already_approved")

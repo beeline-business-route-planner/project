@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile
 
 from src.api.planning.dto import (
     EventPlanningCommand,
@@ -23,6 +23,7 @@ from src.api.planning.schemas import (
 )
 from src.api.planning.service import PlanningService
 from src.config import cfg
+from src.core.db.enums import DistributionMode, PlanStrategy
 
 router = APIRouter(prefix="/planning", tags=["planning"], route_class=DishkaRoute)
 
@@ -31,6 +32,8 @@ router = APIRouter(prefix="/planning", tags=["planning"], route_class=DishkaRout
 async def import_initial_planning_data(
     service: FromDishka[PlanningService],
     files: Annotated[list[UploadFile], File()],
+    mode: Annotated[DistributionMode, Form()] = DistributionMode.MIN_ENGINEERS,
+    strategy: Annotated[PlanStrategy, Form()] = PlanStrategy.LNS,
 ) -> InitialPlanningResponse:
     uploaded_files: list[PlanningUploadFile] = []
     try:
@@ -49,7 +52,7 @@ async def import_initial_planning_data(
         for file in files:
             await file.close()
 
-    result = await service.import_initial_data(uploaded_files)
+    result = await service.import_initial_data(uploaded_files, mode, strategy)
     return InitialPlanningResponse(
         status=result.status,
         regions=[
@@ -79,7 +82,7 @@ async def replan(
     request: ReplanPlanningRequest,
     service: FromDishka[PlanningService],
 ) -> ReplanPlanningResponse:
-    result = await service.replan(request.regions)
+    result = await service.replan(request.regions, request.mode, request.strategy)
     return ReplanPlanningResponse(
         status=result.status,
         regions=[

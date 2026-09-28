@@ -3,9 +3,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from src.core.algorithm.dto import Engineer, InitialPlanningInput, Job, PlanningLayer, Stop
-from src.core.algorithm.enums import DistributionMode
 from src.core.algorithm.materialization import ScheduleMaterializer
 from src.core.algorithm.rules import PlanningRules
+from src.core.db.enums import DistributionMode
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,9 @@ class _InsertionCandidate:
     stops: tuple[Stop, ...]
     added_travel_minutes: int
     projected_service_minutes: int
+    """Работа бригады за день после вставки, включая прожитую историю replan."""
+    opens_new_engineer: bool
+    """Вставка задействует бригаду, у которой в плане дня ещё нет ни одной заявки."""
 
 
 class GreedyPlanner:
@@ -214,16 +217,19 @@ class GreedyPlanner:
                         request_ids=proposed_ids,
                         stops=proposed_stops,
                         added_travel_minutes=projected_travel - current_travel,
-                        projected_service_minutes=sum(
+                        projected_service_minutes=engineer.history_service_minutes
+                        + sum(
                             jobs_by_id[request_id].service_minutes for request_id in proposed_ids
                         ),
+                        opens_new_engineer=not current_ids
+                        and engineer.history_service_minutes == 0,
                     )
                 )
         if not candidates:
             return None
         return min(
             candidates,
-            key=lambda candidate: self._candidate_key(candidate, routes, planning_input.mode),
+            key=lambda candidate: self._candidate_key(candidate, planning_input.mode),
         )
 
     @staticmethod
@@ -246,14 +252,13 @@ class GreedyPlanner:
             for request_id in layer.request_ids
         }
 
+    @staticmethod
     def _candidate_key(
-        self,
         candidate: _InsertionCandidate,
-        routes: dict[uuid.UUID, tuple[uuid.UUID, ...]],
         mode: DistributionMode,
     ) -> tuple[int, int, int, str, int]:
         mode_score = (
-            int(not routes[candidate.engineer_id])
+            int(candidate.opens_new_engineer)
             if mode == DistributionMode.MIN_ENGINEERS
             else candidate.projected_service_minutes
         )

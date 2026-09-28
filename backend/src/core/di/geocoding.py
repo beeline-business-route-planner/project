@@ -12,7 +12,10 @@ class GeocodingProvider(Provider):
     async def get_http_session(self) -> AsyncIterator[httpx.AsyncClient]:
         async with httpx.AsyncClient(
             base_url=cfg.geocoding.base_url,
-            headers={"User-Agent": cfg.geocoding.user_agent},
+            headers={
+                "Authorization": f"Token {cfg.geocoding.api_key}",
+                "Accept": "application/json",
+            },
             timeout=cfg.geocoding.timeout_seconds,
         ) as session:
             yield session

@@ -19,7 +19,7 @@ class RoutingProvider(Provider):
     @provide(scope=Scope.APP)
     async def get_routing_client(self) -> AsyncIterator[RoutingClient]:
         async with httpx.AsyncClient(
-            base_url=cfg.routing.base_url,
+            headers={"User-Agent": cfg.routing.user_agent},
             timeout=cfg.routing.timeout_seconds,
         ) as session:
             yield RoutingClient(session)

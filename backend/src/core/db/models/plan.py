@@ -8,11 +8,19 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.db.enums import (
     ApprovalStatus,
+    DistributionMode,
     PlanKind,
+    PlanStrategy,
     Region,
 )
 from src.core.db.models.base import Base
-from src.core.db.types import approval_status_enum, plan_kind_enum, region_enum
+from src.core.db.types import (
+    approval_status_enum,
+    distribution_mode_enum,
+    plan_kind_enum,
+    plan_strategy_enum,
+    region_enum,
+)
 
 
 class Plan(Base):
@@ -24,6 +32,8 @@ class Plan(Base):
     `upload_id` — с какой выгрузки данных посчитан план: для `replan` это та же
     выгрузка, что и у предыдущего плана округа (новых файлов не было), для `initial` —
     свежая. `triggered_by_event_id` заполнен только у `event_replan`.
+    `mode` и `strategy` — с какими режимом и стратегией рассчитан план; replan по
+    умолчанию наследует их от плана, на котором основан.
     Baseline хранится отдельно в `BaselineResult` и не участвует в lifecycle планов.
     """
 
@@ -49,6 +59,8 @@ class Plan(Base):
         unique=True,
     )
     calculation_cutoff_at: Mapped[datetime] = mapped_column(sa.DateTime())
+    mode: Mapped[DistributionMode] = mapped_column(distribution_mode_enum)
+    strategy: Mapped[PlanStrategy] = mapped_column(plan_strategy_enum)
 
     total_mileage_km: Mapped[Decimal] = mapped_column(sa.Numeric(9, 2))
     engineers_used_count: Mapped[int] = mapped_column(sa.SmallInteger())

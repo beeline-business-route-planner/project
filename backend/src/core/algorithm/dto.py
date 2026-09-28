@@ -4,16 +4,23 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol
 
-from src.core.algorithm.enums import DistributionMode
-from src.core.db.enums import Region, RequestStatus, Skill, UnassignedReason, VehicleType
+from src.core.db.enums import (
+    DistributionMode,
+    Region,
+    ReplanningEventType,
+    RequestStatus,
+    Skill,
+    UnassignedReason,
+    VehicleType,
+)
 
 
 class TravelMatrix(Protocol):
-    """Прогноз времени и расстояния, полученный вне алгоритма."""
+    """Прогноз времени и расстояния, полученный вне алгоритма; `None` — маршрута нет."""
 
-    def minutes(self, from_id: uuid.UUID, to_id: uuid.UUID) -> int: ...
+    def minutes(self, from_id: uuid.UUID, to_id: uuid.UUID) -> int | None: ...
 
-    def kilometers(self, from_id: uuid.UUID, to_id: uuid.UUID) -> Decimal: ...
+    def kilometers(self, from_id: uuid.UUID, to_id: uuid.UUID) -> Decimal | None: ...
 
 
 @dataclass(frozen=True)
@@ -30,6 +37,8 @@ class RequestSnapshot:
     required_skill: Skill
     required_vehicle_type: VehicleType | None
     status: RequestStatus = RequestStatus.NOT_SENT
+    received_at: datetime | None = None
+    """Момент поступления заявки, от которого отсчитывается SLA аварии; `None` — cutoff."""
 
 
 @dataclass(frozen=True)
@@ -46,6 +55,10 @@ class EngineerSnapshot:
     is_available: bool
     ready_at: datetime | None = None
     """Не раньше этого момента инженер свободен в стартовой точке (конец прожитой истории)."""
+    history_service_minutes: int = 0
+    """Минуты работы в зафиксированной истории дня; больше нуля — бригада уже задействована."""
+    returned_at: datetime | None = None
+    """Момент последнего возвращения в строй: после него инженер стартует из своей точки."""
 
 
 @dataclass(frozen=True)
@@ -110,6 +123,8 @@ class Engineer:
     skills: frozenset[Skill]
     vehicle_type: VehicleType
     is_available: bool
+    history_service_minutes: int = 0
+    """Работа в зафиксированной истории replan: цель режима считается за весь день."""
 
 
 @dataclass(frozen=True)
@@ -247,6 +262,7 @@ class RouteCandidate:
     priority_score: int
     travel_minutes: int
     service_minutes: int
+    history_service_minutes: int = 0
 
 
 @dataclass(frozen=True, order=True)
@@ -359,6 +375,22 @@ class ReplanSnapshot:
 
 
 @dataclass(frozen=True)
+class ReplanEvent:
+    """Одно валидированное внештатное событие, применяемое к snapshot event replan.
+
+    Цель задаётся ровно одним полем по типу: `urgent_request` — полная новая заявка,
+    `request_cancelled` — `request_id`, `engineer_unavailable`/`engineer_available` —
+    `engineer_id`.
+    """
+
+    event_type: ReplanningEventType
+    occurred_at: datetime
+    urgent_request: RequestSnapshot | None = None
+    request_id: uuid.UUID | None = None
+    engineer_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
 class ReplanDraft:
     """Зафиксированная история и черновик будущего хвоста, ожидающий матриц."""
 
@@ -366,6 +398,7 @@ class ReplanDraft:
     locked_stops: tuple[BasePlanStop, ...]
     cancelled_request_ids: frozenset[uuid.UUID]
     tail: InitialPlanningDraft
+    event: ReplanEvent | None = None
 
 
 @dataclass(frozen=True)
@@ -376,6 +409,7 @@ class ReplanInput:
     locked_stops: tuple[BasePlanStop, ...]
     cancelled_request_ids: frozenset[uuid.UUID]
     tail: InitialPlanningInput
+    event: ReplanEvent | None = None
 
 
 @dataclass(frozen=True)
