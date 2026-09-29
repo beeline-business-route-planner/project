@@ -72,6 +72,7 @@ route_candidate_improvement_rounds = 2
 route_candidates_per_improvement_round = 4
 selection_node_budget = 5000
 lns_iterations = 95
+lns_descent_attempt_budget = 2000000
 lns_random_seed = 20260925
 lns_min_removal_fraction = 0.08
 lns_max_removal_fraction = 0.3

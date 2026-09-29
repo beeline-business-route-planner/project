@@ -1,8 +1,9 @@
 import random
 import uuid
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
+from functools import lru_cache
 
 from src.config import cfg
 from src.core.algorithm.diagnostics import AlgorithmDiagnostics
@@ -40,6 +41,7 @@ class _RouteSchedule:
     finishes_us: tuple[int, ...]
     travel_in: tuple[int, ...]
     max_shift_us: tuple[int, ...]
+    service_load_minutes: int
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,11 @@ class LnsPlanner:
     def assign(
         self, planning_input: InitialPlanningInput
     ) -> dict[uuid.UUID, tuple[uuid.UUID, ...]]:
+        planning_input = replace(
+            planning_input,
+            jobs=tuple(sorted(planning_input.jobs, key=lambda job: job.id.int)),
+            engineers=tuple(sorted(planning_input.engineers, key=lambda engineer: engineer.id.int)),
+        )
         jobs_by_id = {job.id: job for job in planning_input.jobs}
         layers_by_request = PlanningRules.index_layers(planning_input.layers, jobs_by_id)
         starts = [self._greedy.assign(planning_input)]
@@ -149,6 +156,13 @@ class _LnsSearch:
             for engineer in self._engineers
         }
         self._cutoff_us = LayeredGraphPlanner.timestamp_us(planning_input.calculation_cutoff_at)
+        self._engineer_times = {
+            engineer.id: (
+                max(LayeredGraphPlanner.timestamp_us(engineer.available_from), self._cutoff_us),
+                LayeredGraphPlanner.timestamp_us(engineer.shift_end),
+            )
+            for engineer in self._engineers
+        }
         self._timings = {
             job.id: _JobTiming(
                 release_us=LayeredGraphPlanner.timestamp_us(job.release_at),
@@ -159,9 +173,11 @@ class _LnsSearch:
             )
             for job in planning_input.jobs
         }
-        self._travel_cache: dict[tuple[str, uuid.UUID, uuid.UUID], int] = {}
+        self._travel_cache: dict[tuple[str, int, int], int] = {}
         self._min_engineers = planning_input.mode == DistributionMode.MIN_ENGINEERS
         self._operator_uses = dict.fromkeys(RuinOperator, 0)
+        self._descent_attempts = 0
+        self._cached_schedule = lru_cache(maxsize=8192)(self._compute_schedule)
 
     def run(self, starts: Sequence[dict[uuid.UUID, tuple[uuid.UUID, ...]]]) -> _SearchOutcome:
         """Ищет от лучшего из допустимых стартовых решений (greedy и известные решения)."""
@@ -236,7 +252,7 @@ class _LnsSearch:
                 bool(schedule.request_ids) or schedule.engineer.history_service_minutes > 0
             )
             travel_minutes += sum(schedule.travel_in)
-            service_loads.append(self._service_minutes(schedule))
+            service_loads.append(schedule.service_load_minutes)
         mode_score = (
             -used_count
             if self._min_engineers
@@ -466,10 +482,7 @@ class _LnsSearch:
     def _best_insertion(self, schedule: _RouteSchedule, request_id: uuid.UUID) -> _Insertion | None:
         engineer = schedule.engineer
         timing = self._timings[request_id]
-        shift_end_us = LayeredGraphPlanner.timestamp_us(engineer.shift_end)
-        route_start_us = max(
-            LayeredGraphPlanner.timestamp_us(engineer.available_from), self._cutoff_us
-        )
+        route_start_us, shift_end_us = self._engineer_times[engineer.id]
         request_ids = schedule.request_ids
         best: _Insertion | None = None
         for position in range(len(request_ids) + 1):
@@ -558,19 +571,19 @@ class _LnsSearch:
         """Локальный спуск межмаршрутными ходами: перенос, обмен, обмен хвостов.
 
         Первый найденный в детерминированном порядке ход со строго лучшим полным ключом
-        применяется сразу; спуск идёт до отсутствия улучшений. Изменённые маршруты затем
-        переоптимизирует граф.
+        применяется сразу. Спуск завершается при отсутствии улучшений или исчерпании
+        бюджета попыток. Изменённые маршруты затем переоптимизирует граф.
         """
 
         routes = dict(routes)
         key = self._key(routes)
         changed: set[uuid.UUID] = set()
-        while True:
-            move = (
-                self._improving_relocate(routes, key)
-                or self._improving_swap(routes, key)
-                or self._improving_tail_exchange(routes, key)
-            )
+        while self._descent_attempts < cfg.algorithm.lns_descent_attempt_budget:
+            move = self._improving_relocate(routes, key)
+            if move is None and self._descent_attempts < cfg.algorithm.lns_descent_attempt_budget:
+                move = self._improving_swap(routes, key)
+            if move is None and self._descent_attempts < cfg.algorithm.lns_descent_attempt_budget:
+                move = self._improving_tail_exchange(routes, key)
             if move is None:
                 break
             routes.update(move)
@@ -595,11 +608,20 @@ class _LnsSearch:
                 for target in ordered:
                     if target is source or request_id not in self._eligible_ids[target.engineer.id]:
                         continue
+                    if (
+                        self._min_engineers
+                        and reduced.request_ids
+                        and not target.request_ids
+                        and target.engineer.history_service_minutes == 0
+                    ):
+                        continue
+                    if not self._try_descent_attempt():
+                        return None
                     grown = self._inserted(target, request_id)
                     if grown is None:
                         continue
                     move = {source.engineer.id: reduced, target.engineer.id: grown}
-                    if self._key({**routes, **move}) > key:
+                    if self._move_key(routes, key, move) > key:
                         return move
         return None
 
@@ -611,6 +633,7 @@ class _LnsSearch:
         """Обмен двух заявок одного окна между бригадами, каждая — на свою лучшую позицию."""
 
         ordered = sorted(routes.values(), key=lambda schedule: schedule.engineer.id.int)
+        reduced: dict[uuid.UUID, dict[int, _RouteSchedule | None]] = {}
         for left_index, left in enumerate(ordered):
             for right in ordered[left_index + 1 :]:
                 for left_position, left_id in enumerate(left.request_ids):
@@ -623,35 +646,52 @@ class _LnsSearch:
                             != self._timings[left_id].window_start
                         ):
                             continue
-                        move = self._swapped(left, left_position, right, right_position)
-                        if move is not None and self._key({**routes, **move}) > key:
+                        if not self._try_descent_attempt():
+                            return None
+                        left_cache = reduced.setdefault(left.engineer.id, {})
+                        if left_position not in left_cache:
+                            left_cache[left_position] = self._schedule(
+                                left.engineer,
+                                (
+                                    *left.request_ids[:left_position],
+                                    *left.request_ids[left_position + 1 :],
+                                ),
+                            )
+                        right_cache = reduced.setdefault(right.engineer.id, {})
+                        if right_position not in right_cache:
+                            right_cache[right_position] = self._schedule(
+                                right.engineer,
+                                (
+                                    *right.request_ids[:right_position],
+                                    *right.request_ids[right_position + 1 :],
+                                ),
+                            )
+                        left_reduced = left_cache[left_position]
+                        right_reduced = right_cache[right_position]
+                        if left_reduced is None or right_reduced is None:
+                            continue
+                        move = self._swapped(
+                            left_reduced,
+                            left_id,
+                            right_reduced,
+                            right_id,
+                        )
+                        if move is not None and self._move_key(routes, key, move) > key:
                             return move
         return None
 
     def _swapped(
         self,
-        left: _RouteSchedule,
-        left_position: int,
-        right: _RouteSchedule,
-        right_position: int,
+        left_reduced: _RouteSchedule,
+        left_id: uuid.UUID,
+        right_reduced: _RouteSchedule,
+        right_id: uuid.UUID,
     ) -> dict[uuid.UUID, _RouteSchedule] | None:
-        left_id = left.request_ids[left_position]
-        right_id = right.request_ids[right_position]
-        left_reduced = self._schedule(
-            left.engineer,
-            (*left.request_ids[:left_position], *left.request_ids[left_position + 1 :]),
-        )
-        right_reduced = self._schedule(
-            right.engineer,
-            (*right.request_ids[:right_position], *right.request_ids[right_position + 1 :]),
-        )
-        if left_reduced is None or right_reduced is None:
-            return None
         new_left = self._inserted(left_reduced, right_id)
         new_right = self._inserted(right_reduced, left_id)
         if new_left is None or new_right is None:
             return None
-        return {left.engineer.id: new_left, right.engineer.id: new_right}
+        return {left_reduced.engineer.id: new_left, right_reduced.engineer.id: new_right}
 
     def _improving_tail_exchange(
         self,
@@ -673,18 +713,81 @@ class _LnsSearch:
                             left.engineer.id
                         ].issuperset(right_tail):
                             continue
-                        new_left = self._schedule(
-                            left.engineer, (*left.request_ids[:left_cut], *right_tail)
-                        )
-                        new_right = self._schedule(
-                            right.engineer, (*right.request_ids[:right_cut], *left_tail)
-                        )
+                        left_ids = (*left.request_ids[:left_cut], *right_tail)
+                        right_ids = (*right.request_ids[:right_cut], *left_tail)
+                        if self._min_engineers:
+                            old_used = (
+                                bool(left.request_ids) or left.engineer.history_service_minutes > 0
+                            ) + (
+                                bool(right.request_ids)
+                                or right.engineer.history_service_minutes > 0
+                            )
+                            new_used = (
+                                bool(left_ids) or left.engineer.history_service_minutes > 0
+                            ) + (bool(right_ids) or right.engineer.history_service_minutes > 0)
+                            if new_used > old_used:
+                                continue
+                        if not self._try_descent_attempt():
+                            return None
+                        if (
+                            left_cut
+                            and right_tail
+                            and self._timings[left.request_ids[left_cut - 1]].window_start
+                            > self._timings[right_tail[0]].window_start
+                        ) or (
+                            right_cut
+                            and left_tail
+                            and self._timings[right.request_ids[right_cut - 1]].window_start
+                            > self._timings[left_tail[0]].window_start
+                        ):
+                            continue
+                        new_left = self._schedule(left.engineer, left_ids)
+                        new_right = self._schedule(right.engineer, right_ids)
                         if new_left is None or new_right is None:
                             continue
                         move = {left.engineer.id: new_left, right.engineer.id: new_right}
-                        if self._key({**routes, **move}) > key:
+                        if self._move_key(routes, key, move) > key:
                             return move
         return None
+
+    def _move_key(
+        self,
+        routes: dict[uuid.UUID, _RouteSchedule],
+        key: tuple[int, int, int, int],
+        move: dict[uuid.UUID, _RouteSchedule],
+    ) -> tuple[int, int, int, int]:
+        """Оценивает перестановку заявок по изменённым маршрутам.
+
+        Relocate, swap и обмен хвостов сохраняют набор заявок, поэтому приоритет и
+        покрытие не меняются. В balanced разброс считается по закэшированной нагрузке
+        всех маршрутов, без повторного суммирования заявок.
+        """
+
+        old_used = sum(
+            bool(routes[engineer_id].request_ids)
+            or routes[engineer_id].engineer.history_service_minutes > 0
+            for engineer_id in move
+        )
+        new_used = sum(
+            bool(schedule.request_ids) or schedule.engineer.history_service_minutes > 0
+            for schedule in move.values()
+        )
+        old_travel = sum(sum(routes[engineer_id].travel_in) for engineer_id in move)
+        new_travel = sum(sum(schedule.travel_in) for schedule in move.values())
+        mode_score = key[2] + old_used - new_used
+        if not self._min_engineers:
+            loads = [
+                move.get(engineer_id, schedule).service_load_minutes
+                for engineer_id, schedule in routes.items()
+            ]
+            mode_score = -(max(loads, default=0) - min(loads, default=0))
+        return key[0], key[1], mode_score, key[3] + old_travel - new_travel
+
+    def _try_descent_attempt(self) -> bool:
+        if self._descent_attempts >= cfg.algorithm.lns_descent_attempt_budget:
+            return False
+        self._descent_attempts += 1
+        return True
 
     def _inserted(self, schedule: _RouteSchedule, request_id: uuid.UUID) -> _RouteSchedule | None:
         """Вставляет заявку на позицию с наименьшим приростом дороги."""
@@ -704,17 +807,20 @@ class _LnsSearch:
     def _schedule(
         self, engineer: Engineer, request_ids: tuple[uuid.UUID, ...]
     ) -> _RouteSchedule | None:
+        return self._cached_schedule(engineer, request_ids)
+
+    def _compute_schedule(
+        self, engineer: Engineer, request_ids: tuple[uuid.UUID, ...]
+    ) -> _RouteSchedule | None:
         """Материализует порядок в целых микросекундах и считает max-shift с конца."""
 
         previous_id = engineer.id
-        previous_finish = max(
-            LayeredGraphPlanner.timestamp_us(engineer.available_from), self._cutoff_us
-        )
-        shift_end_us = LayeredGraphPlanner.timestamp_us(engineer.shift_end)
+        previous_finish, shift_end_us = self._engineer_times[engineer.id]
         previous_window: datetime | None = None
         starts: list[int] = []
         finishes: list[int] = []
         travel_in: list[int] = []
+        service_load_minutes = engineer.history_service_minutes
         for request_id in request_ids:
             timing = self._timings[request_id]
             if previous_window is not None and timing.window_start < previous_window:
@@ -727,6 +833,7 @@ class _LnsSearch:
             starts.append(start)
             finishes.append(finish)
             travel_in.append(travel)
+            service_load_minutes += self._jobs_by_id[request_id].service_minutes
             previous_id, previous_finish, previous_window = request_id, finish, timing.window_start
         max_shift = [0] * len(request_ids)
         for index in range(len(request_ids) - 1, -1, -1):
@@ -745,14 +852,15 @@ class _LnsSearch:
             finishes_us=tuple(finishes),
             travel_in=tuple(travel_in),
             max_shift_us=tuple(max_shift),
+            service_load_minutes=service_load_minutes,
         )
 
     @staticmethod
     def _empty_schedule(engineer: Engineer) -> _RouteSchedule:
-        return _RouteSchedule(engineer, (), (), (), (), ())
+        return _RouteSchedule(engineer, (), (), (), (), (), engineer.history_service_minutes)
 
     def _travel(self, engineer: Engineer, from_id: uuid.UUID, to_id: uuid.UUID) -> int:
-        key = (engineer.vehicle_type.value, from_id, to_id)
+        key = (engineer.vehicle_type.value, from_id.int, to_id.int)
         cached = self._travel_cache.get(key)
         if cached is None:
             cached = LayeredGraphPlanner.travel_minutes(
@@ -764,9 +872,7 @@ class _LnsSearch:
     def _service_minutes(self, schedule: _RouteSchedule) -> int:
         """Работа бригады за день: прожитая история replan и будущие заявки."""
 
-        return schedule.engineer.history_service_minutes + sum(
-            self._jobs_by_id[request_id].service_minutes for request_id in schedule.request_ids
-        )
+        return schedule.service_load_minutes
 
     @staticmethod
     def _squared_distance(left: Job, right: Job) -> float:

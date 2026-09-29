@@ -32,7 +32,7 @@ router = APIRouter(prefix="/planning", tags=["planning"], route_class=DishkaRout
 async def import_initial_planning_data(
     service: FromDishka[PlanningService],
     files: Annotated[list[UploadFile], File()],
-    mode: Annotated[DistributionMode, Form()] = DistributionMode.MIN_ENGINEERS,
+    mode: Annotated[DistributionMode, Form()] = DistributionMode.BALANCED,
     strategy: Annotated[PlanStrategy, Form()] = PlanStrategy.LNS,
 ) -> InitialPlanningResponse:
     uploaded_files: list[PlanningUploadFile] = []
