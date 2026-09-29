@@ -82,7 +82,6 @@ Frontend: <http://localhost:5173>, backend: <http://localhost:8000>, интер�
 [проектных материалах](docs/README.md), целевые user cases — в
 [`backend/docs/user-case/`](backend/docs/user-case/README.md). При расхождении
 старой спецификации с поведением проверяйте код и OpenAPI.
->>>>>>> origin/dev
 
 Проверки: `cd backend && make check && make test`;
 `cd frontend && npm run typecheck && npm run build`. DB/E2E-наборы требуют Docker;
