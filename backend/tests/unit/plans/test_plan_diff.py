@@ -43,12 +43,8 @@ class PlanDiffEngineTest(unittest.TestCase):
 
         result = PlanDiffEngine.compare(before, after)
 
-        self.assertTrue(
-            all(item.changes == (RequestChange.UNCHANGED,) for item in result.requests)
-        )
-        self.assertTrue(
-            all(item.change == EngineerChange.UNCHANGED for item in result.engineers)
-        )
+        self.assertTrue(all(item.changes == (RequestChange.UNCHANGED,) for item in result.requests))
+        self.assertTrue(all(item.change == EngineerChange.UNCHANGED for item in result.engineers))
 
     def test_engineer_can_be_added_and_removed(self) -> None:
         before = self._snapshot(1, (), (self.engineer_one,))

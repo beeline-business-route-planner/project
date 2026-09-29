@@ -24,7 +24,8 @@ from src.core.db.enums import Region, ReplanningEventType, RequestTypeBk, Reques
 from src.core.db.models import Plan
 from src.core.db.uow import UnitOfWork
 from src.core.s3 import ExportDownload, ExportKind
-from tests.test_g02_initial_e2e import FakeGeocoder, FakeMatrixService, FakeStorage, pair
+
+from tests.support.planning import FakeGeocoder, FakeMatrixService, FakeStorage, pair
 
 DATABASE_URL = os.environ.get("G05_TEST_DATABASE_URL")
 

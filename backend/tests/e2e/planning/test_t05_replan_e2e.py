@@ -17,7 +17,8 @@ from src.core.algorithm import AlgorithmService
 from src.core.db.enums import ApprovalStatus, Region, RequestStatus
 from src.core.db.models import Engineer, PlanStop, Request
 from src.core.db.uow import UnitOfWork
-from tests.test_g02_initial_e2e import FakeGeocoder, FakeMatrixService, FakeStorage, pair
+
+from tests.support.planning import FakeGeocoder, FakeMatrixService, FakeStorage, pair
 
 DATABASE_URL = os.environ.get("T05_TEST_DATABASE_URL")
 

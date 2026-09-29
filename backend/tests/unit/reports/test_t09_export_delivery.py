@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, Mock, patch
 from zipfile import ZipFile
 
 from botocore.exceptions import ClientError
-
 from src.api.exc.reports import DailyReportGenerationError, DailyReportStorageError
 from src.api.reports.export import DailyReportZipBuilder
 from src.api.reports.service import DailyReportExportService
@@ -113,15 +112,17 @@ class S3ExportDeliveryTest(unittest.IsolatedAsyncioTestCase):
         storage.presigned_download_url = AsyncMock(return_value="https://example.invalid/file")
         storage.upload_file = AsyncMock()
         delivery = S3ExportDelivery(storage)
-        params = dict(
-            kind=ExportKind.PLAN,
-            planning_date=date(2026, 9, 26),
-            filename="plan-1.xlsx",
-            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        with patch.object(cfg.s3, "max_export_size_bytes", 1):
-            with self.assertRaises(ExportTooLargeError):
-                await delivery.deliver(data=b"too long", **params)
+        params = {
+            "kind": ExportKind.PLAN,
+            "planning_date": date(2026, 9, 26),
+            "filename": "plan-1.xlsx",
+            "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }
+        with (
+            patch.object(cfg.s3, "max_export_size_bytes", 1),
+            self.assertRaises(ExportTooLargeError),
+        ):
+            await delivery.deliver(data=b"too long", **params)
         storage.presigned_download_url.assert_not_awaited()
         storage.upload_file.assert_not_awaited()
 
@@ -249,12 +250,14 @@ class DailyReportExportServiceTest(unittest.IsolatedAsyncioTestCase):
         reports.build_snapshot = AsyncMock(return_value=SimpleNamespace(regions=()))
         delivery = Mock()
         delivery.deliver = AsyncMock(side_effect=S3UnavailableError("unavailable"))
-        with patch(
-            "src.api.reports.service.DailyPdfRenderer.render",
-            return_value={"summary.pdf": b"%PDF-1.4\nsummary"},
+        with (
+            patch(
+                "src.api.reports.service.DailyPdfRenderer.render",
+                return_value={"summary.pdf": b"%PDF-1.4\nsummary"},
+            ),
+            self.assertRaises(DailyReportStorageError),
         ):
-            with self.assertRaises(DailyReportStorageError):
-                await DailyReportExportService(reports, delivery).export(date(2026, 9, 26))
+            await DailyReportExportService(reports, delivery).export(date(2026, 9, 26))
 
     async def test_invalid_report_does_not_upload(self) -> None:
         reports = Mock()
@@ -263,12 +266,14 @@ class DailyReportExportServiceTest(unittest.IsolatedAsyncioTestCase):
         )
         delivery = Mock()
         delivery.deliver = AsyncMock()
-        with patch(
-            "src.api.reports.service.DailyPdfRenderer.render",
-            return_value={"summary.pdf": b"%PDF-1.4\nsummary"},
+        with (
+            patch(
+                "src.api.reports.service.DailyPdfRenderer.render",
+                return_value={"summary.pdf": b"%PDF-1.4\nsummary"},
+            ),
+            self.assertRaises(DailyReportGenerationError),
         ):
-            with self.assertRaises(DailyReportGenerationError):
-                await DailyReportExportService(reports, delivery).export(date(2026, 9, 26))
+            await DailyReportExportService(reports, delivery).export(date(2026, 9, 26))
         delivery.deliver.assert_not_awaited()
 
 

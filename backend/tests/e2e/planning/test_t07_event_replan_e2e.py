@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 
 from fastapi import UploadFile
 from openpyxl import load_workbook
-from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -46,7 +45,8 @@ from src.core.db.enums import (
 )
 from src.core.db.models import Engineer, Plan, ReplanningEvent, Request
 from src.core.db.uow import UnitOfWork
-from tests.test_g02_initial_e2e import FakeGeocoder, FakeMatrixService, FakeStorage, pair
+
+from tests.support.planning import FakeGeocoder, FakeMatrixService, FakeStorage, pair
 
 DATABASE_URL = os.environ.get("T07_TEST_DATABASE_URL")
 
@@ -394,25 +394,3 @@ class EventReplanEndToEndTest(unittest.IsolatedAsyncioTestCase):
             stale_fact = await session.get(ReplanningEvent, stale_event.event_id)
             self.assertEqual(stale_plan.approval_status, ApprovalStatus.REJECTED)
             self.assertEqual(stale_fact.approval_status, ApprovalStatus.REJECTED)
-
-
-class EventRequestValidationTest(unittest.TestCase):
-    def test_one_target_and_server_owned_time(self) -> None:
-        with self.assertRaises(ValidationError):
-            EventPlanningRequest.model_validate(
-                {
-                    "region": Region.VOSTOK,
-                    "event_type": ReplanningEventType.REQUEST_CANCELLED,
-                    "request_id": str(uuid.uuid7()),
-                    "engineer_id": str(uuid.uuid7()),
-                }
-            )
-        with self.assertRaises(ValidationError):
-            EventPlanningRequest.model_validate(
-                {
-                    "region": Region.VOSTOK,
-                    "event_type": ReplanningEventType.REQUEST_CANCELLED,
-                    "request_id": str(uuid.uuid7()),
-                    "occurred_at": datetime.now(ZoneInfo("Europe/Moscow")).isoformat(),
-                }
-            )

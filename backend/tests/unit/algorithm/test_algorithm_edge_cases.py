@@ -3,7 +3,9 @@ import uuid
 from dataclasses import replace
 from datetime import date, datetime, time
 from decimal import Decimal
+from unittest.mock import patch
 
+from src.config import cfg
 from src.core.algorithm import (
     AlgorithmService,
     AlgorithmVariant,
@@ -18,6 +20,7 @@ from src.core.algorithm import (
 )
 from src.core.algorithm.audit import ResultAuditor
 from src.core.algorithm.exc import AlgorithmAuditError
+from src.core.algorithm.strategies.lns import _LnsSearch
 from src.core.db.enums import (
     DistributionMode,
     Region,
@@ -165,6 +168,36 @@ class AlgorithmEdgeCaseTest(unittest.TestCase):
                     self._initial(requests[::-1], engineers[::-1], variant).routes, first.routes
                 )
 
+    def test_lns_returns_a_deterministic_plan_when_descent_budget_is_exhausted(self) -> None:
+        requests = tuple(self._request(number) for number in range(10, 40))
+        engineers = tuple(self._engineer(number) for number in range(1, 4))
+        for mode in DistributionMode:
+            with self.subTest(mode=mode):
+                greedy = self._initial(requests, engineers, AlgorithmVariant.GREEDY, mode=mode)
+
+                with patch.object(cfg.algorithm, "lns_descent_attempt_budget", 1):
+                    first = self._initial(requests, engineers, AlgorithmVariant.LNS, mode=mode)
+                    reordered = self._initial(
+                        requests[::-1], engineers[::-1], AlgorithmVariant.LNS, mode=mode
+                    )
+
+                self.assertEqual(first.routes, reordered.routes)
+                self.assertGreaterEqual(
+                    first.metrics.assigned_requests_count, greedy.metrics.assigned_requests_count
+                )
+
+    def test_lns_schedule_cache_preserves_plan_in_both_modes(self) -> None:
+        requests = tuple(self._request(number) for number in range(30, 60))
+        engineers = tuple(self._engineer(number) for number in range(1, 5))
+
+        for mode in DistributionMode:
+            with self.subTest(mode=mode):
+                with patch.object(_LnsSearch, "_schedule", _LnsSearch._compute_schedule):
+                    uncached = self._initial(requests, engineers, AlgorithmVariant.LNS, mode=mode)
+                cached = self._initial(requests, engineers, AlgorithmVariant.LNS, mode=mode)
+
+                self.assertEqual(cached, uncached)
+
     def test_replan_with_fully_lived_day_keeps_history_only(self) -> None:
         requests = tuple(self._request(number) for number in range(10, 16))
         engineers = (self._engineer(1), self._engineer(2))
@@ -219,6 +252,7 @@ class AlgorithmEdgeCaseTest(unittest.TestCase):
         engineers: tuple[EngineerSnapshot, ...],
         variant: AlgorithmVariant,
         cutoff: time = time(9),
+        mode: DistributionMode = DistributionMode.MIN_ENGINEERS,
     ) -> InitialPlanningResult:
         service = AlgorithmService()
         draft = service.prepare_initial(
@@ -226,7 +260,7 @@ class AlgorithmEdgeCaseTest(unittest.TestCase):
                 region=Region.VOSTOK,
                 planning_date=self.day,
                 calculation_cutoff_at=datetime.combine(self.day, cutoff),
-                mode=DistributionMode.MIN_ENGINEERS,
+                mode=mode,
                 requests=requests,
                 engineers=engineers,
             )

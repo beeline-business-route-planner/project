@@ -122,9 +122,7 @@ class PlanSnapshotAssemblerTest(unittest.IsolatedAsyncioTestCase):
             request_id=included.id,
             reason=UnassignedReason.NO_TIME_SLOT,
         )
-        state = PlanEngineerState(
-            plan_id=plan.id, engineer_id=engineer.id, is_available=True
-        )
+        state = PlanEngineerState(plan_id=plan.id, engineer_id=engineer.id, is_available=True)
         requests = SimpleNamespace(
             get_by_ids=AsyncMock(return_value=[included]),
             get_by_upload_id=AsyncMock(return_value=[included, cancelled]),
@@ -139,9 +137,7 @@ class PlanSnapshotAssemblerTest(unittest.IsolatedAsyncioTestCase):
                 get_by_upload_id=AsyncMock(return_value=[engineer]),
                 get_by_ids=AsyncMock(return_value=[]),
             ),
-            plan_engineer_states=SimpleNamespace(
-                get_by_plan_id=AsyncMock(return_value=[state])
-            ),
+            plan_engineer_states=SimpleNamespace(get_by_plan_id=AsyncMock(return_value=[state])),
         )
 
         snapshot = await PlanService(uow)._load_snapshot(plan)

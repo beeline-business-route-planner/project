@@ -35,15 +35,22 @@ class DgisMatrixServiceTest(unittest.IsolatedAsyncioTestCase):
             requests.append(request)
             return responses[min(len(requests), len(responses)) - 1]
 
-        session = httpx.AsyncClient(base_url="https://dgis.test", transport=httpx.MockTransport(handler))
+        session = httpx.AsyncClient(
+            base_url="https://dgis.test", transport=httpx.MockTransport(handler)
+        )
         self.addAsyncCleanup(session.aclose)
         return DgisMatrixService(DgisClient(session)), requests
 
     async def test_rate_limit_is_retried_and_non_ok_status_is_unreachable(self) -> None:
         routes = [
             {"source_id": 0, "target_id": 1, "status": "OK", "duration": 600, "distance": 5000},
-            {"source_id": 0, "target_id": 2, "status": "PLATFORMS_NOT_FOUND", "duration": 0,
-             "distance": 0},
+            {
+                "source_id": 0,
+                "target_id": 2,
+                "status": "PLATFORMS_NOT_FOUND",
+                "duration": 0,
+                "distance": 0,
+            },
         ]
         service, requests = self._service(
             [httpx.Response(429, json={}), httpx.Response(200, json={"routes": routes})]

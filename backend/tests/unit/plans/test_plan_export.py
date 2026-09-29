@@ -7,7 +7,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock
 
 from openpyxl import load_workbook
-
+from src.api.exc.plans import PlanExportStorageError
 from src.api.plans.diff_dto import (
     PlanMetricsDTO,
     PlanSnapshotDTO,
@@ -15,9 +15,7 @@ from src.api.plans.diff_dto import (
     SnapshotRequestDTO,
 )
 from src.api.plans.export import PlanXlsxExporter
-from src.api.exc.plans import PlanExportStorageError
 from src.api.plans.service import PlanExportService
-from src.core.s3 import ExportDownload, ExportKind, S3UnavailableError
 from src.core.db.enums import (
     ApprovalStatus,
     PlanKind,
@@ -28,6 +26,7 @@ from src.core.db.enums import (
     UnassignedReason,
     VehicleType,
 )
+from src.core.s3 import ExportDownload, ExportKind, S3UnavailableError
 
 
 class PlanXlsxExporterTest(unittest.TestCase):
@@ -139,7 +138,7 @@ class PlanXlsxExporterTest(unittest.TestCase):
                         ["План", "Заявки", "Инженеры", "Неназначенные", "Метрики"],
                     )
                     self.assertEqual(len(workbook.sheetnames), 7)
-                    self.assertEqual(len(set(name.casefold() for name in workbook.sheetnames)), 7)
+                    self.assertEqual(len({name.casefold() for name in workbook.sheetnames}), 7)
                     self.assertTrue(all(len(name) <= 31 for name in workbook.sheetnames))
                     self.assertEqual(workbook["План"]["B5"].value, kind.value)
                     self.assertEqual(workbook["План"]["B6"].value, status.value)

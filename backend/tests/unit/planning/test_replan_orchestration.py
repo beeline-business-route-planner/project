@@ -11,8 +11,8 @@ from src.api.exc.planning import PlanningCurrentPlanMissing
 from src.api.planning.dto import ReplanRegionResult
 from src.api.planning.schemas import ReplanPlanningRequest
 from src.api.planning.service import PlanningService
-from src.core.algorithm.dto import PlanMetrics, ReplanResult, Route, Stop
 from src.core.algorithm import AlgorithmVariant
+from src.core.algorithm.dto import PlanMetrics, ReplanResult, Route, Stop
 from src.core.db.enums import (
     DistributionMode,
     PlanKind,
@@ -147,7 +147,10 @@ class ReplanOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         await self.service._persist_replan_result(base, cancelled, PlanStrategy.LNS)
         self.assertEqual(self.uow.plan_stops.add_many.call_args.args[0], [])
         self.assertEqual(
-            [item.request_id for item in self.uow.plan_unassigned_requests.add_many.call_args.args[0]],
+            [
+                item.request_id
+                for item in self.uow.plan_unassigned_requests.add_many.call_args.args[0]
+            ],
             [uuid.UUID(int=5)],
         )
 
@@ -192,7 +195,9 @@ class ReplanOrchestrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, "success")
         self.assertEqual(result.plan_summary.based_on_plan_id, base_id)
         self.service._to_replan_snapshot.assert_called_once_with(base, DistributionMode.BALANCED)
-        self.assertEqual(self.service._algorithm.plan_replan.call_args.args[1], AlgorithmVariant.LNS)
+        self.assertEqual(
+            self.service._algorithm.plan_replan.call_args.args[1], AlgorithmVariant.LNS
+        )
         self.assertEqual(self.service._persist_replan_result.call_args.args[2], PlanStrategy.LNS)
         self.uow.commit.assert_awaited_once()
         self.uow.rollback.assert_not_awaited()

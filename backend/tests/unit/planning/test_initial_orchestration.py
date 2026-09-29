@@ -16,8 +16,8 @@ from src.api.planning.service import PlanningService
 from src.core.algorithm import AlgorithmVariant
 from src.core.db.enums import DistributionMode, PlanStrategy, Region
 from src.core.geocoding import AddressNotFoundError, Coordinates
-from src.core.travel_matrix import TravelMatrixUnavailableError
 from src.core.s3 import S3UnavailableError
+from src.core.travel_matrix import TravelMatrixUnavailableError
 
 
 class _BookDayClock(datetime):
