@@ -40,13 +40,13 @@ const apiScenarios: Scenario[] = [
 
 const colors = ["#ffd400", "#28c6b7", "#ff7a59", "#54a7ff", "#8ed35f", "#ffb84d"];
 
-const skillMap: Record<string, Skill> = {
+export const skillMap: Record<string, Skill> = {
   local_works: "local",
   connection_and_orders: "connection",
   emergency_works: "emergency",
 };
 
-const vehicleMap: Record<string, Transport> = {
+export const vehicleMap: Record<string, Transport> = {
   car: "car",
   pedestrian: "walking",
   bicycle: "bicycle",
@@ -78,6 +78,7 @@ const unassignedLabels: Record<string, string> = {
   no_time_slot: "Нет совместимого временного окна",
   no_route: "Нет маршрута до адреса",
   no_available_engineer: "Нет доступного инженера",
+  manual_decision: "Снято диспетчером вручную",
 };
 
 const workLabels: Record<string, string> = {
@@ -195,7 +196,7 @@ function normalizePlans(plans: BackendPlanSummary[]): PlanSummary[] {
     .sort((left, right) => right.created_at.localeCompare(left.created_at))
     .map((plan) => ({
       id: plan.id,
-      title: `${planKindLabels[plan.kind] ?? "План"} · ${time.format(new Date(plan.created_at))}`,
+      title: `${plan.strategy === "manual" ? "Ручной план" : planKindLabels[plan.kind] ?? "План"} · ${time.format(new Date(plan.created_at))}`,
       kind: plan.kind,
       is_current: plan.is_current,
       status: planStatus(plan),

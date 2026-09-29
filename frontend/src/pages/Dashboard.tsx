@@ -91,6 +91,7 @@ export function Dashboard({ planner, focusRequestId = null }: { planner: Planner
     overdue: data.requests.filter((item) => item.status === "OVERDUE").length,
     done: data.requests.filter((item) => item.status === "COMPLETED").length,
   };
+  const hasInitialPlan = data.plans.some((plan) => plan.kind === "initial");
 
   return (
     <div className="dashboard-page">
@@ -102,13 +103,13 @@ export function Dashboard({ planner, focusRequestId = null }: { planner: Planner
         </div>
       </div>
 
-      <section className="kpi-grid day-kpis">
+      {hasInitialPlan ? <section className="kpi-grid day-kpis">
         <article><span className="kpi-icon yellow"><TimerIcon size={21} weight="duotone" /></span><div><b>{counts.active}</b><span>В работе</span></div><em>{isToday ? "сейчас" : "по данным плана"}</em></article>
         <article><span className="kpi-icon violet"><ArrowUpRightIcon size={21} weight="bold" /></span><div><b>{counts.enRoute}</b><span>В пути</span></div><em>{isToday ? "по графику" : "по данным плана"}</em></article>
         <article className={counts.overdue ? "attention" : ""}><span className="kpi-icon coral"><WarningCircleIcon size={21} weight="duotone" /></span><div><b>{counts.overdue}</b><span>Просрочено</span></div><em>нужно внимание</em></article>
         <article><span className="kpi-icon green"><CheckCircleIcon size={21} weight="duotone" /></span><div><b>{counts.done}<small>/{data.requests.length}</small></b><span>Выполнено</span></div><em>{data.requests.length ? Math.round(counts.done / data.requests.length * 100) : 0}% дня</em></article>
         <article><span className="kpi-icon blue"><UsersThreeIcon size={21} weight="duotone" /></span><div><b>{data.metrics.engineers_used}<small>/{data.engineers.length}</small></b><span>На линии</span></div><em>{data.metrics.avg_load_percent}% загрузка</em></article>
-      </section>
+      </section> : null}
 
       <section className="operations-grid">
         <aside className="list-panel">

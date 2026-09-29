@@ -4,6 +4,9 @@ import type {
   BackendEventResult,
   BackendExport,
   BackendInitialPlanningResponse,
+  BackendManualCommand,
+  BackendManualDataset,
+  BackendManualPreview,
   BackendPlanningEvent,
   BackendPlanningResult,
   BackendPlanDetail,
@@ -47,6 +50,18 @@ export const backend = {
       rawBody: form,
     });
   },
+  importManual: (files: File[]) => {
+    const form = new FormData();
+    files.forEach((file) => form.append("files", file));
+    return apiRequest<BackendManualDataset>("/planning/manual/import", {
+      method: "POST",
+      rawBody: form,
+    });
+  },
+  previewManual: (command: BackendManualCommand) =>
+    apiRequest<BackendManualPreview>("/planning/manual/preview", { method: "POST", body: command }),
+  saveManual: (command: BackendManualCommand) =>
+    apiRequest<{ plan_id: string }>("/planning/manual", { method: "POST", body: command }),
   replan: (regions: BackendRegion[]) => apiRequest<BackendPlanningResult>("/planning/replan", { method: "POST", body: { regions } }),
   event: (payload: BackendPlanningEvent) => apiRequest<BackendEventResult>("/planning/events", { method: "POST", body: payload }),
   exportPlan: (planId: string) => apiRequest<BackendExport>(`/plans/${planId}/export`),

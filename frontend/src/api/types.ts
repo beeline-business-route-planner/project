@@ -452,6 +452,7 @@ export interface BackendPlanDetail {
   calculation_cutoff_at: string;
   based_on_plan_id: string | null;
   triggered_by_event_id: string | null;
+  edited_from_plan_id?: string | null;
   metrics: BackendPlanMetrics;
   baseline_metrics?: {
     assigned_requests_count: number;
@@ -472,6 +473,7 @@ export interface BackendPlanSummary {
   region: BackendRegion;
   planning_date: string;
   kind: "initial" | "replan" | "event_replan";
+  strategy: "lns" | "layered_graph" | "greedy" | "manual";
   approval_status: "pending" | "approved" | "rejected";
   created_at: string;
   approved_at: string | null;
@@ -479,11 +481,77 @@ export interface BackendPlanSummary {
   approval_deadline: string | null;
   based_on_plan_id: string | null;
   triggered_by_event_id: string | null;
+  edited_from_plan_id?: string | null;
   is_current: boolean;
   assigned_requests_count: number;
   unassigned_requests_count: number;
   engineers_used_count: number;
   total_mileage_km: number | string;
+}
+
+export interface BackendManualDataset {
+  upload_id: string;
+  region: BackendRegion;
+  planning_date: string;
+  requests: Array<{
+    id: string;
+    external_id: number;
+    address: string;
+    district: string;
+    latitude: number | string | null;
+    longitude: number | string | null;
+    window_start: string;
+    window_end: string;
+    priority: number;
+    required_skill: BackendSkill;
+    required_vehicle_type: BackendVehicle | null;
+    norm_minutes_without_travel: number;
+  }>;
+  engineers: Array<{
+    id: string;
+    name: string;
+    shift_start: string;
+    shift_end: string;
+    skills: BackendSkill[];
+    vehicle_type: BackendVehicle;
+    is_available: boolean;
+  }>;
+}
+
+export interface BackendManualCommand {
+  upload_id?: string;
+  source_plan_id?: string;
+  routes: Array<{ engineer_id: string; request_ids: string[] }>;
+}
+
+export interface BackendManualPreview {
+  assigned_requests_count: number;
+  unassigned_requests_count: number;
+  engineers_used_count: number;
+  total_mileage_km: number | string;
+  stops: Array<{
+    request_id: string;
+    engineer_id: string;
+    sequence_number: number;
+    planned_arrival: string;
+    planned_start: string;
+    planned_finish: string;
+    travel_minutes: number;
+    distance_km: number | string;
+    is_locked: boolean;
+  }>;
+  compared_to_plan_id: string | null;
+  assigned_delta: number | null;
+  engineers_used_delta: number | null;
+  mileage_delta_km: number | string | null;
+}
+
+export interface BackendManualIssue {
+  request_id: string;
+  engineer_id: string | null;
+  code: "unknown_request" | "duplicate_request" | "unknown_engineer" | "engineer_unavailable" | "skill" | "vehicle" | "window_order" | "no_route" | "window_passed" | "late" | "shift_end";
+  at: string | null;
+  limit: string | null;
 }
 
 export interface BackendEngineerDetail {

@@ -10,8 +10,9 @@ import {
   Download,
   FileSpreadsheet,
   GitCompareArrows,
+  Hand,
   History,
-  Lock,
+  PencilRuler,
   MapPin,
   Play,
   RotateCcw,
@@ -26,6 +27,9 @@ import {
   Zap,
 } from "lucide-react";
 import type { Engineer, PlanSummary, RequestItem } from "../api/types";
+import { backend } from "../api/services";
+import type { ManualEditorSource } from "../components/ManualPlanEditor";
+import { ManualPlanEditor } from "../components/ManualPlanEditor";
 import type { PlannerController } from "../hooks/usePlanner";
 import {
   Avatar,
@@ -53,6 +57,8 @@ export function Planning({ planner, onOpenRequest }: { planner: PlannerControlle
   const [view, setView] = useState<PlanningView>("schedule");
   const [busy, setBusy] = useState(false);
   const [eventAction, setEventAction] = useState<EventAction | null>(null);
+  const [manualSource, setManualSource] = useState<ManualEditorSource | null>(null);
+  const [manualUpload, setManualUpload] = useState(false);
   const versionsRef = useRef<HTMLElement>(null);
   const selectedPlan = data.plans.find((plan) => plan.id === selectedPlanId) ?? data.plans[0];
   const isDraft = selectedPlan?.status === "draft";
@@ -95,7 +101,7 @@ export function Planning({ planner, onOpenRequest }: { planner: PlannerControlle
         <div><span className="eyebrow">Сценарии и назначения</span><h1>Планирование</h1><p>Загрузка дня, изменения по ходу дня и версии плана округа.</p></div>
       </div>
 
-      <DayPanel planner={planner} busy={busy} canPlanToday={canPlanToday} onEvent={setEventAction} onReplan={() => void replan()} onOpenPlan={(plan) => openPlan(plan, true)} />
+      <DayPanel planner={planner} busy={busy} canPlanToday={canPlanToday} onEvent={setEventAction} onReplan={() => void replan()} onOpenPlan={(plan) => openPlan(plan, true)} onManualImport={setManualSource} onManualUpload={() => setManualUpload(true)} />
 
       <section className="versions-block" ref={versionsRef}>
         <div className="block-heading"><h2>Версии плана</h2><p>Каждый расчёт — отдельная версия. Рабочей становится только утверждённая.</p></div>
@@ -122,18 +128,22 @@ export function Planning({ planner, onOpenRequest }: { planner: PlannerControlle
               </div>
               <div className="plan-actions">
                 <button className="button ghost" disabled={!canOperate || !selectedPlan} onClick={() => { void planner.downloadReport("xlsx", selectedPlan?.id).catch(actionError); }}><Download size={16} /> XLSX</button>
+                {isDraft && canPlanToday ? <button className="button secondary" disabled={busy} title="Переставить заявки этой версии самому и сохранить новой версией" onClick={() => {
+                  setBusy(true);
+                  void backend.plan(selectedPlan.id).then((plan) => setManualSource({ kind: "plan", data: plan, title: selectedPlan.title })).catch(actionError).finally(() => setBusy(false));
+                }}><PencilRuler size={16} /> Исправить вручную</button> : null}
                 {isDraft ? <><button className="button secondary" disabled={busy || !canOperate} onClick={() => { setBusy(true); void planner.rejectPlan(selectedPlan).catch(actionError).finally(() => setBusy(false)); }}><X size={16} /> Отклонить</button><button className="button primary" disabled={busy || !canPlanToday} title={!canPlanToday ? "Утвердить можно только сегодняшний план" : undefined} onClick={() => { setBusy(true); void planner.approvePlan(selectedPlan).catch(actionError).finally(() => setBusy(false)); }}><Check size={16} /> Утвердить</button></> : null}
               </div>
             </div>
             {isDraft ? <div className="decision-note"><AlertTriangle size={15} />Версия ожидает решения и пока не влияет на работу бригад.</div> : null}
 
-            <div className="plan-metrics">
+            {selectedPlan ? <div className="plan-metrics">
               <article><span><UsersRound size={17} /></span><div><b>{data.metrics.engineers_used}</b><small>бригад в работе</small></div></article>
               <article><span><Route size={17} /></span><div><b>{formatDistance(data.metrics.distance_meters)}</b><small>общий пробег</small></div></article>
               <article><span><CheckCircle2 size={17} /></span><div><b>{data.metrics.assigned}</b><small>назначено</small></div></article>
               <article className="warning"><span><AlertTriangle size={17} /></span><div><b>{data.metrics.unassigned}</b><small>без назначения</small></div></article>
               <article><span><Clock3 size={17} /></span><div><b>{data.metrics.avg_load_percent}%</b><small>средняя загрузка</small></div></article>
-            </div>
+            </div> : null}
 
             {isDraft && selectedPlan?.kind !== "initial" ? (
               <div className="view-tabs"><button className={view === "schedule" ? "active" : ""} onClick={() => setView("schedule")}><Route size={15} /> Маршруты</button><button className={view === "changes" ? "active" : ""} onClick={() => setView("changes")}><GitCompareArrows size={15} /> Изменения <em>{data.diff.length}</em></button></div>
@@ -149,19 +159,30 @@ export function Planning({ planner, onOpenRequest }: { planner: PlannerControlle
       </section>
 
       {eventAction ? <DayEventModal planner={planner} initialAction={eventAction} onClose={() => setEventAction(null)} /> : null}
+      {manualUpload ? <ManualUploadModal planner={planner} onClose={() => setManualUpload(false)} onImported={setManualSource} /> : null}
+      {manualSource ? <ManualPlanEditor source={manualSource} workspace={{ requests: data.requests, engineers: data.engineers }} hasInitialPlan={data.plans.some((plan) => plan.kind === "initial")} onClose={() => setManualSource(null)} onSaved={async (planId) => {
+        setManualSource(null);
+        await planner.openPlan(planId);
+        setSelectedPlanId(planId);
+        setView("schedule");
+        versionsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        planner.showNotice("Ручной план сохранён на рассмотрение — утвердите его, чтобы он стал рабочим");
+      }} /> : null}
     </div>
   );
 }
 
 /* "День округа": only what the user case allows right now — upload a day,
    or change an approved day (events / replan), or just view an archived day. */
-function DayPanel({ planner, busy, canPlanToday, onEvent, onReplan, onOpenPlan }: {
+function DayPanel({ planner, busy, canPlanToday, onEvent, onReplan, onOpenPlan, onManualImport, onManualUpload }: {
   planner: PlannerController;
   busy: boolean;
   canPlanToday: boolean;
   onEvent: (action: EventAction) => void;
   onReplan: () => void;
   onOpenPlan: (plan: PlanSummary) => void;
+  onManualImport: (source: ManualEditorSource) => void;
+  onManualUpload: () => void;
 }) {
   const { data } = planner;
   const explicitDemo = (import.meta.env.VITE_DEMO_MODE ?? "auto") === "true";
@@ -182,9 +203,9 @@ function DayPanel({ planner, busy, canPlanToday, onEvent, onReplan, onOpenPlan }
   if (!approved) {
     return (
       <section className="day-panel">
-        <div className="block-heading"><h2>День округа</h2><p>Рабочий план на сегодня ещё не утверждён. Загрузите пару XLSX — backend рассчитает первичный план, его нужно будет утвердить.</p></div>
-        {pendingInitial ? <PendingNote plan={pendingInitial} text="Уже рассчитан первичный план и ждёт решения. Можно утвердить его или загрузить файлы заново." onOpen={onOpenPlan} /> : null}
-        <UploadPanel planner={planner} />
+        <div className="block-heading"><h2>День округа</h2><p>Рабочий план на сегодня ещё не утверждён. Загрузите пару XLSX и выберите, как построить план: автоматически или вручную. Готовый план нужно будет утвердить.</p></div>
+        {pendingInitial ? <PendingNote plan={pendingInitial} text="Уже есть план на рассмотрении. Можно утвердить его или загрузить файлы заново." onOpen={onOpenPlan} /> : null}
+        <UploadPanel planner={planner} onManualImport={onManualImport} />
       </section>
     );
   }
@@ -193,7 +214,7 @@ function DayPanel({ planner, busy, canPlanToday, onEvent, onReplan, onOpenPlan }
     <section className="day-panel">
       <div className="block-heading">
         <h2>День округа</h2>
-        <p>Что-то изменилось по ходу дня — выберите событие. Backend рассчитает новую версию, рабочий план сменится только после утверждения.</p>
+        <p>Что-то изменилось по ходу дня — выберите событие или пересчитайте. Хотите собрать день сами — составьте план вручную из Excel. Рабочий план сменится только после утверждения новой версии.</p>
       </div>
       {pendingEvent ? <PendingNote plan={pendingEvent} text="Пока событие ждёт решения, новое создать нельзя — утвердите или отклоните его." onOpen={onOpenPlan} /> : null}
       <div className="day-actions">
@@ -209,8 +230,12 @@ function DayPanel({ planner, busy, canPlanToday, onEvent, onReplan, onOpenPlan }
           <strong>{busy ? "Считаем…" : "Пересчитать"}</strong>
           <small>Без события, по текущим статусам</small>
         </button>
+        <button type="button" className="day-action manual" disabled={busy} onClick={onManualUpload}>
+          <span className="day-action-icon"><Hand size={19} /></span>
+          <strong>Составить вручную</strong>
+          <small>Загрузить Excel и распределить самому</small>
+        </button>
       </div>
-      <p className="day-lock"><Lock size={13} />Загрузка XLSX закрыта: первичный план дня уже утверждён.</p>
     </section>
   );
 }
@@ -430,10 +455,15 @@ function PlanDiff({ planner }: { planner: PlannerController }) {
   );
 }
 
-function UploadPanel({ planner }: { planner: PlannerController }) {
+function UploadPanel({ planner, onManualImport, mode = "choice" }: {
+  planner: PlannerController;
+  onManualImport: (source: ManualEditorSource) => void;
+  /** choice: automatic or manual planning; manual: only build the plan by hand. */
+  mode?: "choice" | "manual";
+}) {
   const [files, setFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving] = useState<"auto" | "manual" | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const add = (incoming: FileList | null) => {
@@ -445,13 +475,24 @@ function UploadPanel({ planner }: { planner: PlannerController }) {
     ? `Нужно 2 файла, выбрано ${files.length}`
     : files.some((file) => !file.name.toLowerCase().endsWith(".xlsx")) ? "Оба файла должны быть в формате XLSX"
       : files.some((file) => file.size === 0 || file.size > 10_000_000) ? "Каждый файл — непустой и до 10 МБ" : null;
-  const submit = async () => {
+  const submitAuto = async () => {
     if (problem) { setFormError(problem); return; }
-    setSaving(true);
+    setSaving("auto");
     try { await planner.importDataset(files); setFiles([]); }
     catch (error) { setFormError(error instanceof Error ? error.message : "Не удалось загрузить файлы"); }
-    finally { setSaving(false); }
+    finally { setSaving(null); }
   };
+  const submitManual = async () => {
+    if (problem) { setFormError(problem); return; }
+    setSaving("manual");
+    try {
+      const dataset = await backend.importManual(files);
+      setFiles([]);
+      onManualImport({ kind: "upload", data: dataset });
+    } catch (error) { setFormError(error instanceof Error ? error.message : "Не удалось загрузить файлы"); }
+    finally { setSaving(null); }
+  };
+  const ready = files.length === 2 && !saving;
   return (
     <div className="upload-panel">
       <input ref={inputRef} hidden type="file" multiple accept=".xlsx" onChange={(event) => { add(event.target.files); event.target.value = ""; }} />
@@ -476,7 +517,30 @@ function UploadPanel({ planner }: { planner: PlannerController }) {
           </ul>
         ) : <p className="upload-empty">Файлы не выбраны</p>}
         {formError ? <p className="form-error" role="alert">{formError}</p> : null}
-        <button type="button" className="button primary" disabled={saving || files.length !== 2} onClick={() => void submit()}><Play size={16} />{saving ? "Загружаем и считаем…" : "Загрузить и рассчитать"}</button>
+        <div className="upload-choices">
+          {mode === "choice" ? (
+            <button type="button" className="upload-choice is-auto" disabled={!ready} onClick={() => void submitAuto()}>
+              <Zap size={18} />
+              <span><strong>{saving === "auto" ? "Загружаем и считаем…" : "Рассчитать автоматически"}</strong><small>Алгоритм распределит заявки по бригадам</small></span>
+            </button>
+          ) : null}
+          <button type="button" className="upload-choice is-manual" disabled={!ready} onClick={() => void submitManual()}>
+            <Hand size={18} />
+            <span><strong>{saving === "manual" ? "Загружаем…" : "Составить вручную"}</strong><small>Вы сами распределите заявки в редакторе</small></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Manual planning from fresh workbooks at any time of the day. */
+function ManualUploadModal({ planner, onClose, onImported }: { planner: PlannerController; onClose: () => void; onImported: (source: ManualEditorSource) => void }) {
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="modal-card upload-modal wide-modal" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-head"><span className="modal-icon violet"><Hand size={20} /></span><div><h2>Составить план вручную</h2><p>Загрузите пару XLSX округа — откроется редактор, где вы сами распределите заявки. Готовый план сохранится версией на рассмотрение; рабочим он станет после утверждения.</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Закрыть"><X size={18} /></button></div>
+        <UploadPanel planner={planner} mode="manual" onManualImport={(source) => { onClose(); onImported(source); }} />
       </div>
     </div>
   );

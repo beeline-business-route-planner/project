@@ -50,6 +50,7 @@ export function Journal({ planner, onOpenRequest }: { planner: PlannerController
   const travelMinutes = data.metrics.travel_minutes ?? 0;
   const travelShare = workMinutes + travelMinutes ? Math.round(travelMinutes / (workMinutes + travelMinutes) * 100) : 0;
   const activePlan = data.plans.find((plan) => plan.id === data.activePlanId);
+  const hasInitialPlan = data.plans.some((plan) => plan.kind === "initial");
 
   const exportPlansCsv = () => {
     const quote = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
@@ -74,9 +75,11 @@ export function Journal({ planner, onOpenRequest }: { planner: PlannerController
         <div><span className="eyebrow">Результаты дня</span><h1>Аналитика</h1><p>{activePlan ? `По рабочему плану «${activePlan.title}»` : "Рабочего плана пока нет"} · {data.planningDate}</p></div>
         <div className="heading-actions">
           <button className="button secondary" onClick={exportPlansCsv}><ArrowDownToLine size={16} /> Версии CSV</button>
-          <button className="button primary" disabled={planner.source !== "api"} title={planner.source !== "api" ? "Доступно после подключения backend" : "PDF-отчёт по дню, архив ZIP"} onClick={() => void planner.downloadReport("pdf")}><FileDown size={17} /> Отчёт дня</button>
+          <button className="button primary" disabled={planner.source !== "api" || !hasInitialPlan} title={planner.source !== "api" ? "Доступно после подключения backend" : !hasInitialPlan ? "Сначала создайте первичный план" : "PDF-отчёт по дню, архив ZIP"} onClick={() => void planner.downloadReport("pdf")}><FileDown size={17} /> Отчёт дня</button>
         </div>
       </div>
+
+      {!hasInitialPlan ? <section className="an-card"><h2>Аналитика появится после первичного плана</h2><p>Загрузите заявки и инженеров в разделе «Планирование», затем составьте план вручную или запустите расчёт.</p></section> : <>
 
       {/* 1. The headline and the numbers a dispatcher reports upward. */}
       <section className="an-summary">
@@ -138,6 +141,7 @@ export function Journal({ planner, onOpenRequest }: { planner: PlannerController
           })}
         </div>
       </section>
+      </>}
     </div>
   );
 }
