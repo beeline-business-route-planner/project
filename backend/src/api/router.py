@@ -12,3 +12,8 @@ router.include_router(plans_router)
 router.include_router(requests_router)
 router.include_router(reports_router)
 router.include_router(engineers_router)
+
+
+@router.get("/ping", tags=["health"])
+async def ping() -> dict[str, str]:
+    return {"ping": "pong"}

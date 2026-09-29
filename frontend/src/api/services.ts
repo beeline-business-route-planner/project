@@ -21,6 +21,7 @@ function query(params: Record<string, string | number | undefined>) {
 }
 
 export const backend = {
+  ping: () => apiRequest<{ ping: string }>("/ping", { signal: AbortSignal.timeout(5000) }),
   plans: (region: BackendRegion) =>
     apiRequest<BackendPlanSummary[]>(`/plans?${query({ region })}`),
   currentPlan: (region: BackendRegion, planningDate?: string) =>
