@@ -20,7 +20,14 @@ from src.api.plans.export import PlanXlsxExporter
 from src.api.plans.presenter import PlanPresenter
 from src.api.plans.snapshot import PlanSnapshotAssembler
 from src.config import cfg
-from src.core.db.enums import ApprovalStatus, PlanKind, Region, ReplanningEventType, RequestStatus
+from src.core.db.enums import (
+    ApprovalStatus,
+    PlanKind,
+    PlanStrategy,
+    Region,
+    ReplanningEventType,
+    RequestStatus,
+)
 from src.core.db.models import Engineer, Plan, PlanStop, ReplanningEvent, Request
 from src.core.db.uow import UnitOfWork
 from src.core.s3 import (
@@ -124,7 +131,11 @@ class PlanService:
             raise PlanWrongDayError
         current = await self._uow.plans.get_current(plan.region, plan.planning_date)
         if plan.kind == PlanKind.INITIAL:
-            if await self._uow.plans.has_approved_initial(plan.region, plan.planning_date):
+            # A manual plan built from fresh workbooks may replace the day at any time;
+            # only the algorithmic initial is limited to one approval per day.
+            if plan.strategy != PlanStrategy.MANUAL and await self._uow.plans.has_approved_initial(
+                plan.region, plan.planning_date
+            ):
                 raise PlanBaseChangedError
             if not InitialApprovalPolicy.is_valid(plan.created_at, decided_at):
                 raise InitialPlanExpiredError
@@ -428,6 +439,7 @@ class PlanService:
             region=plan.region,
             planning_date=plan.planning_date,
             kind=plan.kind,
+            strategy=plan.strategy,
             approval_status=plan.approval_status,
             created_at=plan.created_at,
             approved_at=plan.approved_at,
@@ -435,6 +447,7 @@ class PlanService:
             approval_deadline=PlanService._approval_deadline(plan),
             based_on_plan_id=plan.based_on_plan_id,
             triggered_by_event_id=plan.triggered_by_event_id,
+            edited_from_plan_id=plan.edited_from_plan_id,
             is_current=is_current,
             assigned_requests_count=plan.assigned_requests_count,
             unassigned_requests_count=plan.unassigned_requests_count,

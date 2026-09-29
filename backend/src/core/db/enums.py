@@ -125,6 +125,7 @@ class UnassignedReason(enum.StrEnum):
     NO_TIME_SLOT = "no_time_slot"
     NO_ROUTE = "no_route"
     NO_AVAILABLE_ENGINEER = "no_available_engineer"
+    MANUAL_DECISION = "manual_decision"
 
 
 class Region(enum.StrEnum):
@@ -154,3 +155,4 @@ class PlanStrategy(enum.StrEnum):
     LAYERED_GRAPH = "layered_graph"
     LNS = "lns"
     GREEDY = "greedy"
+    MANUAL = "manual"

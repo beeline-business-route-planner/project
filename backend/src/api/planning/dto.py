@@ -27,6 +27,54 @@ class PlanningUploadFile:
 
 
 @dataclass(frozen=True)
+class ManualRoute:
+    engineer_id: uuid.UUID
+    request_ids: tuple[uuid.UUID, ...]
+
+
+@dataclass(frozen=True)
+class ManualPlanCommand:
+    upload_id: uuid.UUID | None
+    source_plan_id: uuid.UUID | None
+    routes: tuple[ManualRoute, ...]
+
+
+@dataclass(frozen=True)
+class ManualDataset:
+    upload_id: uuid.UUID
+    region: Region
+    planning_date: date
+    requests: tuple[RequestDTO, ...]
+    engineers: tuple[EngineerDTO, ...]
+
+
+@dataclass(frozen=True)
+class ManualStopPreview:
+    request_id: uuid.UUID
+    engineer_id: uuid.UUID
+    sequence_number: int
+    planned_arrival: datetime
+    planned_start: datetime
+    planned_finish: datetime
+    travel_minutes: int
+    distance_km: Decimal
+    is_locked: bool
+
+
+@dataclass(frozen=True)
+class ManualPlanPreview:
+    assigned_requests_count: int
+    unassigned_requests_count: int
+    engineers_used_count: int
+    total_mileage_km: Decimal
+    stops: tuple[ManualStopPreview, ...]
+    compared_to_plan_id: uuid.UUID | None
+    assigned_delta: int | None
+    engineers_used_delta: int | None
+    mileage_delta_km: Decimal | None
+
+
+@dataclass(frozen=True)
 class InitialPlanSummary:
     id: uuid.UUID
     region: Region

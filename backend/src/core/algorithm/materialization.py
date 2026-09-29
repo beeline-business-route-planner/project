@@ -7,9 +7,11 @@ from src.core.algorithm.dto import (
     InitialPlanningInput,
     Job,
     KnownSolution,
+    ManualIssue,
     PlanningLayer,
     Stop,
 )
+from src.core.algorithm.enums import ManualIssueCode
 from src.core.algorithm.exc import AlgorithmInputError
 from src.core.algorithm.rules import PlanningRules
 
@@ -120,3 +122,93 @@ class ScheduleMaterializer:
             previous_id = request_id
             previous_finish = finish
         return tuple(stops)
+
+    def diagnose(
+        self,
+        engineer: Engineer,
+        request_ids: Sequence[uuid.UUID],
+        jobs_by_id: dict[uuid.UUID, Job],
+        layers_by_request: dict[uuid.UUID, PlanningLayer],
+        cutoff_at: datetime,
+    ) -> tuple[tuple[Stop, ...], tuple[ManualIssue, ...]]:
+        """Разбирает ручной порядок так же, как `materialize`, но не останавливается.
+
+        Каждое нарушение записывается на свою заявку, расчёт идёт дальше с фактическим
+        (пусть и недопустимым) временем, чтобы диспетчер увидел все проблемы маршрута и
+        примерное расписание сразу. Заявку без перехода (порядок слоёв, нет маршрута)
+        бригада «выполняет» без дороги — дальше время остаётся оценкой.
+        """
+
+        previous_id = engineer.id
+        previous_finish = max(engineer.available_from, cutoff_at)
+        previous_window_start: datetime | None = None
+        stops: list[Stop] = []
+        issues: list[ManualIssue] = []
+        for sequence_number, request_id in enumerate(request_ids, start=1):
+            job = jobs_by_id[request_id]
+            layer = layers_by_request[request_id]
+            if previous_window_start is not None and layer.window_start < previous_window_start:
+                issues.append(ManualIssue(request_id, engineer.id, ManualIssueCode.WINDOW_ORDER))
+                previous_finish = max(previous_finish, job.release_at) + timedelta(
+                    minutes=job.service_minutes
+                )
+                previous_id = request_id
+                continue
+            previous_window_start = layer.window_start
+            matching_matrices = [
+                item.travel_matrix
+                for item in layer.matrices
+                if item.vehicle_type == engineer.vehicle_type
+            ]
+            travel_minutes: int | None = None
+            distance_km = None
+            if len(matching_matrices) == 1:
+                try:
+                    travel_minutes = matching_matrices[0].minutes(previous_id, request_id)
+                    distance_km = matching_matrices[0].kilometers(previous_id, request_id)
+                except KeyError, IndexError:
+                    travel_minutes = None
+            if travel_minutes is None or distance_km is None:
+                issues.append(ManualIssue(request_id, engineer.id, ManualIssueCode.NO_ROUTE))
+                previous_finish = max(previous_finish, job.release_at, cutoff_at) + timedelta(
+                    minutes=job.service_minutes
+                )
+                previous_id = request_id
+                continue
+            arrival = previous_finish + timedelta(minutes=travel_minutes)
+            start = max(arrival, job.release_at, cutoff_at)
+            finish = start + timedelta(minutes=job.service_minutes)
+            if start > job.latest_start_at:
+                # Окно закрылось ещё до расчёта — это не опоздание бригады, а прошедшее время.
+                code = (
+                    ManualIssueCode.WINDOW_PASSED
+                    if cutoff_at > job.latest_start_at
+                    else ManualIssueCode.LATE
+                )
+                issues.append(
+                    ManualIssue(request_id, engineer.id, code, at=start, limit=job.latest_start_at)
+                )
+            if finish > engineer.shift_end:
+                issues.append(
+                    ManualIssue(
+                        request_id,
+                        engineer.id,
+                        ManualIssueCode.SHIFT_END,
+                        at=finish,
+                        limit=engineer.shift_end,
+                    )
+                )
+            stops.append(
+                Stop(
+                    request_id=request_id,
+                    sequence_number=sequence_number,
+                    arrival=arrival,
+                    start=start,
+                    finish=finish,
+                    travel_minutes=travel_minutes,
+                    distance_km=PlanningRules.stop_distance(distance_km),
+                )
+            )
+            previous_id = request_id
+            previous_finish = finish
+        return tuple(stops), tuple(issues)

@@ -1,6 +1,54 @@
 schema_version = 1
 
 [[scenario]]
+id = "PLANNING-MANUAL-E2E-001"
+node = "tests/e2e/planning/test_manual_e2e.py::ManualPlanningEndToEndTest::test_manual_initial_and_algorithm_candidate_edit"
+title = "Manual initial and correction of algorithm candidate preserve lifecycle"
+layer = "e2e"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-MANUAL-001"
+node = "tests/unit/algorithm/test_manual_plan.py::ManualPlanTest::test_order_is_materialized_and_audited"
+title = "Manual request order is materialized with audited mileage"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-MANUAL-002"
+node = "tests/unit/algorithm/test_manual_plan.py::ManualPlanTest::test_duplicate_request_is_rejected"
+title = "Manual routes reject duplicate requests"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-MANUAL-003"
+node = "tests/unit/algorithm/test_manual_plan.py::ManualPlanTest::test_skill_mismatch_is_rejected"
+title = "Manual routes reject skill mismatch"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-MANUAL-004"
+node = "tests/unit/algorithm/test_manual_plan.py::ManualPlanTest::test_late_requests_are_identified_individually"
+title = "Manual route diagnostics identify each request past its time window"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-MANUAL-HTTP-001"
+node = "tests/unit/planning/test_manual_issue_http_contract.py::ManualIssueHttpContractTest::test_invalid_route_returns_issue_for_card"
+title = "Manual route violation exposes request ID and cause over HTTP"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
 id = "PLANNING-INITIAL-UPLOAD-HTTP-001"
 node = "tests/unit/planning/test_initial_upload_http_contract.py::InitialUploadHttpContractTest::test_odd_number_of_workbooks_returns_422"
 title = "An odd number of workbooks returns HTTP 422"

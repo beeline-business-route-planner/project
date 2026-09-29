@@ -4,6 +4,12 @@
 
 | ID | Слой | Домен | Сценарий | Тест |
 |---|---|---|---|---|
+| `PLANNING-MANUAL-E2E-001` | e2e | planning | Manual initial and correction of algorithm candidate preserve lifecycle | `tests/e2e/planning/test_manual_e2e.py::ManualPlanningEndToEndTest::test_manual_initial_and_algorithm_candidate_edit` |
+| `ALGORITHM-MANUAL-001` | unit | algorithm | Manual request order is materialized with audited mileage | `tests/unit/algorithm/test_manual_plan.py::ManualPlanTest::test_order_is_materialized_and_audited` |
+| `ALGORITHM-MANUAL-002` | unit | algorithm | Manual routes reject duplicate requests | `tests/unit/algorithm/test_manual_plan.py::ManualPlanTest::test_duplicate_request_is_rejected` |
+| `ALGORITHM-MANUAL-003` | unit | algorithm | Manual routes reject skill mismatch | `tests/unit/algorithm/test_manual_plan.py::ManualPlanTest::test_skill_mismatch_is_rejected` |
+| `ALGORITHM-MANUAL-004` | unit | algorithm | Manual route diagnostics identify each request past its time window | `tests/unit/algorithm/test_manual_plan.py::ManualPlanTest::test_late_requests_are_identified_individually` |
+| `PLANNING-MANUAL-HTTP-001` | unit | planning | Manual route violation exposes request ID and cause over HTTP | `tests/unit/planning/test_manual_issue_http_contract.py::ManualIssueHttpContractTest::test_invalid_route_returns_issue_for_card` |
 | `PLANNING-INITIAL-UPLOAD-HTTP-001` | unit | planning | An odd number of workbooks returns HTTP 422 | `tests/unit/planning/test_initial_upload_http_contract.py::InitialUploadHttpContractTest::test_odd_number_of_workbooks_returns_422` |
 | `PLANNING-INITIAL-UPLOAD-HTTP-002` | unit | planning | Unpaired workbooks from different regions return HTTP 422 | `tests/unit/planning/test_initial_upload_http_contract.py::InitialUploadHttpContractTest::test_books_from_different_regions_return_422` |
 | `PLANNING-INITIAL-UPLOAD-HTTP-003` | unit | planning | A duplicate region pair returns HTTP 422 | `tests/unit/planning/test_initial_upload_http_contract.py::InitialUploadHttpContractTest::test_duplicate_pair_returns_422` |

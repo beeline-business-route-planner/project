@@ -53,10 +53,12 @@ class Plan(Base):
     based_on_plan_id: Mapped[uuid.UUID | None] = mapped_column(
         postgresql.UUID(as_uuid=True), sa.ForeignKey("plan.id", ondelete="RESTRICT")
     )
+    edited_from_plan_id: Mapped[uuid.UUID | None] = mapped_column(
+        postgresql.UUID(as_uuid=True), sa.ForeignKey("plan.id", ondelete="RESTRICT")
+    )
     triggered_by_event_id: Mapped[uuid.UUID | None] = mapped_column(
         postgresql.UUID(as_uuid=True),
         sa.ForeignKey("replanningevent.id", ondelete="RESTRICT"),
-        unique=True,
     )
     calculation_cutoff_at: Mapped[datetime] = mapped_column(sa.DateTime())
     mode: Mapped[DistributionMode] = mapped_column(distribution_mode_enum)
@@ -72,6 +74,10 @@ class Plan(Base):
     rejected_at: Mapped[datetime | None] = mapped_column(sa.DateTime())
 
     __table_args__ = (
+        sa.CheckConstraint(
+            "edited_from_plan_id IS NULL OR edited_from_plan_id <> id",
+            name="ck_plan_edited_from_other",
+        ),
         sa.CheckConstraint(
             "(kind = 'INITIAL' AND based_on_plan_id IS NULL AND triggered_by_event_id IS NULL) "
             "OR (kind = 'REPLAN' AND based_on_plan_id IS NOT NULL "

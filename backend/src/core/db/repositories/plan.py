@@ -143,6 +143,7 @@ class PlanRepository(BaseRepository[Plan]):
         model.kind = plan.kind
         model.approval_status = ApprovalStatus.PENDING
         model.based_on_plan_id = plan.based_on_plan_id
+        model.edited_from_plan_id = plan.edited_from_plan_id
         model.triggered_by_event_id = plan.triggered_by_event_id
         model.calculation_cutoff_at = plan.calculation_cutoff_at
         model.mode = plan.mode

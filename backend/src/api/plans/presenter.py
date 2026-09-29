@@ -56,6 +56,7 @@ class PlanPresenter:
             calculation_cutoff_at=snapshot.calculation_cutoff_at,
             based_on_plan_id=snapshot.based_on_plan_id,
             triggered_by_event_id=snapshot.triggered_by_event_id,
+            edited_from_plan_id=snapshot.edited_from_plan_id,
             metrics=snapshot.metrics,
             baseline_metrics=baseline_metrics,
             request_groups=PlanPresenter._group_requests(

@@ -8,6 +8,7 @@ from src.api.plans.enums import EngineerChange, RequestChange, RequestGroupKey
 from src.core.db.enums import (
     ApprovalStatus,
     PlanKind,
+    PlanStrategy,
     Region,
     Skill,
     UnassignedReason,
@@ -210,6 +211,7 @@ class PlanDetailResponse(PlanLifecycleResponse):
     calculation_cutoff_at: datetime
     based_on_plan_id: uuid.UUID | None
     triggered_by_event_id: uuid.UUID | None
+    edited_from_plan_id: uuid.UUID | None
     metrics: PlanMetrics
     baseline_metrics: BaselineMetrics | None
     request_groups: list[RequestGroup]
@@ -222,6 +224,7 @@ class PlanSummaryResponse(PlanLifecycleResponse):
     region: Region
     planning_date: date
     kind: PlanKind
+    strategy: PlanStrategy
     approval_status: ApprovalStatus
     created_at: datetime
     approved_at: datetime | None
@@ -229,6 +232,7 @@ class PlanSummaryResponse(PlanLifecycleResponse):
     approval_deadline: datetime | None
     based_on_plan_id: uuid.UUID | None
     triggered_by_event_id: uuid.UUID | None
+    edited_from_plan_id: uuid.UUID | None
     is_current: bool
     assigned_requests_count: int
     unassigned_requests_count: int

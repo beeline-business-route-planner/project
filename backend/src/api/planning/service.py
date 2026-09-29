@@ -2,6 +2,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -9,6 +10,9 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from src.api.exc.planning import (
+    ManualRouteInvalid,
+    ManualSourceConflict,
+    ManualUploadNotFound,
     PlanningAddressNotFound,
     PlanningCurrentPlanMissing,
     PlanningEngineerStateConflict,
@@ -23,6 +27,7 @@ from src.api.exc.planning import (
     PlanningRequestAlreadyCancelled,
     PlanningRequestAlreadyStarted,
     PlanningRoutingUnavailable,
+    PlanningStorageUnavailable,
     PlanningUrgentRequestExists,
     PlanningUrgentRequestInvalid,
     PlanningWrongDateError,
@@ -34,6 +39,10 @@ from src.api.planning.dto import (
     EventPlanningResult,
     InitialPlanningResult,
     InitialPlanSummary,
+    ManualDataset,
+    ManualPlanCommand,
+    ManualPlanPreview,
+    ManualStopPreview,
     ParsedWorkbook,
     PlanningRegionResult,
     PlanningUploadFile,
@@ -49,14 +58,18 @@ from src.api.planning.parser import PlanningWorkbookParser
 from src.api.planning.utils import work_norm
 from src.config import cfg
 from src.core.algorithm import (
+    AlgorithmAuditError,
+    AlgorithmInputError,
     AlgorithmService,
     AlgorithmVariant,
     BasePlanStop,
     EngineerSnapshot,
+    InitialPlanningInput,
     InitialPlanningSnapshot,
     LayerMatrix,
     LayerMatrixRequest,
     MissingCoordinatesError,
+    ReplanDraft,
     ReplanEvent,
     ReplanResult,
     ReplanSnapshot,
@@ -66,6 +79,7 @@ from src.core.algorithm import (
 from src.core.algorithm import (
     InitialPlanningResult as AlgorithmInitialPlanningResult,
 )
+from src.core.algorithm.exc import ManualRouteViolationError
 from src.core.db.dto import (
     BaselineResultCreateDTO,
     EngineerCreateDTO,
@@ -90,7 +104,7 @@ from src.core.db.enums import (
     UnassignedReason,
 )
 from src.core.db.models import Engineer as EngineerModel
-from src.core.db.models import Request
+from src.core.db.models import Plan, Request
 from src.core.db.uow import UnitOfWork
 from src.core.geocoding import (
     AddressNotFoundError,
@@ -107,6 +121,18 @@ from src.core.travel_matrix import (
     TravelMatrixUnavailableError,
 )
 from src.core.utils.initial_approval import InitialApprovalPolicy
+
+
+@dataclass(frozen=True)
+class _ManualCalculation:
+    result: AlgorithmInitialPlanningResult | ReplanResult
+    source: Plan | None
+    requests: tuple[Request, ...]
+    engineers: tuple[EngineerModel, ...]
+    initial_input: InitialPlanningInput | None
+    replan_base: ReplanBaseSnapshot | None
+    availability: dict[uuid.UUID, bool] | None
+
 
 log = logging.getLogger(__name__)
 
@@ -127,6 +153,349 @@ class PlanningService:
         self._storage = storage
         self._algorithm = algorithm
         self._travel_matrix = travel_matrix
+
+    async def import_manual_data(self, files: list[PlanningUploadFile]) -> ManualDataset:
+        if len(files) != 2:
+            raise PlanningRegionPairError
+        parsed = await asyncio.gather(
+            *(asyncio.to_thread(PlanningWorkbookParser.parse, file) for file in files)
+        )
+        pair = PlanningWorkbookParser.build_region_pairs(parsed)
+        if len(pair) != 1:
+            raise PlanningRegionPairError
+        region, books = next(iter(pair.items()))
+        requests_book, engineers_book = books["requests"], books["engineers"]
+        planning_date = min(item.window_start for item in requests_book.requests).date()
+        if planning_date != datetime.now(ZoneInfo("Europe/Moscow")).date():
+            raise PlanningWrongDateError
+        if any(item.window_start.date() != planning_date for item in requests_book.requests):
+            raise PlanningFileValidationError
+        if len({item.external_id for item in requests_book.requests}) != len(
+            requests_book.requests
+        ):
+            raise RepeatedRequestError
+        uploaded_objects: list[tuple[str, str]] = []
+        try:
+            await self._uow.plans.lock_region_day(region, planning_date)
+            # Manual planning may start from a fresh pair of workbooks at any time of the
+            # day, also after an approved initial: the dispatcher rebuilds the day by hand.
+            coordinates = await self._prepare_region(requests_book, engineers_book)
+            upload_id, requests, engineers = await self._persist_region(
+                region, requests_book, engineers_book, coordinates, uploaded_objects
+            )
+            await self._uow.commit()
+            return ManualDataset(
+                upload_id=upload_id,
+                region=region,
+                planning_date=planning_date,
+                requests=tuple(RequestDTO.from_orm(item) for item in requests),
+                engineers=tuple(EngineerDTO.from_orm(item) for item in engineers),
+            )
+        except S3UnavailableError as exc:
+            await self._uow.rollback()
+            await self._delete_uploaded_objects(uploaded_objects)
+            raise PlanningStorageUnavailable from exc
+        except Exception:
+            await self._uow.rollback()
+            await self._delete_uploaded_objects(uploaded_objects)
+            raise
+
+    async def get_manual_data(self, upload_id: uuid.UUID) -> ManualDataset:
+        upload = await self._uow.data_uploads.get_by_id(upload_id)
+        if upload is None:
+            raise ManualUploadNotFound
+        requests = await self._uow.requests.get_by_upload_id(upload_id)
+        engineers = await self._uow.engineers.get_by_upload_id(upload_id)
+        if not requests or not engineers:
+            raise ManualUploadNotFound
+        return ManualDataset(
+            upload_id=upload_id,
+            region=upload.region,
+            planning_date=min(item.window_start for item in requests).date(),
+            requests=tuple(RequestDTO.from_orm(item) for item in requests),
+            engineers=tuple(EngineerDTO.from_orm(item) for item in engineers),
+        )
+
+    async def preview_manual(self, command: ManualPlanCommand) -> ManualPlanPreview:
+        calculation = await self._calculate_manual(command)
+        result = calculation.result
+        current = await self._uow.plans.get_current(result.region, result.planning_date)
+        unlocated_count = sum(
+            item.latitude is None or item.longitude is None for item in calculation.requests
+        )
+        return ManualPlanPreview(
+            assigned_requests_count=result.metrics.assigned_requests_count,
+            unassigned_requests_count=result.metrics.unassigned_requests_count + unlocated_count,
+            engineers_used_count=result.metrics.engineers_used_count,
+            total_mileage_km=result.metrics.total_mileage_km,
+            stops=tuple(
+                ManualStopPreview(
+                    request_id=stop.request_id,
+                    engineer_id=route.engineer_id,
+                    sequence_number=stop.sequence_number,
+                    planned_arrival=stop.arrival,
+                    planned_start=stop.start,
+                    planned_finish=stop.finish,
+                    travel_minutes=stop.travel_minutes,
+                    distance_km=stop.distance_km,
+                    is_locked=stop.is_locked,
+                )
+                for route in result.routes
+                for stop in route.stops
+            ),
+            compared_to_plan_id=current.id if current else None,
+            assigned_delta=(
+                result.metrics.assigned_requests_count - current.assigned_requests_count
+                if current
+                else None
+            ),
+            engineers_used_delta=(
+                result.metrics.engineers_used_count - current.engineers_used_count
+                if current
+                else None
+            ),
+            mileage_delta_km=(
+                result.metrics.total_mileage_km - current.total_mileage_km if current else None
+            ),
+        )
+
+    async def save_manual(self, command: ManualPlanCommand) -> uuid.UUID:
+        calculation = await self._calculate_manual(command)
+        result = calculation.result
+        try:
+            await self._uow.plans.lock_region_day(result.region, result.planning_date)
+            source = calculation.source
+            if source is not None:
+                locked = await self._uow.plans.get_with_lock(source.id)
+                if locked is None or locked.approval_status != ApprovalStatus.PENDING:
+                    raise ManualSourceConflict
+            if isinstance(result, ReplanResult):
+                base = calculation.replan_base
+                if base is None:
+                    raise ManualSourceConflict
+                current = await self._uow.plans.get_current(result.region, result.planning_date)
+                if current is None or current.id != base.base_plan_id:
+                    raise ManualSourceConflict
+                plan_id = await self._persist_replan_result(
+                    base,
+                    result,
+                    PlanStrategy.MANUAL,
+                    event_id=source.triggered_by_event_id if source else None,
+                    availability=calculation.availability,
+                )
+            else:
+                initial_input = calculation.initial_input
+                if initial_input is None:
+                    raise ManualSourceConflict
+                upload_id = (
+                    command.upload_id
+                    if command.upload_id is not None
+                    else source.upload_id
+                    if source
+                    else None
+                )
+                if upload_id is None:
+                    raise ManualSourceConflict
+                plan_id = await self._persist_initial_result(
+                    upload_id,
+                    result,
+                    PlanStrategy.MANUAL,
+                    list(calculation.engineers),
+                    [
+                        item.id
+                        for item in calculation.requests
+                        if item.latitude is None or item.longitude is None
+                    ],
+                )
+                baseline = self._algorithm.plan_baseline(initial_input)
+                self._uow.baseline_results.create(
+                    BaselineResultCreateDTO(
+                        initial_plan_id=plan_id,
+                        assigned_requests_count=baseline.metrics.assigned_requests_count,
+                        unassigned_requests_count=baseline.metrics.unassigned_requests_count,
+                        engineers_used_count=baseline.metrics.engineers_used_count,
+                        total_mileage_km=baseline.metrics.total_mileage_km,
+                        average_workload_with_travel=(
+                            baseline.metrics.average_utilization_with_travel * Decimal("100")
+                        ).quantize(Decimal("0.01")),
+                        average_workload_without_travel=(
+                            baseline.metrics.average_utilization_without_travel * Decimal("100")
+                        ).quantize(Decimal("0.01")),
+                        algorithm_version=baseline.algorithm_version,
+                    )
+                )
+            await self._uow.flush()
+            plan = await self._uow.plans.get_by_id(plan_id)
+            if plan is None:
+                raise RuntimeError("Ручной план не сохранён")
+            plan.edited_from_plan_id = source.id if source else None
+            if source is not None:
+                self._uow.plans.set_approval_status(
+                    source, ApprovalStatus.REJECTED, datetime.now(UTC).replace(tzinfo=None)
+                )
+            await self._uow.commit()
+            return plan_id
+        except Exception:
+            await self._uow.rollback()
+            raise
+
+    async def _calculate_manual(self, command: ManualPlanCommand) -> _ManualCalculation:
+        try:
+            return await self._calculate_manual_impl(command)
+        except TravelMatrixUnavailableError as exc:
+            raise PlanningRoutingUnavailable from exc
+        except InvalidTravelMatrixResponseError as exc:
+            raise PlanningInvalidRoutingResponse from exc
+
+    async def _calculate_manual_impl(self, command: ManualPlanCommand) -> _ManualCalculation:
+        if (command.upload_id is None) == (command.source_plan_id is None):
+            raise ManualRouteInvalid
+        routes = self._manual_routes(command)
+        now = datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
+        source = None
+        if command.source_plan_id is not None:
+            source = await self._uow.plans.get_by_id(command.source_plan_id)
+            if (
+                source is None
+                or source.approval_status != ApprovalStatus.PENDING
+                or source.planning_date != now.date()
+            ):
+                raise ManualSourceConflict
+            upload_id: uuid.UUID | None = source.upload_id
+        else:
+            upload_id = command.upload_id
+        if upload_id is None:
+            raise ManualUploadNotFound
+        upload = await self._uow.data_uploads.get_by_id(upload_id)
+        if upload is None:
+            raise ManualUploadNotFound
+        requests = tuple(await self._uow.requests.get_by_upload_id(upload_id))
+        engineers = tuple(await self._uow.engineers.get_by_upload_id(upload_id))
+        if (
+            not requests
+            or not engineers
+            or min(item.window_start for item in requests).date() != now.date()
+        ):
+            raise ManualUploadNotFound
+        if source is not None and source.region != upload.region:
+            raise ManualSourceConflict
+        try:
+            if source is None or source.kind == PlanKind.INITIAL:
+                initial_draft = self._algorithm.prepare_initial(
+                    InitialPlanningSnapshot(
+                        region=upload.region,
+                        planning_date=now.date(),
+                        calculation_cutoff_at=now,
+                        mode=source.mode if source else DistributionMode.BALANCED,
+                        requests=tuple(
+                            self._to_request_snapshot(item)
+                            for item in requests
+                            if item.latitude is not None and item.longitude is not None
+                        ),
+                        engineers=tuple(self._to_engineer_snapshot(item) for item in engineers),
+                    )
+                )
+                matrices = await self._layer_matrices(
+                    initial_draft.points, initial_draft.matrix_requests
+                )
+                planning_input = self._algorithm.build_initial_input(initial_draft, matrices)
+                initial_result = self._algorithm.plan_manual_initial(planning_input, routes)
+                initial_result = replace(
+                    initial_result,
+                    unassigned=tuple(
+                        replace(item, reason=UnassignedReason.MANUAL_DECISION)
+                        for item in initial_result.unassigned
+                    ),
+                )
+                return _ManualCalculation(
+                    initial_result, source, requests, engineers, planning_input, None, None
+                )
+
+            base = await self.prepare_replan_base(upload.region, now)
+            if source.based_on_plan_id != base.base_plan_id:
+                raise ManualSourceConflict
+            snapshot = self._to_replan_snapshot(base, source.mode)
+            if source.triggered_by_event_id is not None:
+                replan_draft = await self._manual_event_draft(
+                    snapshot, source.triggered_by_event_id
+                )
+            else:
+                replan_draft = self._algorithm.prepare_replan(snapshot)
+            matrices = await self._layer_matrices(
+                replan_draft.tail.points, replan_draft.tail.matrix_requests
+            )
+            replan_input = self._algorithm.build_replan_input(replan_draft, matrices)
+            replan_result = self._algorithm.plan_manual_replan(replan_input, routes)
+            replan_result = replace(
+                replan_result,
+                unassigned=tuple(
+                    replace(item, reason=UnassignedReason.MANUAL_DECISION)
+                    for item in replan_result.unassigned
+                ),
+            )
+            return _ManualCalculation(
+                replan_result,
+                source,
+                requests,
+                engineers,
+                None,
+                base,
+                {item.id: item.is_available for item in replan_draft.snapshot.engineers},
+            )
+        except ManualRouteViolationError as exc:
+            raise ManualRouteInvalid(
+                [
+                    {
+                        "request_id": str(issue.request_id),
+                        "engineer_id": str(issue.engineer_id) if issue.engineer_id else None,
+                        "code": issue.code.value,
+                        "at": issue.at.isoformat() if issue.at else None,
+                        "limit": issue.limit.isoformat() if issue.limit else None,
+                    }
+                    for issue in exc.diagnosis.issues
+                ]
+            ) from exc
+        except (AlgorithmInputError, AlgorithmAuditError, MissingCoordinatesError) as exc:
+            raise ManualRouteInvalid from exc
+
+    @staticmethod
+    def _manual_routes(command: ManualPlanCommand) -> dict[uuid.UUID, tuple[uuid.UUID, ...]]:
+        engineer_ids = [route.engineer_id for route in command.routes]
+        if len(engineer_ids) != len(set(engineer_ids)):
+            raise ManualRouteInvalid
+        return {
+            route.engineer_id: route.request_ids for route in command.routes if route.request_ids
+        }
+
+    async def _manual_event_draft(
+        self, snapshot: ReplanSnapshot, event_id: uuid.UUID
+    ) -> ReplanDraft:
+        event = await self._uow.replanning_events.get_by_id(event_id)
+        if event is None or event.approval_status != ApprovalStatus.PENDING:
+            raise ManualSourceConflict
+        occurred_at = (
+            event.occurred_at.replace(tzinfo=UTC)
+            .astimezone(ZoneInfo("Europe/Moscow"))
+            .replace(tzinfo=None)
+        )
+        urgent = None
+        if event.event_type == ReplanningEventType.URGENT_REQUEST:
+            request = await self._uow.requests.get_by_id(event.request_id)
+            if request is None:
+                raise ManualSourceConflict
+            urgent = self._to_request_snapshot(request)
+        return self._algorithm.prepare_event_replan(
+            snapshot,
+            ReplanEvent(
+                event_type=event.event_type,
+                occurred_at=occurred_at,
+                urgent_request=urgent,
+                request_id=event.request_id
+                if event.event_type == ReplanningEventType.REQUEST_CANCELLED
+                else None,
+                engineer_id=event.engineer_id,
+            ),
+        )
 
     async def replan(
         self,
@@ -157,7 +526,11 @@ class PlanningService:
             await self._uow.plans.lock_region_day(region, cutoff_at.date())
             base = await self.prepare_replan_base(region, cutoff_at)
             plan_mode = mode or base.mode
-            plan_strategy = strategy or base.strategy
+            plan_strategy = strategy or (
+                PlanStrategy.LNS if base.strategy == PlanStrategy.MANUAL else base.strategy
+            )
+            if plan_strategy == PlanStrategy.MANUAL:
+                raise ManualRouteInvalid
             snapshot = self._to_replan_snapshot(base, plan_mode)
             draft = self._algorithm.prepare_replan(snapshot)
             matrices = await self._layer_matrices(draft.tail.points, draft.tail.matrix_requests)
@@ -235,13 +608,16 @@ class PlanningService:
                 snapshot, await self._to_replan_event(request, target_id, cutoff)
             )
             matrices = await self._layer_matrices(draft.tail.points, draft.tail.matrix_requests)
+            plan_strategy = (
+                PlanStrategy.LNS if base.strategy == PlanStrategy.MANUAL else base.strategy
+            )
             calculated = self._algorithm.plan_replan(
                 self._algorithm.build_replan_input(draft, matrices),
-                AlgorithmVariant(base.strategy.value),
+                AlgorithmVariant(plan_strategy.value),
             )
             availability = {item.id: item.is_available for item in draft.snapshot.engineers}
             plan_id = await self._persist_replan_result(
-                base, calculated, base.strategy, event_id=event_id, availability=availability
+                base, calculated, plan_strategy, event_id=event_id, availability=availability
             )
             await self._uow.flush()
             plan = await self._uow.plans.get_by_id(plan_id)
@@ -676,6 +1052,8 @@ class PlanningService:
         mode: DistributionMode,
         strategy: PlanStrategy,
     ) -> InitialPlanningResult:
+        if strategy == PlanStrategy.MANUAL:
+            raise ManualRouteInvalid
         if not files:
             raise PlanningFileCountError
         if len(files) % 2:

@@ -15,6 +15,8 @@ from src.core.algorithm.dto import (
     InitialPlanningSnapshot,
     Job,
     LayerMatrix,
+    ManualDiagnosis,
+    ManualIssue,
     PlanMetrics,
     PlanningLayer,
     ReplanDraft,
@@ -26,8 +28,8 @@ from src.core.algorithm.dto import (
     Stop,
     UnassignedJob,
 )
-from src.core.algorithm.enums import AlgorithmVariant
-from src.core.algorithm.exc import AlgorithmAuditError
+from src.core.algorithm.enums import AlgorithmVariant, ManualIssueCode
+from src.core.algorithm.exc import AlgorithmAuditError, ManualRouteViolationError
 from src.core.algorithm.materialization import ScheduleMaterializer
 from src.core.algorithm.normalization import InitialInputNormalizer, ReplanNormalizer
 from src.core.algorithm.rules import PlanningRules
@@ -80,6 +82,81 @@ class AlgorithmService:
         """Считает официальный baseline п. 2.3 ТЗ на том же входе и с тем же аудитом."""
 
         return self._plan(planning_input, AlgorithmVariant.BASELINE, None)
+
+    def plan_manual_initial(
+        self,
+        planning_input: InitialPlanningInput,
+        routes: dict[uuid.UUID, tuple[uuid.UUID, ...]],
+    ) -> InitialPlanningResult:
+        self._validate_manual_routes(planning_input, routes)
+        result = self._result(planning_input, routes, "manual-v1")
+        self._auditor.audit(planning_input, result)
+        return result
+
+    def plan_manual_replan(
+        self,
+        replan_input: ReplanInput,
+        routes: dict[uuid.UUID, tuple[uuid.UUID, ...]],
+    ) -> ReplanResult:
+        self._validate_manual_routes(replan_input.tail, routes)
+        tail = self._result(replan_input.tail, routes, "manual-v1")
+        self._auditor.audit(replan_input.tail, tail)
+        result = self._merge_replan(replan_input, tail)
+        self._auditor.audit_replan(replan_input, result)
+        return result
+
+    def _validate_manual_routes(
+        self,
+        planning_input: InitialPlanningInput,
+        routes: dict[uuid.UUID, tuple[uuid.UUID, ...]],
+    ) -> None:
+        engineers = {engineer.id: engineer for engineer in planning_input.engineers}
+        jobs = {job.id: job for job in planning_input.jobs}
+        layers = PlanningRules.index_layers(planning_input.layers, jobs)
+        assigned: set[uuid.UUID] = set()
+        issues: list[ManualIssue] = []
+        diagnosed_stops: dict[uuid.UUID, tuple[Stop, ...]] = {}
+        for engineer_id, request_ids in routes.items():
+            engineer = engineers.get(engineer_id)
+            known_ids: list[uuid.UUID] = []
+            for request_id in request_ids:
+                job = jobs.get(request_id)
+                if job is None:
+                    issues.append(
+                        ManualIssue(request_id, engineer_id, ManualIssueCode.UNKNOWN_REQUEST)
+                    )
+                    continue
+                if request_id in assigned:
+                    issues.append(
+                        ManualIssue(request_id, engineer_id, ManualIssueCode.DUPLICATE_REQUEST)
+                    )
+                    continue
+                assigned.add(request_id)
+                if engineer is None:
+                    issues.append(
+                        ManualIssue(request_id, engineer_id, ManualIssueCode.UNKNOWN_ENGINEER)
+                    )
+                    continue
+                if not engineer.is_available:
+                    issues.append(
+                        ManualIssue(request_id, engineer_id, ManualIssueCode.ENGINEER_UNAVAILABLE)
+                    )
+                if job.required_skill not in engineer.skills:
+                    issues.append(ManualIssue(request_id, engineer_id, ManualIssueCode.SKILL))
+                if (
+                    job.required_vehicle_type is not None
+                    and job.required_vehicle_type != engineer.vehicle_type
+                ):
+                    issues.append(ManualIssue(request_id, engineer_id, ManualIssueCode.VEHICLE))
+                known_ids.append(request_id)
+            if engineer is not None and known_ids:
+                stops, timing_issues = self._materializer.diagnose(
+                    engineer, known_ids, jobs, layers, planning_input.calculation_cutoff_at
+                )
+                diagnosed_stops[engineer_id] = stops
+                issues.extend(timing_issues)
+        if issues:
+            raise ManualRouteViolationError(ManualDiagnosis(diagnosed_stops, tuple(issues)))
 
     def plan_initial_diagnosed(
         self,

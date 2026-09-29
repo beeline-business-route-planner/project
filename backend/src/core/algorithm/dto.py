@@ -4,6 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Protocol
 
+from src.core.algorithm.enums import ManualIssueCode
 from src.core.db.enums import (
     DistributionMode,
     Region,
@@ -206,6 +207,29 @@ class Stop:
     travel_minutes: int
     distance_km: Decimal
     is_locked: bool = False
+
+
+@dataclass(frozen=True)
+class ManualIssue:
+    """Нарушение ручного маршрута на конкретной заявке.
+
+    `at` — проблемный момент (фактическое начало работ или их окончание), `limit` —
+    граница, которую он нарушает (последний допустимый старт или конец смены).
+    """
+
+    request_id: uuid.UUID
+    engineer_id: uuid.UUID | None
+    code: ManualIssueCode
+    at: datetime | None = None
+    limit: datetime | None = None
+
+
+@dataclass(frozen=True)
+class ManualDiagnosis:
+    """Разбор ручных маршрутов: примерное расписание и все найденные нарушения."""
+
+    stops: dict[uuid.UUID, tuple[Stop, ...]]
+    issues: tuple[ManualIssue, ...]
 
 
 @dataclass(frozen=True)

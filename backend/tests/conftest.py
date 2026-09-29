@@ -74,10 +74,10 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         cases = (
             ("integration",)
             if suite == "integration"
-            else ("g02", "g03", "g05", "t05", "t07", "t08")
+            else ("g02", "g03", "g05", "t05", "t07", "t08", "manual")
         )
         if suite == "full":
-            cases = ("integration", "g02", "g03", "g05", "t05", "t07", "t08")
+            cases = ("integration", "g02", "g03", "g05", "t05", "t07", "t08", "manual")
 
         async def create_databases() -> None:
             connection = await asyncpg.connect(

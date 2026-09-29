@@ -107,3 +107,20 @@ class PlanningUrgentRequestExists(Exception):
 )
 class PlanningUrgentRequestInvalid(Exception):
     pass
+
+
+@http_error(status_code=404, detail="Загрузка для ручного планирования не найдена")
+class ManualUploadNotFound(Exception):
+    pass
+
+
+@http_error(status_code=409, detail="Исходный план изменился или уже рассмотрен")
+class ManualSourceConflict(Exception):
+    pass
+
+
+@http_error(status_code=422, detail="Ручной маршрут нарушает ограничения планирования")
+class ManualRouteInvalid(Exception):
+    def __init__(self, issues: list[dict[str, str | None]] | None = None) -> None:
+        super().__init__("Ручной маршрут нарушает ограничения планирования")
+        self.details = {"issues": issues} if issues else {}

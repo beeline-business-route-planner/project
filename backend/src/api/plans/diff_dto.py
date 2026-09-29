@@ -96,6 +96,7 @@ class PlanSnapshotDTO:
     metrics: PlanMetricsDTO
     requests: tuple[SnapshotRequestDTO, ...]
     engineers: tuple[SnapshotEngineerDTO, ...]
+    edited_from_plan_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
