@@ -1,6 +1,7 @@
 node_modules/
 dist/
-.env
+# frontend/.env is part of the build context on purpose: Vite inlines its
+# VITE_* values at build time. It stays in the builder stage only.
 .env.*
 !.env.example
 *.tsbuildinfo

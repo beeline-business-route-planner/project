@@ -14,10 +14,12 @@
 Нужен только Docker с Compose v2.24+, а также ключи DaData и 2ГИС.
 
 ```bash
-cp .env.example .env
-# Впишите DADATA_API_KEY и VITE_2GIS_KEY (остальное можно не трогать), затем:
+cp backend/.env.example backend/.env     # впишите DADATA_API_KEY
+cp frontend/.env.example frontend/.env   # впишите VITE_2GIS_KEY
 docker compose up -d --build
 ```
+
+Это те же два файла, что и для разработки: отдельного корневого `.env` нет.
 
 Откройте <http://localhost:8088>. Это единственный адрес, нужный пользователю:
 nginx отдаёт приложение и сам проксирует `/api` на backend и `/dgis-routing` на 2ГИС,
@@ -25,12 +27,15 @@ nginx отдаёт приложение и сам проксирует `/api` н
 ни ключа маршрутизации; виден только ключ карты MapGL — он публичный по своей
 природе, ограничьте его по домену в кабинете 2ГИС. Postgres, MinIO, backend и
 мониторинг слушают только `127.0.0.1`. Чтобы открыть приложение в локальной сети,
-задайте `FRONTEND_HOST=0.0.0.0`. Остановить: `docker compose down`.
+запустите `FRONTEND_HOST=0.0.0.0 docker compose up -d` (порт — `FRONTEND_PORT`).
+Остановить: `docker compose down`.
 После правок во фронте достаточно `docker compose up -d --build --no-deps frontend` —
 без `--no-deps` Compose пересоздаст и backend.
 
 Сервисы бэкенда описаны в `backend/docker-compose.yml` и подключаются корневым
-`docker-compose.yml`; `backend/config.toml` необязателен — все ключи берутся из `.env`.
+`docker-compose.yml` со своим `backend/.env`; `backend/config.toml` необязателен — ключи
+можно задать в `backend/.env`. Фронтенд в Docker берёт ключи 2ГИС из `frontend/.env`:
+ключ карты попадает в сборку, ключ маршрутов (`DGIS_ROUTING_KEY`) — только в nginx.
 
 ## Разработка
 
