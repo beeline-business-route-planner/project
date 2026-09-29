@@ -678,34 +678,42 @@ class PlanningService:
     ) -> InitialPlanningResult:
         if not files:
             raise PlanningFileCountError
+        if len(files) % 2:
+            raise PlanningRegionPairError
         identified = await asyncio.gather(
             *(asyncio.to_thread(PlanningWorkbookParser.identify_region, file) for file in files)
         )
         grouped_files: dict[Region, list[PlanningUploadFile]] = {}
         for region, file in zip(identified, files, strict=True):
             grouped_files.setdefault(region, []).append(file)
+        if any(len(region_files) != 2 for region_files in grouped_files.values()):
+            raise PlanningRegionPairError
 
-        regions: list[PlanningRegionResult] = []
+        pairs: dict[Region, dict[str, ParsedWorkbook]] = {}
+        parsing_errors: dict[Region, PlanningRegionResult] = {}
         for region in sorted(grouped_files, key=lambda item: item.value):
             try:
                 region_files = grouped_files[region]
-                if len(region_files) != 2:
-                    raise PlanningRegionPairError
                 parsed = await asyncio.gather(
                     *(
                         asyncio.to_thread(PlanningWorkbookParser.parse, file)
                         for file in region_files
                     )
                 )
-                pair = PlanningWorkbookParser.build_region_pairs(parsed)[region]
-            except (PlanningFileValidationError, PlanningRegionPairError) as exc:
+            except PlanningFileValidationError as exc:
                 code, detail = self._region_error(exc)
-                regions.append(
-                    PlanningRegionResult(
-                        region=region, status="error", error_code=code, error_detail=detail
-                    )
+                parsing_errors[region] = PlanningRegionResult(
+                    region=region, status="error", error_code=code, error_detail=detail
                 )
                 continue
+            pairs[region] = PlanningWorkbookParser.build_region_pairs(parsed)[region]
+
+        regions: list[PlanningRegionResult] = []
+        for region in sorted(grouped_files, key=lambda item: item.value):
+            if region in parsing_errors:
+                regions.append(parsing_errors[region])
+                continue
+            pair = pairs[region]
             regions.append(
                 await self._run_region(region, pair["requests"], pair["engineers"], mode, strategy)
             )
