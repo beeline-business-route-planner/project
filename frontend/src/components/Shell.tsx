@@ -2,7 +2,6 @@ import { useEffect, useState, type ReactNode } from "react";
 import { CalendarDays, ChevronDown, Menu, X } from "lucide-react";
 import { BellSimpleIcon } from "@phosphor-icons/react/dist/csr/BellSimple";
 import { BookOpenTextIcon } from "@phosphor-icons/react/dist/csr/BookOpenText";
-import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
 import { PathIcon } from "@phosphor-icons/react/dist/csr/Path";
 import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
 import { ChartBarIcon } from "@phosphor-icons/react/dist/csr/ChartBar";
@@ -11,7 +10,7 @@ import type { DataSource, PlannerController } from "../hooks/usePlanner";
 import { API_BASE_URL } from "../api/client";
 import { BeelineLogo } from "./BeelineLogo";
 
-export type Page = "dashboard" | "planning" | "analytics" | "history";
+export type Page = "dashboard" | "planning" | "analytics";
 type UtilityPanel = "help" | "notifications" | "instructions";
 
 interface ShellProps {
@@ -25,8 +24,15 @@ const nav = [
   { id: "dashboard" as const, label: "Контроль дня", icon: SquaresFourIcon },
   { id: "planning" as const, label: "Планирование", icon: PathIcon },
   { id: "analytics" as const, label: "Аналитика", icon: ChartBarIcon },
-  { id: "history" as const, label: "История версий", icon: ClockCounterClockwiseIcon },
 ];
+
+function moscowToday() {
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+function russianDate(date: string) {
+  return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric" }).format(new Date(`${date}T12:00:00`));
+}
 
 function ConnectionBadge({ source }: { source: DataSource }) {
   return (
@@ -44,11 +50,18 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
   const [utilityPanel, setUtilityPanel] = useState<UtilityPanel | null>(null);
   const [notificationsRead, setNotificationsRead] = useState(false);
   const [pushVisible, setPushVisible] = useState(false);
+  const [today, setToday] = useState(moscowToday);
   const scenario = data.scenarios.find((item) => item.id === data.scenarioId) ?? data.scenarios[0];
   const overdueCount = data.requests.filter((item) => item.status === "OVERDUE").length;
   const unassignedCount = data.requests.filter((item) => !item.engineer_id && item.status !== "CANCELLED").length;
   const draftCount = data.plans.filter((item) => item.status === "draft").length;
   const notificationCount = overdueCount + unassignedCount + draftCount;
+  const viewingAnotherDay = data.planningDate !== today;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setToday(moscowToday()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!utilityPanel) return;
@@ -109,6 +122,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
         <header className="topbar">
           <button className="icon-button mobile-menu" aria-label="Открыть меню" onClick={() => setMobileSidebarOpen((current) => !current)}><Menu size={20} /></button>
           <div className="context-selects">
+            <div className="today-context"><span>Сегодня</span><strong>{russianDate(today)}</strong></div>
             <label>
               <span>Участок</span>
               <select
@@ -119,7 +133,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
               </select>
             </label>
             <label>
-              <span>Рабочий день · даты с планами</span>
+              <span>{viewingAnotherDay ? "Просмотр плана за" : "Рабочий день"}</span>
               <div className="input-with-icon">
                 <CalendarDays size={15} />
                 <select
@@ -127,11 +141,12 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
                   onChange={(event) => void planner.changeContext(data.scenarioId, event.target.value)}
                 >
                   {(scenario?.planning_dates ?? [data.planningDate]).map((date) => (
-                    <option key={date} value={date}>{new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric" }).format(new Date(`${date}T12:00:00`))}</option>
+                    <option key={date} value={date}>{russianDate(date)}</option>
                   ))}
                 </select>
               </div>
             </label>
+            {viewingAnotherDay ? <span className="historical-date-note" title="Плана на сегодня нет среди полученных от backend дат">Архивный день</span> : null}
           </div>
           <div className="topbar-actions">
             <ConnectionBadge source={planner.source} />

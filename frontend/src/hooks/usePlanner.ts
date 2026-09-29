@@ -96,6 +96,19 @@ function number(value: number | string | null | undefined) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function validPoint(longitude: number | string | null | undefined, latitude: number | string | null | undefined): [number, number] | null {
+  if (longitude == null || latitude == null) return null;
+  const lng = Number(longitude);
+  const lat = Number(latitude);
+  return Number.isFinite(lng) && Number.isFinite(lat) && Math.abs(lng) <= 180 && Math.abs(lat) <= 90 && (lng !== 0 || lat !== 0)
+    ? [lng, lat] : null;
+}
+
+function orderedStops(engineer: BackendEngineerTile) {
+  return [...engineer.stops].sort((left, right) =>
+    (left.sequence_number ?? Number.MAX_SAFE_INTEGER) - (right.sequence_number ?? Number.MAX_SAFE_INTEGER));
+}
+
 function errorText(error: unknown) {
   if (error instanceof ApiError) return `${error.message} · HTTP ${error.status}`;
   return error instanceof Error ? error.message : "Неизвестная ошибка";
@@ -157,6 +170,7 @@ function requestFromBackend(
   const reason = tile.unassigned_reason
     ? unassignedLabels[tile.unassigned_reason] ?? tile.unassigned_reason
     : undefined;
+  const coordinates = validPoint(detail?.longitude ?? tile.longitude, detail?.latitude ?? tile.latitude);
   return {
     id: tile.request_id,
     external_id: `BK-${detail?.external_id ?? tile.external_id}`,
@@ -166,7 +180,7 @@ function requestFromBackend(
     hd_type: detail?.type_hd ?? "Service request",
     address: detail?.address ?? tile.address,
     district: detail?.district ?? tile.district,
-    coordinates: [number(detail?.longitude ?? tile.longitude), number(detail?.latitude ?? tile.latitude)],
+    coordinates: coordinates ?? [0, 0],
     window_start: detail?.window_start ?? tile.window_start,
     window_end: detail?.window_end ?? tile.window_end,
     service_minutes: detail?.norm_minutes_without_travel ?? 90,
@@ -174,7 +188,7 @@ function requestFromBackend(
     status: detail?.status && detail.status !== "not_sent"
       ? statusMap[detail.status] ?? "NOT_SENT"
       : tile.assigned_engineer ? "SENT" : "NOT_SENT",
-    mapping_state: tile.latitude != null && tile.longitude != null ? "mapped" : "unmapped",
+    mapping_state: coordinates ? "mapped" : "unmapped",
     priority: rank === 1 ? "urgent" : "normal",
     priority_rank: rank,
     required_skill: skillMap[requiredSkill] ?? "local",
@@ -204,7 +218,7 @@ function engineerFromBackend(
     transport: vehicleMap[detail?.vehicle_type ?? tile.vehicle_type] ?? "car",
     skills: (detail?.skills ?? []).map((skill) => skillMap[skill] ?? "local"),
     status: detail?.is_available === false ? "unavailable" : tile.assigned_requests_count ? "working" : "available",
-    request_ids: tile.stops.map((stop) => stop.request_id),
+    request_ids: orderedStops(tile).map((stop) => stop.request_id),
     load_minutes: Math.round(load <= 1 ? load * 480 : load * 4.8),
     distance_meters: number(tile.route_distance_km) * 1000,
     color: colors[index % colors.length],
@@ -217,16 +231,12 @@ function routesFromPlan(plan: BackendPlanDetail): OverviewRoutesResponse {
     revision: plan.created_at,
     status: plan.approval_status,
     routes: plan.engineers.map((engineer) => {
-      const coordinates = [
-        engineer.start_longitude != null && engineer.start_latitude != null
-          ? [number(engineer.start_longitude), number(engineer.start_latitude)] as [number, number]
-          : null,
-        ...engineer.stops.map((stop) =>
-          stop.longitude != null && stop.latitude != null
-            ? [number(stop.longitude), number(stop.latitude)] as [number, number]
-            : null,
-        ),
+      const routePoints = [
+        validPoint(engineer.start_longitude, engineer.start_latitude),
+        ...orderedStops(engineer).map((stop) => validPoint(stop.longitude, stop.latitude)),
       ].filter((point): point is [number, number] => point !== null);
+      const coordinates = routePoints.filter((point, index) =>
+        index === 0 || point[0] !== routePoints[index - 1][0] || point[1] !== routePoints[index - 1][1]);
       return {
         engineer_id: engineer.engineer_id,
         profile: engineer.vehicle_type,
@@ -285,7 +295,9 @@ export function usePlanner() {
       if (dateOverride && !availableDates.includes(dateOverride)) {
         throw new Error(`На ${dateOverride} для выбранного участка нет плана. Загрузите исходные XLSX в «Планировании».`);
       }
-      const planningDate = dateOverride || summaries.find((plan) => plan.is_current)?.planning_date || availableDates[0];
+      // `is_current` identifies the active version, not necessarily today's
+      // working day. Open the newest available day first, then its current plan.
+      const planningDate = dateOverride || availableDates[0];
       const selectedSummary =
         summaries.find((plan) => plan.id === planId) ??
         summaries.find((plan) => plan.is_current && plan.planning_date === planningDate) ??

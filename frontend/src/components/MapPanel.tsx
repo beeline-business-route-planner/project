@@ -22,15 +22,17 @@ type PointCluster = { key: string; center: [number, number]; requests: RequestIt
 
 const MAP_KEY = import.meta.env.VITE_2GIS_KEY?.trim() ?? "";
 const DIRECTIONS_KEY = import.meta.env.VITE_2GIS_DIRECTIONS_KEY?.trim() || MAP_KEY;
+const ROUTE_COLOR = "#165dff";
 // Start fetching the MapGL runtime as soon as this module is evaluated instead
 // of waiting for the map component effect. The loader caches this promise.
 const mapApiPromise = MAP_KEY ? load() : null;
 
 function centerFromRequests(requests: RequestItem[]): [number, number] {
-  if (!requests.length) return [37.72, 55.7];
+  const mapped = requests.filter((item) => item.mapping_state === "mapped");
+  if (!mapped.length) return [37.72, 55.7];
   return [
-    requests.reduce((sum, item) => sum + item.coordinates[0], 0) / requests.length,
-    requests.reduce((sum, item) => sum + item.coordinates[1], 0) / requests.length,
+    mapped.reduce((sum, item) => sum + item.coordinates[0], 0) / mapped.length,
+    mapped.reduce((sum, item) => sum + item.coordinates[1], 0) / mapped.length,
   ];
 }
 
@@ -48,10 +50,9 @@ function boundsFromRequests(requests: RequestItem[]) {
 }
 
 function createClusters(requests: RequestItem[], zoom: number): PointCluster[] {
-  if (zoom >= 13) {
-    return requests.map((request) => ({ key: request.id, center: request.coordinates, requests: [request] }));
-  }
-  const precision = zoom <= 10 ? 1 : 2;
+  // At high zoom, still group requests with identical coordinates so none is
+  // hidden under another marker. Repeated clicks cycle through that group.
+  const precision = zoom <= 10 ? 1 : zoom < 13 ? 2 : 6;
   const grouped = new Map<string, RequestItem[]>();
   requests.forEach((request) => {
     const key = `${request.coordinates[0].toFixed(precision)}:${request.coordinates[1].toFixed(precision)}`;
@@ -65,6 +66,19 @@ function createClusters(requests: RequestItem[], zoom: number): PointCluster[] {
     ],
     requests: clusterRequests,
   }));
+}
+
+// Directions returns road geometry as WKT. Draw that geometry ourselves so the
+// route stays legible over 2GIS's yellow/orange roads at every zoom level.
+function roadLinesFromWkt(wkt: string): number[][][] {
+  const geometry = wkt.replace(/^SRID=\d+;/i, "").trim();
+  const type = geometry.match(/^(LINESTRING|MULTILINESTRING)(?:\s+Z)?\s*\(/i)?.[1]?.toUpperCase();
+  if (!type) return [];
+  const groups = type === "LINESTRING"
+    ? [geometry.slice(geometry.indexOf("(") + 1, geometry.lastIndexOf(")"))]
+    : [...geometry.matchAll(/\(([^()]+)\)/g)].map((match) => match[1]);
+  return groups.map((group) => group.split(",").map((pair) => pair.trim().split(/\s+/).slice(0, 2).map(Number)))
+    .filter((line) => line.length >= 2 && line.every(([lng, lat]) => Number.isFinite(lng) && Number.isFinite(lat)));
 }
 
 function createMarkerContent(cluster: PointCluster, selectedRequestId: string | null, onSelectRequest: (requestId: string) => void) {
@@ -115,14 +129,15 @@ function createMarkerContent(cluster: PointCluster, selectedRequestId: string | 
   const title = document.createElement("strong");
   title.textContent = cluster.requests.length > 1 ? `${cluster.requests.length} заявок рядом` : request.external_id;
   const description = document.createElement("span");
-  description.textContent = cluster.requests.length > 1 ? "Нажмите, чтобы открыть первую" : `${request.bk_type} · ${request.district}`;
+  description.textContent = cluster.requests.length > 1 ? "Нажимайте, чтобы переключать заявки" : `${request.bk_type} · ${request.district}`;
   const meta = document.createElement("b");
   meta.textContent = cluster.requests.length > 1 ? "" : `${formatTime(request.window_start)}–${formatTime(request.window_end)} · ${statusLabels[request.status]}`;
   tooltip.append(title, description, meta);
   marker.appendChild(tooltip);
   marker.addEventListener("click", (event) => {
     event.stopPropagation();
-    onSelectRequest(request.id);
+    const currentIndex = cluster.requests.findIndex((item) => item.id === selectedRequestId);
+    onSelectRequest(cluster.requests[(currentIndex + 1) % cluster.requests.length].id);
   });
   return marker;
 }
@@ -145,7 +160,8 @@ export function MapPanel(props: MapPanelProps) {
   const selectedRoute = props.detailedRoute?.engineer_id === props.selectedEngineerId
     ? props.detailedRoute
     : props.routes.routes.find((route) => route.engineer_id === props.selectedEngineerId);
-  const clusters = useMemo(() => createClusters(props.requests, zoom), [props.requests, zoom]);
+  const mappedRequests = useMemo(() => props.requests.filter((item) => item.mapping_state === "mapped"), [props.requests]);
+  const clusters = useMemo(() => createClusters(mappedRequests, zoom), [mappedRequests, zoom]);
 
   useEffect(() => {
     if (!MAP_KEY || !containerRef.current) {
@@ -198,13 +214,13 @@ export function MapPanel(props: MapPanelProps) {
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!mapApi || !map || !props.requests.length) return;
-    map.fitBounds(boundsFromRequests(props.requests), {
+    if (!mapApi || !map || !mappedRequests.length) return;
+    map.fitBounds(boundsFromRequests(mappedRequests), {
       padding: { top: 76, right: 54, bottom: 54, left: 54 },
       maxZoom: 13,
       animation: { duration: 650, easing: "easeOutCubic" },
     });
-  }, [mapApi, props.requests]);
+  }, [mapApi, mappedRequests]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -253,6 +269,7 @@ export function MapPanel(props: MapPanelProps) {
     }
     let disposed = false;
     const drawn: Array<{ clear: () => void }> = [];
+    const routeLines: Destructible[] = [];
     setRoadLoading(true); setRoadReady(false); setRoadError(null);
     void import("@2gis/mapgl-directions").then(async ({ Directions }) => {
       // Directions accepts at most ten waypoints; overlap chunks at each boundary.
@@ -261,21 +278,51 @@ export function MapPanel(props: MapPanelProps) {
         const segment = points.slice(start, start + 10);
         const directions = new Directions(map, { directionsApiKey: DIRECTIONS_KEY });
         drawn.push(directions);
+        const geometries: number[][][] = [];
+        directions.on("directionsLoaded", ({ routes }) => {
+          const route = routes[0];
+          const sections = [
+            route?.begin_pedestrian_path?.geometry.selection,
+            ...((route?.maneuvers ?? []).flatMap((maneuver) => maneuver.outcoming_path?.geometry?.map((part) => part.selection) ?? [])),
+            route?.end_pedestrian_path?.geometry.selection,
+          ];
+          sections.forEach((wkt) => { if (wkt) geometries.push(...roadLinesFromWkt(wkt)); });
+        });
         if (selectedEngineer?.transport === "walking") await directions.pedestrianRoute({ points: segment });
         else await directions.carRoute({ points: segment });
+        directions.clear();
+        if (disposed) return;
+        for (const coordinates of geometries) {
+          routeLines.push(new mapApi.Polyline(map, { coordinates, width: 11, color: "#15202d", zIndex: 5, interactive: false }));
+          routeLines.push(new mapApi.Polyline(map, { coordinates, width: 7, color: "#ffffff", zIndex: 6, interactive: false }));
+          routeLines.push(new mapApi.Polyline(map, { coordinates, width: 5, color: ROUTE_COLOR, zIndex: 7, interactive: false }));
+        }
       }
-      if (!disposed) { setRoadReady(true); setRoadLoading(false); }
-    }).catch(() => {
+      if (!disposed) {
+        setRoadReady(routeLines.length > 0);
+        setRoadError(routeLines.length ? null : "2ГИС не вернул геометрию дороги для этого маршрута.");
+        setRoadLoading(false);
+      }
+    }).catch((error: unknown) => {
       drawn.forEach((directions) => directions.clear());
-      if (!disposed) { setRoadError("2ГИС не построил маршрут по дорогам. Проверьте доступ ключа к Directions API."); setRoadLoading(false); }
+      routeLines.forEach((line) => line.destroy());
+      if (!disposed) {
+        const status = error instanceof Error ? error.message.match(/HTTP code is (\d{3})/)?.[1] : null;
+        setRoadError(status === "401" || status === "403"
+          ? `2ГИС Directions отклонил ключ (HTTP ${status}). Нужен ключ с доступом к маршрутизации.`
+          : status
+            ? `2ГИС не построил маршрут (HTTP ${status}).`
+            : "2ГИС не построил маршрут по дорогам. Проверьте доступ ключа к Directions API.");
+        setRoadLoading(false);
+      }
     });
-    return () => { disposed = true; drawn.forEach((directions) => directions.clear()); };
+    return () => { disposed = true; drawn.forEach((directions) => directions.clear()); routeLines.forEach((line) => line.destroy()); };
   }, [mapApi, props.selectedEngineerId, selectedEngineer?.transport, selectedRoute?.geometry]);
 
   const fitAll = () => {
     const map = mapRef.current;
-    if (!map || !props.requests.length) return;
-    map.fitBounds(boundsFromRequests(props.requests), {
+    if (!map || !mappedRequests.length) return;
+    map.fitBounds(boundsFromRequests(mappedRequests), {
       padding: { top: 76, right: 54, bottom: 54, left: 54 },
       maxZoom: 13,
       animation: { duration: 500, easing: "easeOutCubic" },
@@ -321,8 +368,8 @@ export function MapPanel(props: MapPanelProps) {
       </div>
       {selectedEngineer ? (
         <div className="map-route-caption">
-          <i className="route-live-signal" style={{ "--route-color": selectedEngineer.color } as React.CSSProperties} />
-          <div><strong>{selectedEngineer.name}</strong><span>{selectedEngineer.request_ids.length} заявки в маршруте</span></div>
+          <i className="route-live-signal" style={{ "--route-color": ROUTE_COLOR } as React.CSSProperties} />
+          <div><strong>{selectedEngineer.name}</strong><span>{selectedEngineer.request_ids.length} {selectedEngineer.request_ids.length === 1 ? "заявка" : selectedEngineer.request_ids.length >= 2 && selectedEngineer.request_ids.length <= 4 ? "заявки" : "заявок"} в маршруте</span></div>
           {props.routeLoading || roadLoading ? <span className="mini-spinner" /> : <em className={roadReady ? "" : "route-error"}>{roadReady ? "по дорогам 2ГИС" : roadError ?? "Маршрут не построен"}</em>}
         </div>
       ) : null}

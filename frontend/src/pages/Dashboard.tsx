@@ -37,6 +37,7 @@ function moscowDate() {
 
 export function Dashboard({ planner }: { planner: PlannerController }) {
   const { data } = planner;
+  const isToday = data.planningDate === moscowDate();
   const [tab, setTab] = useState<ListTab>("requests");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<RequestStatus | "all">("all");
@@ -88,14 +89,14 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
       <div className="page-heading compact-heading">
         <div>
           <span className="eyebrow">Оперативный контроль</span>
-          <h1>Рабочий день</h1>
+          <h1>{isToday ? "Рабочий день" : "Архивный план"}</h1>
           <p>План <strong>{data.plans.find((plan) => plan.id === data.activePlanId)?.code ?? "—"}</strong> · создан {formatTime(data.plans.find((plan) => plan.id === data.activePlanId)?.created_at)}</p>
         </div>
       </div>
 
       <section className="kpi-grid day-kpis">
-        <article><span className="kpi-icon yellow"><TimerIcon size={21} weight="duotone" /></span><div><b>{counts.active}</b><span>В работе</span></div><em>сейчас</em></article>
-        <article><span className="kpi-icon violet"><ArrowUpRightIcon size={21} weight="bold" /></span><div><b>{counts.enRoute}</b><span>В пути</span></div><em>по графику</em></article>
+        <article><span className="kpi-icon yellow"><TimerIcon size={21} weight="duotone" /></span><div><b>{counts.active}</b><span>В работе</span></div><em>{isToday ? "сейчас" : "по данным плана"}</em></article>
+        <article><span className="kpi-icon violet"><ArrowUpRightIcon size={21} weight="bold" /></span><div><b>{counts.enRoute}</b><span>В пути</span></div><em>{isToday ? "по графику" : "по данным плана"}</em></article>
         <article className={counts.overdue ? "attention" : ""}><span className="kpi-icon coral"><WarningCircleIcon size={21} weight="duotone" /></span><div><b>{counts.overdue}</b><span>Просрочено</span></div><em>нужно внимание</em></article>
         <article><span className="kpi-icon green"><CheckCircleIcon size={21} weight="duotone" /></span><div><b>{counts.done}<small>/{data.requests.length}</small></b><span>Выполнено</span></div><em>{Math.round(counts.done / data.requests.length * 100)}% дня</em></article>
         <article><span className="kpi-icon blue"><UsersThreeIcon size={21} weight="duotone" /></span><div><b>{data.metrics.engineers_used}<small>/{data.engineers.length}</small></b><span>На линии</span></div><em>{data.metrics.avg_load_percent}% загрузка</em></article>
@@ -157,7 +158,7 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
           ) : selectedEngineer ? (
             <EngineerDetails
               engineer={selectedEngineer}
-              requests={data.requests.filter((request) => request.engineer_id === selectedEngineer.id)}
+              requests={selectedEngineer.request_ids.map((id) => data.requests.find((request) => request.id === id)).filter((request): request is (typeof data.requests)[number] => Boolean(request))}
               onRequest={selectRequest}
               onClose={() => { setSelectedEngineerId(null); void planner.loadDetailedRoute(null); }}
             />

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDownToLine,
   BarChart3,
@@ -19,18 +19,23 @@ import { PlanStatusPill, formatDateTime, formatDistance } from "../components/ui
 export function Journal({
   planner,
   onOpenComparison,
-  view,
 }: {
   planner: PlannerController;
   onOpenComparison: (oldPlanId: string, newPlanId: string) => Promise<void>;
-  view: "analytics" | "history";
 }) {
   const { data } = planner;
+  const [view, setView] = useState<"analytics" | "history">("analytics");
   const [query, setQuery] = useState("");
   const [actionFilter, setActionFilter] = useState("all");
   const [typesExpanded, setTypesExpanded] = useState(true);
   const [oldPlanId, setOldPlanId] = useState(data.plans[2]?.id ?? data.plans[0]?.id);
   const [newPlanId, setNewPlanId] = useState(data.activePlanId);
+  useEffect(() => {
+    setNewPlanId(data.activePlanId);
+    setOldPlanId(data.plans.find((plan) => plan.id === data.activePlanId)?.base_plan_id
+      ?? data.plans.find((plan) => plan.id !== data.activePlanId)?.id
+      ?? data.activePlanId);
+  }, [data.activePlanId, data.plans]);
   const filteredAudit = useMemo(() => {
     const term = query.toLocaleLowerCase("ru");
     return data.audit.filter((item) => {
@@ -86,11 +91,15 @@ export function Journal({
   return (
     <div className="journal-page">
       <div className="page-heading">
-        <div><span className="eyebrow">Результаты и трассировка</span><h1>{view === "analytics" ? "Аналитика" : "История версий"}</h1><p>{view === "analytics" ? "Показатели качества и отчёт по рабочему дню." : "Сохранённые планы, сравнение и журнал решений."}</p></div>
+        <div><span className="eyebrow">Результаты и трассировка</span><h1>Аналитика и история</h1><p>Показатели рабочего дня, версии планов и журнал решений.</p></div>
         {view === "analytics" ? <div className="heading-actions"><button className="button primary dark" disabled={planner.source !== "api"} title={planner.source !== "api" ? "Доступно после подключения backend" : "Архив PDF-отчётов"} onClick={() => void planner.downloadReport("pdf")}><FileDown size={17} /> Отчёт ZIP</button></div> : null}
       </div>
+      <div className="journal-page-tabs" role="tablist" aria-label="Разделы аналитики">
+        <button id="analytics-tab" role="tab" aria-selected={view === "analytics"} aria-controls="analytics-panel" className={view === "analytics" ? "active" : ""} onClick={() => setView("analytics")}><BarChart3 size={18} /> Аналитика</button>
+        <button id="history-tab" role="tab" aria-selected={view === "history"} aria-controls="history-panel" className={view === "history" ? "active" : ""} onClick={() => setView("history")}><History size={18} /> История версий <span>{data.plans.length}</span></button>
+      </div>
       {view === "analytics" ? (
-        <>
+        <div id="analytics-panel" role="tabpanel" aria-labelledby="analytics-tab">
           <section className="analytics-kpis">
             <article><span className="metric-icon violet"><CheckCircle2 size={19} /></span><div><small>Охват заявок</small><b>{coverage}%</b><em>{data.metrics.assigned} из {total} распределены</em></div></article>
             <article><span className="metric-icon yellow"><CircleDot size={19} /></span><div><small>Назначено</small><b>{data.metrics.assigned}</b><em>заявок в плане</em></div></article>
@@ -102,7 +111,7 @@ export function Journal({
           <div className="analytics-grid">
             <section className="chart-card workload-chart">
               <div className="card-head"><div><h2>Загрузка инженеров</h2><p>Работы + дорога от 8-часовой смены</p></div><span className="chart-badge">План {data.plans.find((plan) => plan.id === data.activePlanId)?.code}</span></div>
-              <div className="workload-bars">{data.engineers.map((engineer) => { const percent = Math.round(engineer.load_minutes / 480 * 100); return <div key={engineer.id}><span>{engineer.name}</span><div><i style={{ width: `${Math.min(100, percent)}%`, background: engineer.color }} /></div><b>{percent}%</b></div>; })}</div>
+              <div className="workload-bars">{data.engineers.map((engineer) => { const percent = Math.round(engineer.load_minutes / 480 * 100); const count = engineer.request_ids.length; return <div className="workload-row" key={engineer.id}><span title={engineer.name}>{engineer.name}</span><div className="workload-track" role="img" aria-label={`${engineer.name}: ${count} заявок, загрузка ${percent}%`}><i style={{ width: `${Math.min(100, percent)}%`, background: engineer.color }} /></div><div className="workload-value"><strong>{count} {count === 1 ? "заявка" : count >= 2 && count <= 4 ? "заявки" : "заявок"}</strong><b>{percent}%</b></div></div>; })}</div>
               <div className="chart-axis"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
             </section>
 
@@ -119,9 +128,9 @@ export function Journal({
 
           </div>
 
-        </>
+        </div>
       ) : (
-        <div className="history-sections">
+        <div id="history-panel" role="tabpanel" aria-labelledby="history-tab" className="history-sections">
           <section className="chart-card compare-card">
             <div className="card-head"><div><h2>Сравнить планы</h2><p>Изменения маршрутов и назначений</p></div><GitCompareArrows size={18} /></div>
             <div className="compare-selects"><label><span>Базовый</span><select value={oldPlanId} onChange={(event) => setOldPlanId(event.target.value)}>{data.plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.code}</option>)}</select></label><span className="compare-arrow">→</span><label><span>Новый</span><select value={newPlanId} onChange={(event) => setNewPlanId(event.target.value)}>{data.plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.code}</option>)}</select></label></div>
