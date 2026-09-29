@@ -4,36 +4,58 @@ postgres_password = "change-me"
 postgres_db = "app"
 postgres_host = "localhost"
 postgres_port = 5432
+# alembic_postgres_host = "localhost"  # хост БД для alembic, если отличается от postgres_host
 
 [s3]
 endpoint_url = "http://localhost:9000"
+public_endpoint_url = "http://127.0.0.1:9000"
 access_key = "admin"
 secret_key = "change-me-min-8-chars"
 region = "us-east-1"
+connect_timeout_seconds = 10
+read_timeout_seconds = 60
 bucket_answers = "answers"
 bucket_uploads = "uploads"
 bucket_plans = "plans"
+bucket_exports = "exports"
+export_prefix = "exports"
+export_url_ttl_seconds = 900
+export_retention_hours = 24
+max_export_size_bytes = 10000000
 
 [geocoding]
-base_url = "https://nominatim.openstreetmap.org"
-user_agent = "beeline-business-route-planner/0.1 (+https://github.com/beeline-business-route-planner/project)"
-timeout_seconds = 15.0
-min_request_interval_seconds = 1.0
-country_codes = "ru"
+base_url = "https://suggestions.dadata.ru"
+api_key = ""
+timeout_seconds = 10.0
+max_concurrent_requests = 10
+max_qc_geo = 1
+suggestions_count = 5
 
 [routing]
-base_url = "https://router.project-osrm.org"
-profile = "driving"
+car_table_url = "https://router.project-osrm.org/table/v1/driving"
+foot_table_url = "https://routing.openstreetmap.de/routed-foot/table/v1/driving"
+bike_table_url = "https://routing.openstreetmap.de/routed-bike/table/v1/driving"
+user_agent = "beeline-business-route-planner/0.1"
 timeout_seconds = 60.0
 travel_buffer_multiplier = 1.10
 max_table_coordinates = 100
+public_transport_speed_kmh = 20.0
+public_transport_wait_minutes = 10
+
+[travel_matrix]
+# osrm — без пробок, бесплатно; dgis — с пробками, нужен dgis.api_key
+provider = "osrm"
 
 [dgis]
 base_url = "https://routing.api.2gis.com"
 api_key = ""
 api_version = "2.0"
 timeout_seconds = 60.0
-max_matrix_points = 25
+max_matrix_sources = 10
+max_matrix_targets = 10
+rate_limit_retries = 4
+rate_limit_backoff_seconds = 2.0
+public_transport_types = ["bus", "trolleybus", "tram", "metro", "shuttle_bus", "suburban_train"]
 
 [planning]
 max_file_size_bytes = 10000000
@@ -49,14 +71,16 @@ route_candidates_per_engineer = 48
 route_candidate_improvement_rounds = 2
 route_candidates_per_improvement_round = 4
 selection_node_budget = 5000
-lns_iterations = 60
+lns_iterations = 95
+lns_descent_attempt_budget = 2000000
 lns_random_seed = 20260925
 lns_min_removal_fraction = 0.08
 lns_max_removal_fraction = 0.3
 lns_insertion_noise = 0.15
 lns_acceptance_threshold = 0.02
 lns_new_route_penalty_minutes = 10000
-lns_balance_load_weight = 0.25
+lns_balance_load_weight = 0.5
+emergency_phase_state_budget = 50000
 
 [logging]
 level = "INFO"

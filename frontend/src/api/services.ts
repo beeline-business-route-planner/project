@@ -1,7 +1,14 @@
 import { apiRequest } from "./client";
 import type {
   BackendEngineerDetail,
+  BackendEventResult,
+  BackendExport,
   BackendInitialPlanningResponse,
+  BackendManualCommand,
+  BackendManualDataset,
+  BackendManualPreview,
+  BackendPlanningEvent,
+  BackendPlanningResult,
   BackendPlanDetail,
   BackendPlanSummary,
   BackendRegion,
@@ -17,6 +24,7 @@ function query(params: Record<string, string | number | undefined>) {
 }
 
 export const backend = {
+  ping: () => apiRequest<{ ping: string }>("/ping", { signal: AbortSignal.timeout(5000) }),
   plans: (region: BackendRegion) =>
     apiRequest<BackendPlanSummary[]>(`/plans?${query({ region })}`),
   currentPlan: (region: BackendRegion, planningDate?: string) =>
@@ -32,6 +40,8 @@ export const backend = {
     apiRequest<BackendEngineerDetail>(`/engineers/${engineerId}`),
   request: (requestId: string) =>
     apiRequest<BackendRequestDetail>(`/requests/${requestId}`),
+  updateRequestStatus: (requestId: string, status: string) =>
+    apiRequest<BackendRequestDetail>(`/requests/${requestId}/status`, { method: "PATCH", body: { status } }),
   importInitial: (files: File[]) => {
     const form = new FormData();
     files.forEach((file) => form.append("files", file));
@@ -40,4 +50,20 @@ export const backend = {
       rawBody: form,
     });
   },
+  importManual: (files: File[]) => {
+    const form = new FormData();
+    files.forEach((file) => form.append("files", file));
+    return apiRequest<BackendManualDataset>("/planning/manual/import", {
+      method: "POST",
+      rawBody: form,
+    });
+  },
+  previewManual: (command: BackendManualCommand) =>
+    apiRequest<BackendManualPreview>("/planning/manual/preview", { method: "POST", body: command }),
+  saveManual: (command: BackendManualCommand) =>
+    apiRequest<{ plan_id: string }>("/planning/manual", { method: "POST", body: command }),
+  replan: (regions: BackendRegion[]) => apiRequest<BackendPlanningResult>("/planning/replan", { method: "POST", body: { regions } }),
+  event: (payload: BackendPlanningEvent) => apiRequest<BackendEventResult>("/planning/events", { method: "POST", body: payload }),
+  exportPlan: (planId: string) => apiRequest<BackendExport>(`/plans/${planId}/export`),
+  exportDailyReport: (planningDate: string) => apiRequest<BackendExport>(`/reports/daily?${query({ planning_date: planningDate })}`),
 };

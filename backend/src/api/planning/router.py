@@ -1,10 +1,13 @@
+import uuid
 from typing import Annotated
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile
 
 from src.api.planning.dto import (
     EventPlanningCommand,
+    ManualPlanCommand,
+    ManualRoute,
     PlanningUploadFile,
     UrgentRequestData,
 )
@@ -14,6 +17,10 @@ from src.api.planning.schemas import (
     EventPlanSummaryResponse,
     InitialPlanningResponse,
     InitialPlanSummaryResponse,
+    ManualDatasetResponse,
+    ManualPlanPreviewResponse,
+    ManualPlanRequest,
+    ManualPlanSavedResponse,
     PlanningRegionErrorResponse,
     PlanningRegionResponse,
     ReplanPlanningRequest,
@@ -23,14 +30,80 @@ from src.api.planning.schemas import (
 )
 from src.api.planning.service import PlanningService
 from src.config import cfg
+from src.core.db.enums import DistributionMode, PlanStrategy
 
 router = APIRouter(prefix="/planning", tags=["planning"], route_class=DishkaRoute)
+
+
+@router.post("/manual/import", response_model=ManualDatasetResponse)
+async def import_manual_data(
+    service: FromDishka[PlanningService], files: Annotated[list[UploadFile], File()]
+) -> ManualDatasetResponse:
+    uploaded: list[PlanningUploadFile] = []
+    try:
+        for file in files:
+            uploaded.append(
+                PlanningUploadFile(
+                    filename=file.filename or "",
+                    content_type=file.content_type or "application/octet-stream",
+                    data=await file.read(cfg.planning.max_file_size_bytes + 1),
+                )
+            )
+    finally:
+        for file in files:
+            await file.close()
+    return ManualDatasetResponse.model_validate(
+        await service.import_manual_data(uploaded), from_attributes=True
+    )
+
+
+@router.get("/manual/imports/{upload_id}", response_model=ManualDatasetResponse)
+async def get_manual_data(
+    service: FromDishka[PlanningService], upload_id: uuid.UUID
+) -> ManualDatasetResponse:
+    return ManualDatasetResponse.model_validate(
+        await service.get_manual_data(upload_id), from_attributes=True
+    )
+
+
+@router.post("/manual/preview", response_model=ManualPlanPreviewResponse)
+async def preview_manual(
+    request: ManualPlanRequest, service: FromDishka[PlanningService]
+) -> ManualPlanPreviewResponse:
+    result = await service.preview_manual(
+        ManualPlanCommand(
+            upload_id=request.upload_id,
+            source_plan_id=request.source_plan_id,
+            routes=tuple(
+                ManualRoute(item.engineer_id, tuple(item.request_ids)) for item in request.routes
+            ),
+        )
+    )
+    return ManualPlanPreviewResponse.model_validate(result, from_attributes=True)
+
+
+@router.post("/manual", response_model=ManualPlanSavedResponse, status_code=201)
+async def save_manual(
+    request: ManualPlanRequest, service: FromDishka[PlanningService]
+) -> ManualPlanSavedResponse:
+    plan_id = await service.save_manual(
+        ManualPlanCommand(
+            upload_id=request.upload_id,
+            source_plan_id=request.source_plan_id,
+            routes=tuple(
+                ManualRoute(item.engineer_id, tuple(item.request_ids)) for item in request.routes
+            ),
+        )
+    )
+    return ManualPlanSavedResponse(plan_id=plan_id)
 
 
 @router.post("/initial", response_model=InitialPlanningResponse)
 async def import_initial_planning_data(
     service: FromDishka[PlanningService],
     files: Annotated[list[UploadFile], File()],
+    mode: Annotated[DistributionMode, Form()] = DistributionMode.BALANCED,
+    strategy: Annotated[PlanStrategy, Form()] = PlanStrategy.LNS,
 ) -> InitialPlanningResponse:
     uploaded_files: list[PlanningUploadFile] = []
     try:
@@ -49,7 +122,7 @@ async def import_initial_planning_data(
         for file in files:
             await file.close()
 
-    result = await service.import_initial_data(uploaded_files)
+    result = await service.import_initial_data(uploaded_files, mode, strategy)
     return InitialPlanningResponse(
         status=result.status,
         regions=[
@@ -79,7 +152,7 @@ async def replan(
     request: ReplanPlanningRequest,
     service: FromDishka[PlanningService],
 ) -> ReplanPlanningResponse:
-    result = await service.replan(request.regions)
+    result = await service.replan(request.regions, request.mode, request.strategy)
     return ReplanPlanningResponse(
         status=result.status,
         regions=[

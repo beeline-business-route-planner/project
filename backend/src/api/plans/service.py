@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 from src.api.exc.plans import (
@@ -15,18 +15,29 @@ from src.api.exc.plans import (
 )
 from src.api.plans.diff import PlanDiffEngine
 from src.api.plans.diff_dto import PlanSnapshotDTO
-from src.api.plans.dto import BaselineMetricsDTO, PlanDetailDTO, PlanExportResult, PlanSummaryDTO
+from src.api.plans.dto import BaselineMetricsDTO, PlanDetailDTO, PlanSummaryDTO
 from src.api.plans.export import PlanXlsxExporter
 from src.api.plans.presenter import PlanPresenter
 from src.api.plans.snapshot import PlanSnapshotAssembler
 from src.config import cfg
-from src.core.db.enums import ApprovalStatus, PlanKind, Region, ReplanningEventType, RequestStatus
+from src.core.db.enums import (
+    ApprovalStatus,
+    PlanKind,
+    PlanStrategy,
+    Region,
+    ReplanningEventType,
+    RequestStatus,
+)
 from src.core.db.models import Engineer, Plan, PlanStop, ReplanningEvent, Request
 from src.core.db.uow import UnitOfWork
-from src.core.s3 import S3Storage
-from src.core.s3.exc import S3UnavailableError
+from src.core.s3 import (
+    ExportDownload,
+    ExportKind,
+    ExportTooLargeError,
+    S3ExportDelivery,
+    S3UnavailableError,
+)
 from src.core.utils.initial_approval import InitialApprovalPolicy
-from src.core.utils.plan_time import latest_departure_at
 
 
 class PlanService:
@@ -76,7 +87,7 @@ class PlanService:
                 self._uow.replanning_events.set_approval_status(
                     event, ApprovalStatus.APPROVED, decided_at
                 )
-                await self._apply_event(event)
+                await self._apply_event(event, plan)
             summary = self._summary(plan, is_current=True)
             await self._uow.commit()
             return summary
@@ -120,7 +131,11 @@ class PlanService:
             raise PlanWrongDayError
         current = await self._uow.plans.get_current(plan.region, plan.planning_date)
         if plan.kind == PlanKind.INITIAL:
-            if await self._uow.plans.has_approved_initial(plan.region, plan.planning_date):
+            # A manual plan built from fresh workbooks may replace the day at any time;
+            # only the algorithmic initial is limited to one approval per day.
+            if plan.strategy != PlanStrategy.MANUAL and await self._uow.plans.has_approved_initial(
+                plan.region, plan.planning_date
+            ):
                 raise PlanBaseChangedError
             if not InitialApprovalPolicy.is_valid(plan.created_at, decided_at):
                 raise InitialPlanExpiredError
@@ -186,7 +201,12 @@ class PlanService:
             if any(stop.planned_start < local_now for stop in stops):
                 raise PlanStopAlreadyStartedError
         else:
-            self._validate_past_stops(stops, base_stops, local_now)
+            self._validate_past_stops(
+                stops,
+                base_stops,
+                local_now,
+                self._released_request_ids(event, base_stops, requests),
+            )
 
     @staticmethod
     def _validate_event_target(
@@ -229,22 +249,51 @@ class PlanService:
         return cutoff.replace(tzinfo=ZoneInfo("Europe/Moscow")).astimezone(UTC).replace(tzinfo=None)
 
     @staticmethod
+    def _released_request_ids(
+        event: ReplanningEvent | None,
+        base_stops: list[PlanStop],
+        requests: list[Request],
+    ) -> frozenset[uuid.UUID]:
+        """Заявки, которые событие законно снимает с уже начавшейся части маршрута.
+
+        Отменённая заявка уходит из плана, даже если к ней уже едут; заявки «в пути» у
+        выбывшего инженера перераспределяются.
+        """
+
+        if event is None:
+            return frozenset()
+        if event.event_type == ReplanningEventType.REQUEST_CANCELLED and event.request_id:
+            return frozenset({event.request_id})
+        if event.event_type == ReplanningEventType.ENGINEER_UNAVAILABLE:
+            on_the_way = {
+                request.id for request in requests if request.status == RequestStatus.ON_THE_WAY
+            }
+            return frozenset(
+                stop.request_id
+                for stop in base_stops
+                if stop.engineer_id == event.engineer_id and stop.request_id in on_the_way
+            )
+        return frozenset()
+
+    @staticmethod
     def _validate_past_stops(
-        stops: list[PlanStop], base_stops: list[PlanStop], now: datetime
+        stops: list[PlanStop],
+        base_stops: list[PlanStop],
+        now: datetime,
+        released_ids: frozenset[uuid.UUID],
     ) -> None:
-        old_by_request = {stop.request_id: stop for stop in base_stops}
+        old_by_request = {
+            stop.request_id: stop for stop in base_stops if stop.request_id not in released_ids
+        }
         new_by_request = {stop.request_id: stop for stop in stops}
         if any(
-            latest_departure_at(old.planned_start, old.travel_minutes) < now
-            and old.request_id not in new_by_request
-            for old in base_stops
+            old.planned_start < now and old.request_id not in new_by_request
+            for old in old_by_request.values()
         ):
             raise PlanStopAlreadyStartedError
         for stop in stops:
             old = old_by_request.get(stop.request_id)
-            if latest_departure_at(stop.planned_start, stop.travel_minutes) >= now and (
-                old is None or latest_departure_at(old.planned_start, old.travel_minutes) >= now
-            ):
+            if stop.planned_start >= now and (old is None or old.planned_start >= now):
                 continue
             if (
                 old is None
@@ -286,7 +335,7 @@ class PlanService:
             raise PlanStateChangedError
         return event
 
-    async def _apply_event(self, event: ReplanningEvent) -> None:
+    async def _apply_event(self, event: ReplanningEvent, plan: Plan) -> None:
         if event.event_type == ReplanningEventType.REQUEST_CANCELLED:
             if event.request_id is None:
                 raise PlanStateChangedError
@@ -307,6 +356,27 @@ class PlanService:
             if engineer.is_available == target_available:
                 raise PlanStateChangedError
             engineer.is_available = target_available
+            if not target_available:
+                await self._reset_released_on_the_way(plan, engineer.id)
+
+    async def _reset_released_on_the_way(self, plan: Plan, engineer_id: uuid.UUID) -> None:
+        """Возвращает в «не отправлена» заявки «в пути», снятые с выбывшего инженера."""
+
+        if plan.based_on_plan_id is None:
+            return
+        kept_ids = {
+            stop.request_id
+            for stop in await self._uow.plan_stops.get_by_plan_id(plan.id)
+            if stop.engineer_id == engineer_id
+        }
+        released_ids = {
+            stop.request_id
+            for stop in await self._uow.plan_stops.get_by_plan_id(plan.based_on_plan_id)
+            if stop.engineer_id == engineer_id and stop.request_id not in kept_ids
+        }
+        for request in await self._uow.requests.get_by_ids_for_update(released_ids):
+            if request.status == RequestStatus.ON_THE_WAY:
+                self._uow.requests.set_status(request, RequestStatus.NOT_SENT)
 
     async def _build_detail(self, plan: Plan, is_current: bool) -> PlanDetailDTO:
         snapshot = await self._load_snapshot(plan)
@@ -369,6 +439,7 @@ class PlanService:
             region=plan.region,
             planning_date=plan.planning_date,
             kind=plan.kind,
+            strategy=plan.strategy,
             approval_status=plan.approval_status,
             created_at=plan.created_at,
             approved_at=plan.approved_at,
@@ -376,6 +447,7 @@ class PlanService:
             approval_deadline=PlanService._approval_deadline(plan),
             based_on_plan_id=plan.based_on_plan_id,
             triggered_by_event_id=plan.triggered_by_event_id,
+            edited_from_plan_id=plan.edited_from_plan_id,
             is_current=is_current,
             assigned_requests_count=plan.assigned_requests_count,
             unassigned_requests_count=plan.unassigned_requests_count,
@@ -405,38 +477,24 @@ class PlanService:
 
 
 class PlanExportService:
-    """Экспортирует один сохранённый снимок плана во временный объект S3."""
+    """Экспортирует один сохранённый снимок плана через общую S3-доставку."""
 
-    def __init__(self, plans: PlanService, storage: S3Storage) -> None:
+    def __init__(self, plans: PlanService, delivery: S3ExportDelivery) -> None:
         self._plans = plans
-        self._storage = storage
+        self._delivery = delivery
 
-    async def export(self, plan_id: uuid.UUID) -> PlanExportResult:
+    async def export(self, plan_id: uuid.UUID) -> ExportDownload:
         snapshot = await self._plans.get_snapshot_by_id(plan_id)
         try:
             data = PlanXlsxExporter.build(snapshot)
-        except (ValueError, OSError) as exc:
+            return await self._delivery.deliver(
+                data=data,
+                kind=ExportKind.PLAN,
+                planning_date=snapshot.planning_date,
+                filename=f"plan-{snapshot.id}.xlsx",
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        except (ValueError, OSError, ExportTooLargeError) as exc:
             raise PlanExportGenerationError from exc
-        if len(data) > cfg.s3.max_export_size_bytes:
-            raise PlanExportGenerationError
-
-        key = (
-            f"{cfg.s3.export_prefix}/{snapshot.planning_date}/"
-            f"plan-{snapshot.id}-{uuid.uuid4()}.xlsx"
-        )
-        expires_at = datetime.now(UTC).replace(microsecond=0) + timedelta(
-            seconds=cfg.s3.export_url_ttl_seconds
-        )
-        try:
-            url = await self._storage.presigned_download_url(
-                cfg.s3.bucket_plans, key, cfg.s3.export_url_ttl_seconds
-            )
-            await self._storage.upload_file(
-                cfg.s3.bucket_plans,
-                key,
-                data,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
         except S3UnavailableError as exc:
             raise PlanExportStorageError from exc
-        return PlanExportResult(url=url, expires_at=expires_at)

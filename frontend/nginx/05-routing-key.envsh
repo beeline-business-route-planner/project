@@ -1,0 +1,5 @@
+#!/bin/sh
+# Sourced by the nginx entrypoint before templates are rendered.
+# Same fallback as the Vite dev proxy: dedicated routing key, the legacy
+# directions key, then the map key.
+export DGIS_ROUTING_KEY="${DGIS_ROUTING_KEY:-${VITE_2GIS_DIRECTIONS_KEY:-${VITE_2GIS_KEY:-}}}"

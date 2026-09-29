@@ -1,7 +1,12 @@
+import { useState } from "react";
+
+const SIGN_URL = "https://logo-teka.com/wp-content/uploads/2025/07/beeline-sign-logo.svg";
+
 export function BeelineLogo() {
+  const [imageLoaded, setImageLoaded] = useState(false);
   return (
-    <div className="beeline-logo" aria-label="билайн бизнес — диспетчерская маршрутов">
-      <svg viewBox="0 0 48 48" aria-hidden="true">
+    <div className="beeline-logo" aria-label="билайн — диспетчерская маршрутов">
+      <div className="beeline-mark"><svg viewBox="0 0 48 48" aria-hidden="true">
         <defs>
           <clipPath id="beeline-orb">
             <circle cx="24" cy="24" r="21" />
@@ -14,10 +19,10 @@ export function BeelineLogo() {
           <path d="M-2 31h52v7H-2z" />
           <path d="M-2 45h52v7H-2z" />
         </g>
-      </svg>
+      </svg><img className={`beeline-sign ${imageLoaded ? "loaded" : ""}`} src={SIGN_URL} alt="" onLoad={() => setImageLoaded(true)} /></div>
       <span>
         <strong>билайн</strong>
-        <small>бизнес · маршруты</small>
+        <small>диспетчерская</small>
       </span>
     </div>
   );

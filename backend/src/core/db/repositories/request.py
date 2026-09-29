@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timedelta
 from sqlalchemy import select
 
 from src.core.db.dto import RequestCreateDTO
-from src.core.db.enums import Region
+from src.core.db.enums import Region, RequestStatus
 from src.core.db.models import Request
 from src.core.db.repositories.base import BaseRepository
 
@@ -47,6 +47,10 @@ class RequestRepository(BaseRepository[Request]):
             )
         )
         return list(result.all())
+
+    @staticmethod
+    def set_status(request: Request, status: RequestStatus) -> None:
+        request.status = status
 
     def add_many(self, requests: list[RequestCreateDTO]) -> list[Request]:
         models: list[Request] = []

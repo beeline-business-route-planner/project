@@ -1,24 +1,17 @@
 import { useEffect, useState, type ReactNode } from "react";
-import {
-  Bell,
-  BookOpenText,
-  CalendarDays,
-  ChevronDown,
-  CircleHelp,
-  History,
-  LayoutDashboard,
-  Menu,
-  RefreshCw,
-  Route,
-  Settings,
-  X,
-} from "lucide-react";
+import { CalendarDays, ChevronDown, Menu, X } from "lucide-react";
+import { BellSimpleIcon } from "@phosphor-icons/react/dist/csr/BellSimple";
+import { BookOpenTextIcon } from "@phosphor-icons/react/dist/csr/BookOpenText";
+import { PathIcon } from "@phosphor-icons/react/dist/csr/Path";
+import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
+import { ChartBarIcon } from "@phosphor-icons/react/dist/csr/ChartBar";
+import { SquaresFourIcon } from "@phosphor-icons/react/dist/csr/SquaresFour";
 import type { DataSource, PlannerController } from "../hooks/usePlanner";
 import { API_BASE_URL } from "../api/client";
 import { BeelineLogo } from "./BeelineLogo";
 
-export type Page = "dashboard" | "planning" | "journal";
-type UtilityPanel = "help" | "notifications" | "instructions" | "settings";
+export type Page = "dashboard" | "planning" | "analytics";
+type UtilityPanel = "help" | "notifications" | "instructions";
 
 interface ShellProps {
   page: Page;
@@ -28,16 +21,39 @@ interface ShellProps {
 }
 
 const nav = [
-  { id: "dashboard" as const, label: "Контроль дня", icon: LayoutDashboard },
-  { id: "planning" as const, label: "Планирование", icon: Route },
-  { id: "journal" as const, label: "Журнал и отчёты", icon: History },
+  { id: "dashboard" as const, label: "Контроль дня", icon: SquaresFourIcon },
+  { id: "planning" as const, label: "Планирование", icon: PathIcon },
+  { id: "analytics" as const, label: "Аналитика", icon: ChartBarIcon },
 ];
 
-function ConnectionBadge({ source }: { source: DataSource }) {
+function moscowToday() {
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+function russianDate(date: string) {
+  return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric" }).format(new Date(`${date}T12:00:00`));
+}
+
+// Shown only when something is wrong: a working connection needs no badge.
+function ConnectionBadge({ source, offline, error, loading }: { source: DataSource; offline: boolean; error: string | null; loading: boolean }) {
+  // While the first connection attempts are still running the state is unknown.
+  if (loading || (source === "api" && !offline)) return null;
+  const forcedDemo = (import.meta.env.VITE_DEMO_MODE ?? "auto") === "true";
+  const title = offline ? "API недоступен" : "Демо-режим";
+  const explanation = forcedDemo
+    ? "Демо включено настройкой VITE_DEMO_MODE=true: backend не опрашивается, данные вымышленные."
+    : offline
+      ? `Фронт не видит backend (${API_BASE_URL}). Данные не загружены, действия не сработают.`
+      : `Фронт не видит backend (${API_BASE_URL}), поэтому показаны демонстрационные данные. Изменения никуда не сохраняются.`;
   return (
-    <div className={`connection-badge ${source}`} title={source === "api" ? API_BASE_URL : "Локальные демонстрационные данные"}>
+    <div className="connection-badge problem" tabIndex={0} aria-label={`${title}. ${explanation}`}>
       <span />
-      {source === "api" ? "API подключён" : "Демо-режим"}
+      {title}
+      <div className="connection-popover" role="tooltip">
+        <strong>{forcedDemo ? "Демонстрационные данные" : "Нет связи с backend"}</strong>
+        <p>{explanation}</p>
+        {error && !forcedDemo ? <code>{error.replace(/^Backend недоступен(, показаны демонстрационные данные)?: /, "")}</code> : null}
+      </div>
     </div>
   );
 }
@@ -49,20 +65,18 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
   const [utilityPanel, setUtilityPanel] = useState<UtilityPanel | null>(null);
   const [notificationsRead, setNotificationsRead] = useState(false);
   const [pushVisible, setPushVisible] = useState(false);
-  const [reducedMotion, setReducedMotion] = useState(() => localStorage.getItem("planner-reduced-motion") === "true");
-  const [largeUi, setLargeUi] = useState(() => localStorage.getItem("planner-large-ui") !== "false");
+  const [today, setToday] = useState(moscowToday);
   const scenario = data.scenarios.find((item) => item.id === data.scenarioId) ?? data.scenarios[0];
   const overdueCount = data.requests.filter((item) => item.status === "OVERDUE").length;
   const unassignedCount = data.requests.filter((item) => !item.engineer_id && item.status !== "CANCELLED").length;
   const draftCount = data.plans.filter((item) => item.status === "draft").length;
   const notificationCount = overdueCount + unassignedCount + draftCount;
+  const viewingAnotherDay = data.planningDate !== today;
 
   useEffect(() => {
-    document.documentElement.classList.toggle("reduce-motion", reducedMotion);
-    document.documentElement.classList.toggle("large-ui", largeUi);
-    localStorage.setItem("planner-reduced-motion", String(reducedMotion));
-    localStorage.setItem("planner-large-ui", String(largeUi));
-  }, [largeUi, reducedMotion]);
+    const timer = window.setInterval(() => setToday(moscowToday()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!utilityPanel) return;
@@ -93,9 +107,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileSidebarOpen ? "mobile-open" : ""} ${sidebarDismissed ? "dismissed" : ""}`} onMouseLeave={() => { setMobileSidebarOpen(false); setSidebarDismissed(false); }}>
-        <div className="brand">
-          <BeelineLogo />
-        </div>
+        <button className="brand brand-home" onClick={() => { onPageChange("dashboard"); setMobileSidebarOpen(false); setSidebarDismissed(true); }} aria-label="На главную — Контроль дня"><BeelineLogo /></button>
 
         <nav className="main-nav" aria-label="Основная навигация">
           <span className="nav-caption">Рабочее место</span>
@@ -112,11 +124,10 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
         </nav>
 
         <div className="sidebar-bottom">
-          <button onClick={() => openUtility("instructions")}><BookOpenText size={17} /><span className="nav-label">Инструкция</span></button>
-          <button onClick={() => openUtility("settings")}><Settings size={17} /><span className="nav-label">Настройки</span></button>
+          <button onClick={() => openUtility("instructions")}><BookOpenTextIcon size={18} /><span className="nav-label">Инструкция</span></button>
           <div className="user-card">
             <span className="user-avatar">ДП</span>
-            <div><strong>Диспетчер</strong><small>Юго-восток</small></div>
+            <div><strong>Диспетчер</strong><small>{scenario?.name ?? "Участок"}</small></div>
             <ChevronDown size={15} />
           </div>
         </div>
@@ -126,17 +137,31 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
         <header className="topbar">
           <button className="icon-button mobile-menu" aria-label="Открыть меню" onClick={() => setMobileSidebarOpen((current) => !current)}><Menu size={20} /></button>
           <div className="context-selects">
+            <div className="today-context"><span>Сегодня</span><strong>{russianDate(today)}</strong></div>
+            {/* Only three districts: show them all so the switch is obvious at a glance. */}
+            <div className="district-field">
+              <span id="district-switch-label">Участок</span>
+              <div className="district-switch" role="radiogroup" aria-labelledby="district-switch-label">
+                {data.scenarios.map((item) => {
+                  const active = item.id === data.scenarioId;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      className={active ? "active" : ""}
+                      disabled={planner.loading}
+                      onClick={() => { if (!active) void planner.changeContext(item.id, ""); }}
+                    >
+                      {item.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <label>
-              <span>Участок</span>
-              <select
-                value={data.scenarioId}
-                onChange={(event) => void planner.changeContext(event.target.value, data.planningDate)}
-              >
-                {data.scenarios.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
-            </label>
-            <label>
-              <span>Рабочий день</span>
+              <span>{viewingAnotherDay ? "Просмотр плана за" : "Рабочий день"}</span>
               <div className="input-with-icon">
                 <CalendarDays size={15} />
                 <select
@@ -144,17 +169,17 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
                   onChange={(event) => void planner.changeContext(data.scenarioId, event.target.value)}
                 >
                   {(scenario?.planning_dates ?? [data.planningDate]).map((date) => (
-                    <option key={date} value={date}>{new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric" }).format(new Date(`${date}T12:00:00`))}</option>
+                    <option key={date} value={date}>{russianDate(date)}</option>
                   ))}
                 </select>
               </div>
             </label>
+            {viewingAnotherDay ? <span className="historical-date-note" title="Плана на сегодня нет среди полученных от backend дат">Архивный день</span> : null}
           </div>
           <div className="topbar-actions">
-            <ConnectionBadge source={planner.source} />
-            <button className="icon-button" onClick={() => void planner.refresh()} aria-label="Обновить данные" title="Обновить данные"><RefreshCw size={18} /></button>
-            <button className="icon-button" onClick={() => openUtility("help")} aria-label="Помощь" title="Помощь"><CircleHelp size={18} /></button>
-            <button className="icon-button notification" onClick={() => openUtility("notifications")} aria-label={`Уведомления: ${notificationCount}`} title="Уведомления"><Bell size={18} />{notificationCount > 0 && !notificationsRead ? <i /> : null}</button>
+            <ConnectionBadge source={planner.source} offline={planner.source === "api" && Boolean(planner.error?.startsWith("Backend недоступен"))} error={planner.error} loading={planner.loading} />
+            <button className="icon-button" onClick={() => openUtility("help")} aria-label="Помощь" title="Помощь"><QuestionIcon size={19} /></button>
+            <button className="icon-button notification" onClick={() => openUtility("notifications")} aria-label={`Уведомления: ${notificationCount}`} title="Уведомления"><BellSimpleIcon size={19} />{notificationCount > 0 && !notificationsRead ? <i /> : null}</button>
           </div>
         </header>
 
@@ -166,7 +191,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
       ) : null}
       {planner.error ? (
         <div className="system-banner">
-          <div><strong>Backend сейчас недоступен</strong><span>{planner.error}</span></div>
+          <div><strong>{planner.source === "demo" ? "Показан демонстрационный сценарий" : "Ошибка загрузки данных"}</strong><span>{planner.error}</span></div>
           <button onClick={planner.dismissError}><X size={16} /></button>
         </div>
       ) : null}
@@ -174,7 +199,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
 
       {pushVisible && !utilityPanel ? (
         <div className="push-notification" role="status" aria-live="polite">
-          <span className="push-icon"><Bell size={18} /></span>
+          <span className="push-icon"><BellSimpleIcon size={18} weight="fill" /></span>
           <button className="push-main" onClick={() => openUtility("notifications")}>
             <strong>Есть события рабочего дня</strong>
             <span>{overdueCount ? `${overdueCount} просрочена · ` : ""}{unassignedCount ? `${unassignedCount} без назначения` : `${draftCount} черновик плана`}</span>
@@ -190,7 +215,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
             <div className="utility-head">
               <div>
                 <span>{utilityPanel === "notifications" ? `${notificationCount} событий` : "Рабочее место диспетчера"}</span>
-                <h2 id="utility-title">{{ help: "Помощь", notifications: "Уведомления", instructions: "Инструкция", settings: "Настройки" }[utilityPanel]}</h2>
+                <h2 id="utility-title">{{ help: "Помощь", notifications: "Уведомления", instructions: "Инструкция" }[utilityPanel]}</h2>
               </div>
               <button className="icon-button" onClick={() => setUtilityPanel(null)} aria-label="Закрыть"><X size={18} /></button>
             </div>
@@ -199,7 +224,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
               <div className="utility-content">
                 <section><strong>Контроль дня</strong><p>Выберите заявку или инженера — справа откроются детали, а карта подсветит связанный маршрут.</p></section>
                 <section><strong>Планирование</strong><p>Импортируйте XLSX, рассчитайте вариант и проверьте причины заявок без назначения до утверждения.</p></section>
-                <section><strong>Журнал и отчёты</strong><p>Смотрите метрики, версии плана и аудит. Список версий выгружается в CSV, отчёты — в XLSX или PDF при поддержке backend.</p></section>
+                <section><strong>Аналитика и история</strong><p>В аналитике — показатели дня и PDF-отчёт. В истории версий — сохранённые расчёты, сравнение и журнал действий.</p></section>
                 <div className="utility-status"><span className={`status-light ${planner.source}`} />Источник данных: <b>{planner.source === "api" ? "backend API" : "демонстрационный набор"}</b></div>
               </div>
             ) : null}
@@ -215,17 +240,12 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
 
             {utilityPanel === "instructions" ? (
               <div className="utility-content instruction-steps">
-                <section><span>01</span><div><strong>Проверьте исходные данные</strong><p>Выберите участок и рабочий день в верхней панели.</p></div></section>
-                <section><span>02</span><div><strong>Оцените отклонения</strong><p>На экране контроля найдите просрочки, свободных инженеров и незакрытые окна.</p></div></section>
-                <section><span>03</span><div><strong>Пересчитайте план</strong><p>Внесите событие или ручную правку, затем сравните новый маршрут с базовым.</p></div></section>
-                <section><span>04</span><div><strong>Зафиксируйте результат</strong><p>Утвердите вариант и проверьте запись в журнале действий.</p></div></section>
-              </div>
-            ) : null}
-
-            {utilityPanel === "settings" ? (
-              <div className="utility-content settings-list">
-                <label><div><strong>Крупный интерфейс</strong><p>Увеличивает подписи графиков, таблиц и служебный текст.</p></div><input type="checkbox" checked={largeUi} onChange={(event) => setLargeUi(event.target.checked)} /><span /></label>
-                <label><div><strong>Минимум анимации</strong><p>Отключает выезды панелей и анимацию диаграмм.</p></div><input type="checkbox" checked={reducedMotion} onChange={(event) => setReducedMotion(event.target.checked)} /><span /></label>
+                <section><span>01</span><div><strong>Выберите день</strong><p>Сверху выберите участок и дату. В списке только дни, для которых уже есть план. Для нового дня откройте «Планирование» и загрузите два XLSX: заявки и инженеры одного округа.</p></div></section>
+                <section><span>02</span><div><strong>Посмотрите заявки и карту</strong><p>На главной видны точки заявок. Нажмите заявку, чтобы прочесть адрес и ограничения. Переключитесь на «Инженеры» и нажмите человека, чтобы увидеть только его маршрут.</p></div></section>
+                <section><span>03</span><div><strong>Отметьте фактический статус</strong><p>Откройте заявку на главной и выберите её новый статус справа: «В пути», «В работе», «Выполнена» и другие. Изменение сохранится через API. Для отмены не используйте список статусов — создайте событие в планировании.</p></div></section>
+                <section><span>04</span><div><strong>Сообщите об изменении</strong><p>В «Планировании» нажмите «Событие дня»: инженер выбыл или вернулся, заявка отменена или добавилась. Для новой заявки укажите тип, адрес и окно. Окно должно относиться к выбранному дню и ещё не закончиться.</p></div></section>
+                <section><span>05</span><div><strong>Проверьте и решите</strong><p>После расчёта откройте новый черновик: посмотрите назначения, причины неназначенных и изменения. Нажмите «Утвердить» или «Отклонить». Пока событие ждёт решения, следующее событие бэкенд не принимает.</p></div></section>
+                <section><span>06</span><div><strong>Скачайте результат</strong><p>XLSX выбранного плана скачивается в «Планировании». Показатели и ZIP с PDF-отчётами — в «Аналитике». Предыдущие расчёты — в «Истории версий».</p></div></section>
               </div>
             ) : null}
           </aside>

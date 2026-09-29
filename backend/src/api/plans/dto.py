@@ -8,17 +8,12 @@ from src.api.plans.enums import RequestGroupKey
 from src.core.db.enums import (
     ApprovalStatus,
     PlanKind,
+    PlanStrategy,
     Region,
     Skill,
     UnassignedReason,
     VehicleType,
 )
-
-
-@dataclass(frozen=True)
-class PlanExportResult:
-    url: str
-    expires_at: datetime
 
 
 @dataclass(frozen=True)
@@ -128,6 +123,7 @@ class PlanDetailDTO:
     request_groups: tuple[RequestGroupDTO, ...]
     engineers: tuple[EngineerTileDTO, ...]
     diff: PlanDiffDTO | None
+    edited_from_plan_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +134,7 @@ class PlanSummaryDTO:
     region: Region
     planning_date: date
     kind: PlanKind
+    strategy: PlanStrategy
     approval_status: ApprovalStatus
     created_at: datetime
     approved_at: datetime | None
@@ -150,3 +147,4 @@ class PlanSummaryDTO:
     unassigned_requests_count: int
     engineers_used_count: int
     total_mileage_km: Decimal
+    edited_from_plan_id: uuid.UUID | None = None

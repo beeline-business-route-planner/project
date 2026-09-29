@@ -1,0 +1,1113 @@
+schema_version = 1
+
+[[scenario]]
+id = "PLANNING-MANUAL-E2E-001"
+node = "tests/e2e/planning/test_manual_e2e.py::ManualPlanningEndToEndTest::test_manual_initial_and_algorithm_candidate_edit"
+title = "Manual initial and correction of algorithm candidate preserve lifecycle"
+layer = "e2e"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-MANUAL-001"
+node = "tests/unit/algorithm/test_manual_plan.py::ManualPlanTest::test_order_is_materialized_and_audited"
+title = "Manual request order is materialized with audited mileage"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-MANUAL-002"
+node = "tests/unit/algorithm/test_manual_plan.py::ManualPlanTest::test_duplicate_request_is_rejected"
+title = "Manual routes reject duplicate requests"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-MANUAL-003"
+node = "tests/unit/algorithm/test_manual_plan.py::ManualPlanTest::test_skill_mismatch_is_rejected"
+title = "Manual routes reject skill mismatch"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-MANUAL-004"
+node = "tests/unit/algorithm/test_manual_plan.py::ManualPlanTest::test_late_requests_are_identified_individually"
+title = "Manual route diagnostics identify each request past its time window"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-MANUAL-HTTP-001"
+node = "tests/unit/planning/test_manual_issue_http_contract.py::ManualIssueHttpContractTest::test_invalid_route_returns_issue_for_card"
+title = "Manual route violation exposes request ID and cause over HTTP"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-UPLOAD-HTTP-001"
+node = "tests/unit/planning/test_initial_upload_http_contract.py::InitialUploadHttpContractTest::test_odd_number_of_workbooks_returns_422"
+title = "An odd number of workbooks returns HTTP 422"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-UPLOAD-HTTP-002"
+node = "tests/unit/planning/test_initial_upload_http_contract.py::InitialUploadHttpContractTest::test_books_from_different_regions_return_422"
+title = "Unpaired workbooks from different regions return HTTP 422"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-UPLOAD-HTTP-003"
+node = "tests/unit/planning/test_initial_upload_http_contract.py::InitialUploadHttpContractTest::test_duplicate_pair_returns_422"
+title = "A duplicate region pair returns HTTP 422"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-UPLOAD-HTTP-004"
+node = "tests/unit/planning/test_initial_upload_http_contract.py::InitialUploadHttpContractTest::test_valid_region_is_not_committed_before_invalid_pair_is_found"
+title = "No valid region is processed when another pair is malformed"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-UPLOAD-HTTP-005"
+node = "tests/unit/planning/test_initial_upload_http_contract.py::InitialUploadHttpContractTest::test_initial_defaults_to_balanced_mode_and_lns_strategy"
+title = "Initial planning defaults to balanced mode and LNS strategy"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "DATABASE-MIGRATIONS-001"
+node = "tests/integration/database/test_migrations.py::MigrationIntegrationTest::test_fresh_database_is_migrated_to_single_head"
+title = "Fresh database is migrated to the single Alembic head"
+layer = "integration"
+domain = "database"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-G02-INITIAL-001"
+node = "tests/e2e/planning/test_g02_initial_e2e.py::InitialEndToEndTest::test_initial_lifecycle_and_partial_success"
+title = "Initial lifecycle and partial success"
+layer = "e2e"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-G03-REPLAN-001"
+node = "tests/e2e/planning/test_g03_replan_e2e.py::ReplanEndToEndTest::test_diff_late_decisions_locked_history_and_export"
+title = "Diff late decisions locked history and export"
+layer = "e2e"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-G05-RELEASE-001"
+node = "tests/e2e/planning/test_g05_release_e2e.py::ReleaseEndToEndTest::test_approved_day_flows_through_plans_and_reports"
+title = "Approved day flows through plans and reports"
+layer = "e2e"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-T05-REPLAN-001"
+node = "tests/e2e/planning/test_t05_replan_e2e.py::ReplanEndToEndTest::test_replan_lifecycle_and_partial_success"
+title = "Replan lifecycle and partial success"
+layer = "e2e"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-T07-EVENT-REPLAN-001"
+node = "tests/e2e/planning/test_t07_event_replan_e2e.py::EventReplanEndToEndTest::test_four_transitions_and_atomic_rollback"
+title = "Four transitions and atomic rollback"
+layer = "e2e"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T08-DAILY-REPORTS-001"
+node = "tests/e2e/reports/test_t08_daily_reports.py::DailyReportEndToEndTest::test_approved_only_latest_routes_and_summary"
+title = "Approved only latest routes and summary"
+layer = "e2e"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-001"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_no_requests_gives_empty_plan"
+title = "No requests gives empty plan"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-002"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_no_engineers_leaves_everything_unassigned"
+title = "No engineers leaves everything unassigned"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-003"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_single_engineer_takes_what_fits"
+title = "Single engineer takes what fits"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-004"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_audit_rejects_duplicate_routes_for_one_engineer"
+title = "Audit rejects duplicate routes for one engineer"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-005"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_skill_and_vehicle_mismatch_reasons"
+title = "Skill and vehicle mismatch reasons"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-006"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_cutoff_at_end_of_shift_assigns_nothing"
+title = "Cutoff at end of shift assigns nothing"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-007"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_all_engineers_unavailable"
+title = "All engineers unavailable"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-008"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_initial_is_deterministic_and_ignores_input_order"
+title = "Initial is deterministic and ignores input order"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-009"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_replan_with_fully_lived_day_keeps_history_only"
+title = "Replan with fully lived day keeps history only"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-010"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_replan_with_all_engineers_unavailable"
+title = "Replan with all engineers unavailable"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-011"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_replan_is_deterministic"
+title = "Replan is deterministic"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-012"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_lns_returns_a_deterministic_plan_when_descent_budget_is_exhausted"
+title = "LNS returns a deterministic plan when the descent budget is exhausted"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-ALGORITHM-EDGE-CASES-013"
+node = "tests/unit/algorithm/test_algorithm_edge_cases.py::AlgorithmEdgeCaseTest::test_lns_schedule_cache_preserves_plan_in_both_modes"
+title = "LNS schedule cache preserves the plan in both modes"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EMERGENCY-SLA-001"
+node = "tests/unit/algorithm/test_emergency_sla.py::EmergencySlaTest::test_emergency_sla_counts_from_cutoff_not_before_operational_day"
+title = "Emergency sla counts from cutoff not before operational day"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EMERGENCY-SLA-002"
+node = "tests/unit/algorithm/test_emergency_sla.py::EmergencySlaTest::test_client_window_bounds_emergency_sla"
+title = "Client window bounds emergency sla"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EMERGENCY-SLA-003"
+node = "tests/unit/algorithm/test_emergency_sla.py::EmergencySlaTest::test_replan_keeps_sla_of_emergency_received_at_initial"
+title = "Replan keeps sla of emergency received at initial"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EMERGENCY-SLA-004"
+node = "tests/unit/algorithm/test_emergency_sla.py::EmergencySlaTest::test_expired_sla_restarts_from_replan_cutoff"
+title = "Expired sla restarts from replan cutoff"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EMERGENCY-SLA-005"
+node = "tests/unit/algorithm/test_emergency_sla.py::EmergencySlaTest::test_expired_client_window_is_not_restarted_past_its_end"
+title = "Expired client window is not restarted past its end"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EMERGENCY-SLA-006"
+node = "tests/unit/algorithm/test_emergency_sla.py::EmergencySlaTest::test_layers_with_same_start_see_each_other_as_sources"
+title = "Layers with same start see each other as sources"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EVENT-REPLAN-ALGORITHM-001"
+node = "tests/unit/algorithm/test_event_replan_algorithm.py::EventReplanTest::test_urgent_emergency_sla_counts_from_event"
+title = "Urgent emergency sla counts from event"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EVENT-REPLAN-ALGORITHM-002"
+node = "tests/unit/algorithm/test_event_replan_algorithm.py::EventReplanTest::test_cancel_on_the_way_removes_stop_and_restarts_from_previous_point"
+title = "Cancel on the way removes stop and restarts from previous point"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EVENT-REPLAN-ALGORITHM-003"
+node = "tests/unit/algorithm/test_event_replan_algorithm.py::EventReplanTest::test_started_request_cannot_be_cancelled"
+title = "Started request cannot be cancelled"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EVENT-REPLAN-ALGORITHM-004"
+node = "tests/unit/algorithm/test_event_replan_algorithm.py::EventReplanTest::test_unavailable_engineer_releases_on_the_way_and_keeps_done"
+title = "Unavailable engineer releases on the way and keeps done"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EVENT-REPLAN-ALGORITHM-005"
+node = "tests/unit/algorithm/test_event_replan_algorithm.py::EventReplanTest::test_returned_engineer_starts_from_own_start_point"
+title = "Returned engineer starts from own start point"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EVENT-REPLAN-ALGORITHM-006"
+node = "tests/unit/algorithm/test_event_replan_algorithm.py::EventReplanTest::test_cancel_keeps_rest_of_current_plan_as_known_solution"
+title = "Cancel keeps rest of current plan as known solution"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-EVENT-REPLAN-ALGORITHM-007"
+node = "tests/unit/algorithm/test_event_replan_algorithm.py::EventReplanTest::test_event_after_cutoff_is_rejected"
+title = "Event after cutoff is rejected"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-G03-REPLAN-ALGORITHM-001"
+node = "tests/unit/algorithm/test_g03_replan_algorithm.py::ReplanLockTest::test_started_status_locks_stop_before_planned_start"
+title = "Started status locks stop before planned start"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-G03-REPLAN-ALGORITHM-002"
+node = "tests/unit/algorithm/test_g03_replan_algorithm.py::ReplanLockTest::test_stop_with_passed_planned_start_is_locked_without_status"
+title = "Stop with passed planned start is locked without status"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-G03-REPLAN-ALGORITHM-003"
+node = "tests/unit/algorithm/test_g03_replan_algorithm.py::ReplanLockTest::test_tail_engineer_carries_history_minutes"
+title = "Tail engineer carries history minutes"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-G03-REPLAN-ALGORITHM-004"
+node = "tests/unit/algorithm/test_g03_replan_algorithm.py::ReplanLockTest::test_future_stop_without_status_is_replanned"
+title = "Future stop without status is replanned"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-G03-REPLAN-ALGORITHM-005"
+node = "tests/unit/algorithm/test_g03_replan_algorithm.py::ReplanLockTest::test_replan_is_not_worse_than_feasible_current_future"
+title = "Replan is not worse than feasible current future"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-NO-ROUTE-001"
+node = "tests/unit/algorithm/test_no_route.py::NoRouteTest::test_unreachable_request_is_unassigned_with_no_route"
+title = "Unreachable request is unassigned with no route"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "ALGORITHM-STOP-DISTANCE-001"
+node = "tests/unit/algorithm/test_stop_distance.py::StopDistanceTest::test_plan_mileage_is_exact_sum_of_stored_stop_distances"
+title = "Plan mileage is exact sum of stored stop distances"
+layer = "unit"
+domain = "algorithm"
+status = "active"
+
+[[scenario]]
+id = "INTEGRATIONS-DGIS-MATRIX-001"
+node = "tests/unit/integrations/test_dgis_matrix.py::DgisMatrixServiceTest::test_rate_limit_is_retried_and_non_ok_status_is_unreachable"
+title = "Rate limit is retried and non ok status is unreachable"
+layer = "unit"
+domain = "integrations"
+status = "active"
+
+[[scenario]]
+id = "INTEGRATIONS-DGIS-MATRIX-002"
+node = "tests/unit/integrations/test_dgis_matrix.py::DgisMatrixServiceTest::test_exhausted_rate_limit_is_unavailable"
+title = "Exhausted rate limit is unavailable"
+layer = "unit"
+domain = "integrations"
+status = "active"
+
+[[scenario]]
+id = "INTEGRATIONS-DGIS-MATRIX-003"
+node = "tests/unit/integrations/test_dgis_matrix.py::DgisMatrixServiceTest::test_blocks_respect_source_and_target_limits"
+title = "Blocks respect source and target limits"
+layer = "unit"
+domain = "integrations"
+status = "active"
+
+[[scenario]]
+id = "INTEGRATIONS-GEOCODING-DADATA-001"
+node = "tests/unit/integrations/test_geocoding_dadata.py::DadataGeocodingTest::test_house_coordinates_are_returned_and_cached"
+title = "House coordinates are returned and cached"
+layer = "unit"
+domain = "integrations"
+status = "active"
+
+[[scenario]]
+id = "INTEGRATIONS-GEOCODING-DADATA-002"
+node = "tests/unit/integrations/test_geocoding_dadata.py::DadataGeocodingTest::test_street_level_suggestion_tries_normalized_query"
+title = "Street level suggestion tries normalized query"
+layer = "unit"
+domain = "integrations"
+status = "active"
+
+[[scenario]]
+id = "INTEGRATIONS-GEOCODING-DADATA-003"
+node = "tests/unit/integrations/test_geocoding_dadata.py::DadataGeocodingTest::test_precise_building_of_same_house_replaces_house_without_coordinates"
+title = "Precise building of same house replaces house without coordinates"
+layer = "unit"
+domain = "integrations"
+status = "active"
+
+[[scenario]]
+id = "INTEGRATIONS-GEOCODING-DADATA-004"
+node = "tests/unit/integrations/test_geocoding_dadata.py::DadataGeocodingTest::test_no_precise_coordinates_is_address_not_found"
+title = "No precise coordinates is address not found"
+layer = "unit"
+domain = "integrations"
+status = "active"
+
+[[scenario]]
+id = "INTEGRATIONS-GEOCODING-DADATA-005"
+node = "tests/unit/integrations/test_geocoding_dadata.py::DadataGeocodingTest::test_transport_error_and_missing_key_are_unavailable"
+title = "Transport error and missing key are unavailable"
+layer = "unit"
+domain = "integrations"
+status = "active"
+
+[[scenario]]
+id = "INTEGRATIONS-TRAVEL-MATRIX-001"
+node = "tests/unit/integrations/test_travel_matrix.py::OsrmMatricesTest::test_malformed_osrm_matrix_is_reported_as_provider_error"
+title = "Malformed osrm matrix is reported as provider error"
+layer = "unit"
+domain = "integrations"
+status = "active"
+
+[[scenario]]
+id = "INTEGRATIONS-TRAVEL-MATRIX-002"
+node = "tests/unit/integrations/test_travel_matrix.py::OsrmMatricesTest::test_each_profile_is_requested_once_and_public_transport_is_derived"
+title = "Each profile is requested once and public transport is derived"
+layer = "unit"
+domain = "integrations"
+status = "active"
+
+[[scenario]]
+id = "INTEGRATIONS-TRAVEL-MATRIX-003"
+node = "tests/unit/integrations/test_travel_matrix.py::TravelMatrixProviderTest::test_osrm_builds_one_matrix_per_vehicle"
+title = "Osrm builds one matrix per vehicle"
+layer = "unit"
+domain = "integrations"
+status = "active"
+
+[[scenario]]
+id = "INTEGRATIONS-TRAVEL-MATRIX-004"
+node = "tests/unit/integrations/test_travel_matrix.py::TravelMatrixProviderTest::test_dgis_builds_matrix_per_request_and_errors_are_translated"
+title = "Dgis builds matrix per request and errors are translated"
+layer = "unit"
+domain = "integrations"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-EVENT-REQUEST-VALIDATION-001"
+node = "tests/unit/planning/test_event_request_validation.py::EventRequestValidationTest::test_one_target_and_server_owned_time"
+title = "One target and server owned time"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-ORCHESTRATION-001"
+node = "tests/unit/planning/test_initial_orchestration.py::InitialOrchestrationTest::test_workbook_role_and_region_ignore_filename"
+title = "Workbook role and region ignore filename"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-ORCHESTRATION-002"
+node = "tests/unit/planning/test_initial_orchestration.py::InitialOrchestrationTest::test_invalid_excel_isolated_to_its_region"
+title = "Invalid excel isolated to its region"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-ORCHESTRATION-003"
+node = "tests/unit/planning/test_initial_orchestration.py::InitialOrchestrationTest::test_book_of_other_day_is_rejected_before_external_calls"
+title = "Book of other day is rejected before external calls"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-ORCHESTRATION-004"
+node = "tests/unit/planning/test_initial_orchestration.py::InitialOrchestrationTest::test_success_commits_after_calculation_with_one_cutoff"
+title = "Success commits after calculation with one cutoff"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-ORCHESTRATION-005"
+node = "tests/unit/planning/test_initial_orchestration.py::InitialOrchestrationTest::test_cutoff_and_same_input_reach_plan_and_baseline"
+title = "Cutoff and same input reach plan and baseline"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-ORCHESTRATION-006"
+node = "tests/unit/planning/test_initial_orchestration.py::InitialOrchestrationTest::test_routing_failure_rolls_back_and_cleans_only_region_files"
+title = "Routing failure rolls back and cleans only region files"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-ORCHESTRATION-007"
+node = "tests/unit/planning/test_initial_orchestration.py::InitialOrchestrationTest::test_failed_region_does_not_block_successful_neighbor"
+title = "Failed region does not block successful neighbor"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-ORCHESTRATION-008"
+node = "tests/unit/planning/test_initial_orchestration.py::InitialOrchestrationTest::test_cleanup_still_runs_when_database_rollback_fails"
+title = "Cleanup still runs when database rollback fails"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-ORCHESTRATION-009"
+node = "tests/unit/planning/test_initial_orchestration.py::InitialOrchestrationTest::test_cleanup_failure_is_visible_in_region_result"
+title = "Cleanup failure is visible in region result"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-ORCHESTRATION-010"
+node = "tests/unit/planning/test_initial_orchestration.py::InitialOrchestrationTest::test_cleanup_retries_idempotent_delete"
+title = "Cleanup retries idempotent delete"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-ORCHESTRATION-011"
+node = "tests/unit/planning/test_initial_orchestration.py::InitialOrchestrationTest::test_region_addresses_are_geocoded_concurrently_and_tolerate_misses"
+title = "Region addresses are geocoded concurrently and tolerate misses"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-INITIAL-ORCHESTRATION-012"
+node = "tests/unit/planning/test_initial_orchestration.py::InitialOrchestrationTest::test_approved_initial_rejects_upload_before_external_calls"
+title = "Approved initial rejects upload before external calls"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-REPLAN-ORCHESTRATION-001"
+node = "tests/unit/planning/test_replan_orchestration.py::ReplanOrchestrationTest::test_replan_keeps_successful_regions_after_failure"
+title = "Replan keeps successful regions after failure"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-REPLAN-ORCHESTRATION-002"
+node = "tests/unit/planning/test_replan_orchestration.py::ReplanOrchestrationTest::test_persist_full_candidate_with_locked_history"
+title = "Persist full candidate with locked history"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-REPLAN-ORCHESTRATION-003"
+node = "tests/unit/planning/test_replan_orchestration.py::ReplanOrchestrationTest::test_region_success_commits_pending_candidate"
+title = "Region success commits pending candidate"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-REPLAN-ORCHESTRATION-004"
+node = "tests/unit/planning/test_replan_orchestration.py::ReplanOrchestrationTest::test_missing_current_rolls_back_only_its_region"
+title = "Missing current rolls back only its region"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-REPLAN-ORCHESTRATION-005"
+node = "tests/unit/planning/test_replan_orchestration.py::ReplanOrchestrationTest::test_region_input_requires_unique_nonempty_regions"
+title = "Region input requires unique nonempty regions"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-REPLAN-PREPARATION-001"
+node = "tests/unit/planning/test_replan_preparation.py::ReplanPreparationTest::test_approved_base_and_full_input_are_frozen_without_writes"
+title = "Approved base and full input are frozen without writes"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-REPLAN-PREPARATION-002"
+node = "tests/unit/planning/test_replan_preparation.py::ReplanPreparationTest::test_missing_current_is_region_conflict"
+title = "Missing current is region conflict"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-REPLAN-PREPARATION-003"
+node = "tests/unit/planning/test_replan_preparation.py::ReplanPreparationTest::test_missing_initial_is_region_conflict"
+title = "Missing initial is region conflict"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-REPLAN-PREPARATION-004"
+node = "tests/unit/planning/test_replan_preparation.py::ReplanPreparationTest::test_missing_plan_member_is_not_silently_dropped"
+title = "Missing plan member is not silently dropped"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANNING-REPLAN-PREPARATION-005"
+node = "tests/unit/planning/test_replan_preparation.py::ReplanPreparationTest::test_unassigned_requests_are_included"
+title = "Unassigned requests are included"
+layer = "unit"
+domain = "planning"
+status = "active"
+
+[[scenario]]
+id = "PLANS-G03-REPLAN-LIFECYCLE-001"
+node = "tests/unit/plans/test_g03_replan_lifecycle.py::ReplanDecisionIntegrationTest::test_late_approval_accepts_identical_locked_history"
+title = "Late approval accepts identical locked history"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-G03-REPLAN-LIFECYCLE-002"
+node = "tests/unit/plans/test_g03_replan_lifecycle.py::ReplanDecisionIntegrationTest::test_new_current_rejects_old_candidate"
+title = "New current rejects old candidate"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-G03-REPLAN-LIFECYCLE-003"
+node = "tests/unit/plans/test_g03_replan_lifecycle.py::ReplanDecisionIntegrationTest::test_approved_event_after_cutoff_rejects_candidate"
+title = "Approved event after cutoff rejects candidate"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-G03-REPLAN-LIFECYCLE-004"
+node = "tests/unit/plans/test_g03_replan_lifecycle.py::ReplanDecisionIntegrationTest::test_changed_request_rejects_candidate"
+title = "Changed request rejects candidate"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-G03-REPLAN-LIFECYCLE-005"
+node = "tests/unit/plans/test_g03_replan_lifecycle.py::ReplanDecisionIntegrationTest::test_removed_base_unassigned_request_is_still_checked"
+title = "Removed base unassigned request is still checked"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-G03-REPLAN-LIFECYCLE-006"
+node = "tests/unit/plans/test_g03_replan_lifecycle.py::ReplanDecisionIntegrationTest::test_changed_engineer_availability_rejects_candidate"
+title = "Changed engineer availability rejects candidate"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-G03-REPLAN-LIFECYCLE-007"
+node = "tests/unit/plans/test_g03_replan_lifecycle.py::ReplanDecisionIntegrationTest::test_changed_past_stop_rejects_candidate"
+title = "Changed past stop rejects candidate"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-G03-REPLAN-LIFECYCLE-008"
+node = "tests/unit/plans/test_g03_replan_lifecycle.py::ReplanDecisionIntegrationTest::test_waiting_stop_can_change_before_work_starts"
+title = "Waiting stop can change before work starts"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-G03-REPLAN-LIFECYCLE-009"
+node = "tests/unit/plans/test_g03_replan_lifecycle.py::ReplanDecisionIntegrationTest::test_identical_departed_stop_can_be_approved_before_work_starts"
+title = "Identical departed stop can be approved before work starts"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DECISION-001"
+node = "tests/unit/plans/test_plan_decision.py::InitialApprovalPolicyTest::test_deadline_is_inclusive_and_uses_config"
+title = "Deadline is inclusive and uses config"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DECISION-002"
+node = "tests/unit/plans/test_plan_decision.py::InitialApprovalPolicyTest::test_moscow_cutoff_is_compared_to_utc_database_timestamps"
+title = "Moscow cutoff is compared to utc database timestamps"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DECISION-003"
+node = "tests/unit/plans/test_plan_decision.py::PastStopDecisionTest::test_exact_locked_history_is_allowed"
+title = "Exact locked history is allowed"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DECISION-004"
+node = "tests/unit/plans/test_plan_decision.py::PastStopDecisionTest::test_removed_past_stop_is_rejected"
+title = "Removed past stop is rejected"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DECISION-005"
+node = "tests/unit/plans/test_plan_decision.py::PastStopDecisionTest::test_changed_past_stop_is_rejected"
+title = "Changed past stop is rejected"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DECISION-006"
+node = "tests/unit/plans/test_plan_decision.py::PastStopDecisionTest::test_rescheduled_past_stop_is_rejected"
+title = "Rescheduled past stop is rejected"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DECISION-007"
+node = "tests/unit/plans/test_plan_decision.py::PastStopDecisionTest::test_stop_released_by_event_may_leave_past"
+title = "Stop released by event may leave past"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DECISION-008"
+node = "tests/unit/plans/test_plan_decision.py::PastStopDecisionTest::test_unlocked_past_stop_is_rejected"
+title = "Unlocked past stop is rejected"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DIFF-001"
+node = "tests/unit/plans/test_plan_diff.py::PlanDiffEngineTest::test_identical_plans_are_unchanged"
+title = "Identical plans are unchanged"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DIFF-002"
+node = "tests/unit/plans/test_plan_diff.py::PlanDiffEngineTest::test_engineer_can_be_added_and_removed"
+title = "Engineer can be added and removed"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DIFF-003"
+node = "tests/unit/plans/test_plan_diff.py::PlanDiffEngineTest::test_request_can_be_reassigned"
+title = "Request can be reassigned"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DIFF-004"
+node = "tests/unit/plans/test_plan_diff.py::PlanDiffEngineTest::test_schedule_only_change_is_detected"
+title = "Schedule only change is detected"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DIFF-005"
+node = "tests/unit/plans/test_plan_diff.py::PlanDiffEngineTest::test_travel_only_change_is_detected"
+title = "Travel only change is detected"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DIFF-006"
+node = "tests/unit/plans/test_plan_diff.py::PlanDiffEngineTest::test_requests_can_be_added_and_removed"
+title = "Requests can be added and removed"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DIFF-007"
+node = "tests/unit/plans/test_plan_diff.py::PlanDiffEngineTest::test_summary_contains_before_after_and_delta"
+title = "Summary contains before after and delta"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DIFF-008"
+node = "tests/unit/plans/test_plan_diff.py::PlanDiffEngineTest::test_assigned_request_can_become_unassigned_and_back"
+title = "Assigned request can become unassigned and back"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-DIFF-009"
+node = "tests/unit/plans/test_plan_diff.py::PlanDiffEngineTest::test_input_order_does_not_change_result"
+title = "Input order does not change result"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-EXPORT-001"
+node = "tests/unit/plans/test_plan_export.py::PlanXlsxExporterTest::test_all_plan_kinds_and_statuses_open_with_required_sheets"
+title = "All plan kinds and statuses open with required sheets"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-EXPORT-002"
+node = "tests/unit/plans/test_plan_export.py::PlanXlsxExporterTest::test_rows_metrics_urgent_request_and_formula_safety"
+title = "Rows metrics urgent request and formula safety"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-EXPORT-003"
+node = "tests/unit/plans/test_plan_export.py::PlanXlsxExporterTest::test_zero_assigned_stops_is_valid"
+title = "Zero assigned stops is valid"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-EXPORT-004"
+node = "tests/unit/plans/test_plan_export.py::PlanExportServiceTest::test_exports_exact_snapshot_without_writing_database"
+title = "Exports exact snapshot without writing database"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-EXPORT-005"
+node = "tests/unit/plans/test_plan_export.py::PlanExportServiceTest::test_storage_failure_is_controlled"
+title = "Storage failure is controlled"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-SNAPSHOT-001"
+node = "tests/unit/plans/test_plan_snapshot.py::PlanSnapshotAssemblerTest::test_snapshot_keeps_unused_engineers_and_urgent_requests"
+title = "Snapshot keeps unused engineers and urgent requests"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "PLANS-PLAN-SNAPSHOT-002"
+node = "tests/unit/plans/test_plan_snapshot.py::PlanSnapshotAssemblerTest::test_plan_service_loads_requests_by_plan_membership"
+title = "Plan service loads requests by plan membership"
+layer = "unit"
+domain = "plans"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-001"
+node = "tests/unit/reports/test_t09_export_delivery.py::DailyReportZipTest::test_archive_contains_exactly_regions_and_summary_with_stable_names"
+title = "Archive contains exactly regions and summary with stable names"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-002"
+node = "tests/unit/reports/test_t09_export_delivery.py::DailyReportZipTest::test_rejects_missing_summary_and_unsafe_name"
+title = "Rejects missing summary and unsafe name"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-003"
+node = "tests/unit/reports/test_t09_export_delivery.py::DailyReportZipTest::test_empty_day_contains_only_summary"
+title = "Empty day contains only summary"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-004"
+node = "tests/unit/reports/test_t09_export_delivery.py::S3ExportSettingsTest::test_export_bucket_is_separate_and_retention_outlives_url"
+title = "Export bucket is separate and retention outlives url"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-005"
+node = "tests/unit/reports/test_t09_export_delivery.py::S3ExportDeliveryTest::test_uses_export_bucket_configured_ttl_and_uploads_before_return"
+title = "Uses export bucket configured ttl and uploads before return"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-006"
+node = "tests/unit/reports/test_t09_export_delivery.py::S3ExportDeliveryTest::test_size_limit_and_storage_failure_do_not_return_a_link"
+title = "Size limit and storage failure do not return a link"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-007"
+node = "tests/unit/reports/test_t09_export_delivery.py::S3ClientEndpointTest::test_presign_client_uses_public_endpoint"
+title = "Presign client uses public endpoint"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-008"
+node = "tests/unit/reports/test_t09_export_delivery.py::S3PresignTest::test_presign_uses_public_endpoint_and_download_headers"
+title = "Presign uses public endpoint and download headers"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-009"
+node = "tests/unit/reports/test_t09_export_delivery.py::S3PresignTest::test_malformed_presigned_url_is_storage_failure"
+title = "Malformed presigned url is storage failure"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-010"
+node = "tests/unit/reports/test_t09_export_delivery.py::S3PresignTest::test_presign_sdk_failure_is_translated"
+title = "Presign sdk failure is translated"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-011"
+node = "tests/unit/reports/test_t09_export_delivery.py::DailyReportExportServiceTest::test_passes_generated_zip_to_shared_delivery"
+title = "Passes generated zip to shared delivery"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-012"
+node = "tests/unit/reports/test_t09_export_delivery.py::DailyReportExportServiceTest::test_storage_failure_maps_to_api_error"
+title = "Storage failure maps to api error"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T09-EXPORT-DELIVERY-013"
+node = "tests/unit/reports/test_t09_export_delivery.py::DailyReportExportServiceTest::test_invalid_report_does_not_upload"
+title = "Invalid report does not upload"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T08-PDF-RENDER-001"
+node = "tests/unit/reports/test_t08_pdf_render.py::DailyPdfRenderTest::test_region_and_summary_files_are_valid_multi_page_pdfs"
+title = "Region and summary files are valid multi page pdfs"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T08-PDF-RENDER-002"
+node = "tests/unit/reports/test_t08_pdf_render.py::DailyPdfRenderTest::test_empty_day_renders_only_summary_note"
+title = "Empty day renders only summary note"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T08-PDF-RENDER-003"
+node = "tests/unit/reports/test_t08_pdf_render.py::DailyPdfRenderTest::test_degenerate_region_data_does_not_break_charts"
+title = "Degenerate region data does not break charts"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T08-PDF-RENDER-004"
+node = "tests/unit/reports/test_t08_pdf_render.py::DailyPdfRenderTest::test_long_route_splits_across_pages"
+title = "Long route splits across pages"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T08-PDF-RENDER-005"
+node = "tests/unit/reports/test_t08_pdf_render.py::PdfFormattingTest::test_numbers_use_russian_separators_and_minus_sign"
+title = "Numbers use russian separators and minus sign"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T08-PDF-RENDER-006"
+node = "tests/unit/reports/test_t08_pdf_render.py::PdfFormattingTest::test_durations_and_plural_forms"
+title = "Durations and plural forms"
+layer = "unit"
+domain = "reports"
+status = "active"
+
+[[scenario]]
+id = "REPORTS-T08-PDF-RENDER-007"
+node = "tests/unit/reports/test_t08_pdf_render.py::PdfFormattingTest::test_timeline_axis_covers_shifts_and_late_stops"
+title = "Timeline axis covers shifts and late stops"
+layer = "unit"
+domain = "reports"
+status = "active"

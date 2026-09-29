@@ -1,74 +1,65 @@
-# Project
+# Backend планирования выездов
 
-Готовый шаблон backend-приложения на FastAPI: DI на dishka, SQLAlchemy + Alembic,
-структурные логи, метрики Prometheus и полный docker-compose стек с мониторингом
-(Prometheus, Loki, Promtail, cAdvisor, Grafana).
+Один FastAPI-сервис: принимает XLSX заявок и инженеров, рассчитывает версии планов
+по округам, хранит их в PostgreSQL, отдаёт карточки, события и отчёты. DaData
+геокодирует адреса, OSRM/2ГИС дают дорожные матрицы, S3/MinIO хранит исходные
+книги и экспорты. Алгоритм — локальный пакет backend, не отдельный сервис.
 
-## Стек
+Интерактивная схема действующего API — <http://localhost:8000/docs>. Первичный
+сценарий: загрузить XLSX-пару через `/api/planning/initial`, проверить созданный
+pending-план через `/api/plans/{id}`, затем утвердить или отклонить. Для
+перепланирования есть `/api/planning/replan`, для внештатных событий —
+`/api/planning/events`; карточки, выгрузки и дневной отчёт — в доменных маршрутах.
+Все маршруты и формы ответа доступны в `/openapi.json`.
 
-- **FastAPI** + **uvicorn**
-- **dishka** — dependency injection
-- **SQLAlchemy** (async) + **asyncpg** + **Alembic** — БД и миграции
-- **pydantic-settings** — конфиг из `config.toml` / `.env` / переменных окружения
-- **prometheus-client** — метрики приложения (`/metrics`)
-- **Prometheus + Grafana + Loki + Promtail + cAdvisor** — мониторинг и логи в docker-compose
-- **ruff** + **mypy** — линт и типизация
+## Запуск
 
-## Быстрый старт
+Нужны Docker Compose и локальные настройки:
 
 ```bash
-cp .env.example .env
-cp config.toml.example config.toml
+cd backend
+cp -n .env.example .env
+# Настройте локальные пароли и ключ DaData; провайдер матриц — в .env.
 make up
 ```
 
-Приложение поднимется на `http://localhost:8000`, Grafana — на `http://localhost:3000`
-(логин/пароль из `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` в `.env`).
+API: <http://localhost:8000>; `/metrics` — Prometheus. Compose также поднимает
+PostgreSQL, MinIO и мониторинг (Grafana: <http://localhost:3000>). По умолчанию
+Compose публикует PostgreSQL на `127.0.0.1:5432`; при конфликте используйте
+локальный override. `make ps` показывает состояние, `make logs` — логи,
+`make down` останавливает стек.
 
-Локально без docker (нужен поднятый Postgres):
+Для запуска Python локально нужна среда `uv` и работающие PostgreSQL/S3-сервисы:
 
 ```bash
-make upgrade   # применить миграции
-make run       # запустить приложение
+uv sync
+make upgrade
+make run
 ```
 
-## Команды Makefile
+Для локального `make run` можно создать `config.toml` из `config.toml.example`;
+Docker берёт секреты и ключи из `.env` (образ не включает рабочий TOML).
+Рабочие `.env` и `config.toml` не добавляйте в Git и не
+публикуйте ключи в логах. `make help` перечисляет команды.
 
-```
-make help
-```
+## Разработка
 
-- `up` / `down` / `build` / `logs` / `ps` — управление docker-compose стеком
-- `upgrade` / `downgrade REV=<rev>` / `migrate MSG=<msg>` — миграции Alembic
-- `format` / `lint` / `lint-fix` / `typecheck` / `check` — качество кода
-- `run` — запуск приложения локально
-
-## Структура
-
-```
-src/
-  api/            корневой роутер и исключения API
-  config/         конфигурация (pydantic-settings)
-  core/
-    db/           модели, DTO, репозитории, unit of work
-    di/           провайдеры dishka
-    metrics.py    Prometheus-мидлварь
-    middleware.py логирующая мидлварь (request id, статус, длительность)
-    logging.py    настройка структурных логов
-  main.py         сборка FastAPI-приложения
-deploy/           конфиги prometheus/promtail/grafana для docker-compose
-alembic/          миграции
+```bash
+make check                                      # ruff format --check, ruff check, mypy
+make test                                       # unit-тесты без Docker/сети
+make test-matrix                                # каталог тестовых сценариев
 ```
 
-## Конфигурация
+`make test-integration` и `make test-e2e` создают одноразовый PostgreSQL через
+Docker; подробности — в [`tests/README.md`](tests/README.md). Миграции:
+`make upgrade`; новые ревизии — `make migrate MSG=...`. HTTP-роутеры,
+схемы и доменные сценарии — `src/api/`; БД и транзакции — `src/core/db/`;
+алгоритм — `src/core/algorithm/`; внешние API — отдельные клиенты и сервисы в
+`src/core/`; сборка зависимостей — `src/core/di/`; конфиг — `src/config/`.
+Подробные правила изменения кода — [`agents-docs/`](agents-docs/ARCHITECTURE.md)
+и локальный [`AGENTS.md`](AGENTS.md).
 
-Настройки читаются из `config.toml` (см. `config.toml.example`) и переопределяются
-переменными окружения с разделителем `__`, например `DATABASE__POSTGRES_HOST`.
-Секреты для docker-compose (пароли Postgres и Grafana) — в `.env` (см. `.env.example`).
-
-## Использование как шаблона
-
-Это GitHub template repository — можно создать новый репозиторий кнопкой
-**Use this template** вместо `git clone`. При первом пуше в новом репозитории
-автоматически отработает workflow, который подставит имя проекта вместо плейсхолдеров
-(`Project`, `project`, `project`) и удалит сам себя.
+Первоначальный импорт требует пару XLSX на округ с окнами **сегодняшнего дня по
+Москве**, по умолчанию использует `balanced` + `lns`; CSV не принимает.
+Файл контрольного распределения не заменяет книгу инженеров. Для
+проверки реальной интеграции frontend отключите его автоматический demo-fallback.

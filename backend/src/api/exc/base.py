@@ -45,7 +45,11 @@ def add_handler(
     headers: dict[str, str] | None,
 ) -> None:
     async def handler(request: Request, exc: Exception) -> JSONResponse:
-        del request, exc
-        return JSONResponse(status_code=status_code, content={"detail": detail}, headers=headers)
+        del request
+        content: dict[str, object] = {"detail": detail}
+        details = getattr(exc, "details", None)
+        if isinstance(details, dict) and details:
+            content["details"] = details
+        return JSONResponse(status_code=status_code, content=content, headers=headers)
 
     app.add_exception_handler(exc_type, handler)

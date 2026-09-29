@@ -38,22 +38,37 @@ export interface RequestItem {
   priority_rank: 1 | 2 | 3;
   required_skill: Skill;
   required_transport: Transport | null;
+  /** Connection technology from the request card, e.g. "FTTB". */
+  connection_type: string | null;
+  is_gigabit: boolean;
+  /** When the request was loaded into the system (`created_at` of the card). */
+  created_at: string | null;
   engineer_id: string | null;
   engineer_name: string | null;
   arrival_at: string | null;
+  /** Planned work interval and travel to this stop (from the plan). */
+  planned_start: string | null;
+  planned_finish: string | null;
+  travel_minutes: number | null;
   explanation: string;
   unassigned_reason?: string;
 }
 
 export interface Engineer {
   id: string;
-  external_code: string;
   name: string;
   transport: Transport;
   skills: Skill[];
   status: "available" | "en_route" | "working" | "unavailable";
   request_ids: string[];
-  load_minutes: number;
+  shift_start: string | null;
+  shift_end: string | null;
+  /** Office or remote "home" the engineer starts the day from. */
+  start_address: string | null;
+  /** Share of the shift busy with work and travel, 0–100+ (from the plan). */
+  load_percent: number;
+  /** Share of the shift busy with work only; travel = load_percent − work_percent. */
+  work_percent: number;
   distance_meters: number;
   color: string;
 }
@@ -70,6 +85,8 @@ export interface RouteOverview {
   provider: string;
   graph_fingerprint: string;
   geometry: LineString | null;
+  /** Office the engineer starts from; the map draws it as a flag. */
+  start_coordinates?: [number, number] | null;
   distance_meters: number;
   duration_seconds: number;
 }
@@ -170,7 +187,10 @@ export interface PlanningRun {
 
 export interface PlanSummary {
   id: string;
-  code: string;
+  /** Human name: what created the version and when, e.g. "Пересчёт по событию · 17:05". */
+  title: string;
+  kind?: "initial" | "replan" | "event_replan";
+  is_current?: boolean;
   status: PlanStatus;
   parent_plan_id: string | null;
   base_plan_id: string | null;
@@ -179,6 +199,7 @@ export interface PlanSummary {
   approved_at?: string | null;
   requests_count: number;
   assigned_count: number;
+  distance_meters?: number;
 }
 
 export interface PlanDiffItem {
@@ -199,7 +220,19 @@ export interface PlanMetrics {
   engineers_used: number;
   distance_meters: number;
   avg_load_percent: number;
-  on_time_percent: number;
+  coverage_percent: number;
+  /** Totals of the plan (absent in demo data). */
+  work_minutes?: number;
+  travel_minutes?: number;
+  available_engineers?: number;
+  min_load_percent?: number;
+  max_load_percent?: number;
+}
+
+/** Metrics of the initial plan and of the baseline algorithm from the spec (п. 2.3). */
+export interface BaselineComparison {
+  plan: { engineers_used: number; distance_km: number; assigned: number };
+  baseline: { engineers_used: number; distance_km: number; assigned: number };
 }
 
 export interface AuditItem {
@@ -245,6 +278,7 @@ export interface ApiPlanDiffItem {
 export interface ApiErrorBody {
   code: string;
   message: string;
+  detail: string | { msg: string }[];
   details: Record<string, unknown>;
   correlation_id: string;
 }
@@ -261,9 +295,54 @@ export interface WorkspaceData {
   metrics: PlanMetrics;
   audit: AuditItem[];
   diff: PlanDiffItem[];
+  /** "Was → became" metrics of the candidate against its base; absent for initial. */
+  diffSummary?: PlanDiffMetric[];
+  /** How many requests the diff compared (changed or not). */
+  diffCompared?: number;
+}
+
+export interface PlanDiffMetric {
+  key: string;
+  label: string;
+  before: number;
+  after: number;
+  delta: number;
+  unit: string;
+  /** Which direction is an improvement, for colouring the delta. */
+  better: "up" | "down";
 }
 
 export type BackendRegion = "vostok" | "yugo_vostok" | "yugotsentr";
+export type BackendEventType = "urgent_request" | "request_cancelled" | "engineer_unavailable" | "engineer_available";
+export interface BackendUrgentRequest {
+  external_id: number;
+  type_bk: "global_problem" | "additional_order" | "local_request" | "connection";
+  type_hd: "emergency" | "connection_request";
+  district: string;
+  address: string;
+  connection_type: null;
+  is_gigabit: boolean;
+  window_start: string;
+  window_end: string;
+  norm_minutes: number;
+  norm_minutes_without_travel: number;
+  priority: 1 | 2;
+  required_skill: BackendSkill;
+  required_vehicle_type: BackendVehicle | null;
+}
+export interface BackendPlanningEvent {
+  region: BackendRegion;
+  event_type: BackendEventType;
+  request_id?: string;
+  engineer_id?: string;
+  urgent_request?: BackendUrgentRequest;
+}
+export interface BackendPlanningResult {
+  status: string;
+  regions: Array<{ region: BackendRegion; status: string; plan_summary: Pick<BackendPlanSummary, "id" | "region" | "planning_date"> | null; error: { code: string; detail: string } | null }>;
+}
+export interface BackendEventResult { event_id: string; event_type: BackendEventType; plan: Pick<BackendPlanSummary, "id" | "region" | "planning_date"> }
+export interface BackendExport { url: string; expires_at: string; filename: string; content_type: string; size_bytes: number }
 export type BackendSkill =
   | "local_works"
   | "connection_and_orders"
@@ -347,6 +426,8 @@ export interface BackendEngineerTile {
 }
 
 export interface BackendPlanDiff {
+  /** Plan-level metrics of the base (before) and candidate (after) versions. */
+  summary?: Record<string, { before: number | string; after: number | string; delta: number | string }>;
   requests: Array<{
     request_id: string;
     changes: string[];
@@ -371,6 +452,7 @@ export interface BackendPlanDetail {
   calculation_cutoff_at: string;
   based_on_plan_id: string | null;
   triggered_by_event_id: string | null;
+  edited_from_plan_id?: string | null;
   metrics: BackendPlanMetrics;
   baseline_metrics?: {
     assigned_requests_count: number;
@@ -391,6 +473,7 @@ export interface BackendPlanSummary {
   region: BackendRegion;
   planning_date: string;
   kind: "initial" | "replan" | "event_replan";
+  strategy: "lns" | "layered_graph" | "greedy" | "manual";
   approval_status: "pending" | "approved" | "rejected";
   created_at: string;
   approved_at: string | null;
@@ -398,11 +481,77 @@ export interface BackendPlanSummary {
   approval_deadline: string | null;
   based_on_plan_id: string | null;
   triggered_by_event_id: string | null;
+  edited_from_plan_id?: string | null;
   is_current: boolean;
   assigned_requests_count: number;
   unassigned_requests_count: number;
   engineers_used_count: number;
   total_mileage_km: number | string;
+}
+
+export interface BackendManualDataset {
+  upload_id: string;
+  region: BackendRegion;
+  planning_date: string;
+  requests: Array<{
+    id: string;
+    external_id: number;
+    address: string;
+    district: string;
+    latitude: number | string | null;
+    longitude: number | string | null;
+    window_start: string;
+    window_end: string;
+    priority: number;
+    required_skill: BackendSkill;
+    required_vehicle_type: BackendVehicle | null;
+    norm_minutes_without_travel: number;
+  }>;
+  engineers: Array<{
+    id: string;
+    name: string;
+    shift_start: string;
+    shift_end: string;
+    skills: BackendSkill[];
+    vehicle_type: BackendVehicle;
+    is_available: boolean;
+  }>;
+}
+
+export interface BackendManualCommand {
+  upload_id?: string;
+  source_plan_id?: string;
+  routes: Array<{ engineer_id: string; request_ids: string[] }>;
+}
+
+export interface BackendManualPreview {
+  assigned_requests_count: number;
+  unassigned_requests_count: number;
+  engineers_used_count: number;
+  total_mileage_km: number | string;
+  stops: Array<{
+    request_id: string;
+    engineer_id: string;
+    sequence_number: number;
+    planned_arrival: string;
+    planned_start: string;
+    planned_finish: string;
+    travel_minutes: number;
+    distance_km: number | string;
+    is_locked: boolean;
+  }>;
+  compared_to_plan_id: string | null;
+  assigned_delta: number | null;
+  engineers_used_delta: number | null;
+  mileage_delta_km: number | string | null;
+}
+
+export interface BackendManualIssue {
+  request_id: string;
+  engineer_id: string | null;
+  code: "unknown_request" | "duplicate_request" | "unknown_engineer" | "engineer_unavailable" | "skill" | "vehicle" | "window_order" | "no_route" | "window_passed" | "late" | "shift_end";
+  at: string | null;
+  limit: string | null;
 }
 
 export interface BackendEngineerDetail {
@@ -430,6 +579,8 @@ export interface BackendRequestDetail {
   address: string;
   latitude: number | string | null;
   longitude: number | string | null;
+  connection_type: "fmc" | "fttb" | null;
+  is_gigabit: boolean;
   window_start: string;
   window_end: string;
   norm_minutes: number;

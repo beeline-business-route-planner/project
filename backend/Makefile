@@ -2,9 +2,10 @@
         up down build logs ps \
         upgrade downgrade migrate \
         format lint lint-fix typecheck check \
-        run
+        run test test-integration test-e2e test-full test-matrix test-matrix-update
 
 SRC := src
+PY_PATHS := src tests
 
 help:
 	@echo ""
@@ -29,6 +30,11 @@ help:
 	@echo ""
 	@echo "  Разработка"
 	@echo "    run                       запустить приложение локально (без docker)"
+	@echo "    test                      быстрые unit-тесты, без Docker и сети"
+	@echo "    test-integration          миграции и PostgreSQL в Docker"
+	@echo "    test-e2e                  E2E с одноразовым PostgreSQL в Docker"
+	@echo "    test-full                 unit + integration + E2E"
+	@echo "    test-matrix               проверить каталог сценариев"
 	@echo ""
 
 # === Docker ===
@@ -67,19 +73,38 @@ run:
 # === Quality ===
 
 format:
-	uv run ruff format $(SRC)
+	uv run ruff format $(PY_PATHS)
 
 lint:
-	uv run ruff check $(SRC)
+	uv run ruff check $(PY_PATHS)
 
 lint-fix:
-	uv run ruff format $(SRC)
-	uv run ruff check --fix $(SRC)
+	uv run ruff format $(PY_PATHS)
+	uv run ruff check --fix $(PY_PATHS)
 
 typecheck:
 	uv run mypy $(SRC)
 
 check:
-	uv run ruff format --check $(SRC)
-	uv run ruff check $(SRC)
+	uv run ruff format --check $(PY_PATHS)
+	uv run ruff check $(PY_PATHS)
 	uv run mypy $(SRC)
+
+test:
+	uv run pytest tests --suite=unit --cov=src --cov-branch \
+		--cov-report=term:skip-covered --cov-fail-under=65
+
+test-integration:
+	uv run pytest tests --suite=integration
+
+test-e2e:
+	uv run pytest tests --suite=e2e
+
+test-full:
+	uv run pytest tests --suite=full --cov=src --cov-branch --cov-report=term:skip-covered
+
+test-matrix:
+	uv run python -m tests.support.matrix --check
+
+test-matrix-update:
+	uv run python -m tests.support.matrix

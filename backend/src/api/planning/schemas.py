@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from src.core.db.enums import (
     ApprovalStatus,
     ConnectionType,
+    DistributionMode,
     PlanKind,
+    PlanStrategy,
     Region,
     ReplanningEventType,
     RequestTypeBk,
@@ -19,9 +21,101 @@ from src.core.db.enums import (
 from src.core.utils.time import as_utc
 
 
+class ManualRequestResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    external_id: int
+    address: str
+    district: str
+    latitude: Decimal | None
+    longitude: Decimal | None
+    window_start: datetime
+    window_end: datetime
+    priority: int
+    required_skill: Skill
+    required_vehicle_type: VehicleType | None
+    norm_minutes_without_travel: int
+
+
+class ManualEngineerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    shift_start: datetime
+    shift_end: datetime
+    skills: tuple[Skill, ...]
+    vehicle_type: VehicleType
+    is_available: bool
+
+
+class ManualDatasetResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    upload_id: uuid.UUID
+    region: Region
+    planning_date: date
+    requests: tuple[ManualRequestResponse, ...]
+    engineers: tuple[ManualEngineerResponse, ...]
+
+
+class ManualRouteRequest(BaseModel):
+    engineer_id: uuid.UUID
+    request_ids: list[uuid.UUID]
+
+
+class ManualPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    upload_id: uuid.UUID | None = None
+    source_plan_id: uuid.UUID | None = None
+    routes: list[ManualRouteRequest]
+
+    @model_validator(mode="after")
+    def validate_source(self) -> ManualPlanRequest:
+        if (self.upload_id is None) == (self.source_plan_id is None):
+            raise ValueError("Укажите ровно один источник ручного плана")
+        return self
+
+
+class ManualStopResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    request_id: uuid.UUID
+    engineer_id: uuid.UUID
+    sequence_number: int
+    planned_arrival: datetime
+    planned_start: datetime
+    planned_finish: datetime
+    travel_minutes: int
+    distance_km: Decimal
+    is_locked: bool
+
+
+class ManualPlanPreviewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    assigned_requests_count: int
+    unassigned_requests_count: int
+    engineers_used_count: int
+    total_mileage_km: Decimal
+    stops: tuple[ManualStopResponse, ...]
+    compared_to_plan_id: uuid.UUID | None
+    assigned_delta: int | None
+    engineers_used_delta: int | None
+    mileage_delta_km: Decimal | None
+
+
+class ManualPlanSavedResponse(BaseModel):
+    plan_id: uuid.UUID
+
+
 class InitialPlanSummaryResponse(BaseModel):
     id: uuid.UUID
     region: Region
+    mode: DistributionMode
+    strategy: PlanStrategy
     kind: PlanKind = PlanKind.INITIAL
     approval_status: ApprovalStatus = ApprovalStatus.PENDING
     planning_date: date
@@ -57,6 +151,8 @@ class InitialPlanningResponse(BaseModel):
 
 class ReplanPlanningRequest(BaseModel):
     regions: list[Region]
+    mode: DistributionMode | None = None
+    strategy: PlanStrategy | None = None
 
     @model_validator(mode="after")
     def validate_regions(self) -> ReplanPlanningRequest:
@@ -68,6 +164,8 @@ class ReplanPlanningRequest(BaseModel):
 class ReplanPlanSummaryResponse(BaseModel):
     id: uuid.UUID
     region: Region
+    mode: DistributionMode
+    strategy: PlanStrategy
     kind: PlanKind = PlanKind.REPLAN
     approval_status: ApprovalStatus = ApprovalStatus.PENDING
     planning_date: date

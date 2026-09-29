@@ -1,0 +1,33 @@
+# Whole project in one command, using the same env files as development:
+#   cp backend/.env.example backend/.env     # passwords, DaData / 2GIS keys
+#   cp frontend/.env.example frontend/.env   # 2GIS map and routing keys
+#   docker compose up -d --build
+#   open http://localhost:8088
+#
+# The backend stack (Postgres, MinIO, migrations, API, monitoring) lives in
+# backend/docker-compose.yml and is included as is; this file adds the frontend.
+name: project
+
+include:
+  - path: backend/docker-compose.yml
+    env_file: backend/.env
+
+services:
+  frontend:
+    build:
+      context: frontend
+      args:
+        # Vite reads frontend/.env itself; only the mode is forced for Docker.
+        VITE_DEMO_MODE: "false"
+    image: project_frontend:latest
+    container_name: frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    # Runtime keys for nginx: the routing key never reaches the browser.
+    env_file: frontend/.env
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      # The only port a user needs. FRONTEND_HOST=0.0.0.0 opens it to the network.
+      - "${FRONTEND_HOST:-127.0.0.1}:${FRONTEND_PORT:-8088}:80"

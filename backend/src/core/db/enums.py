@@ -123,7 +123,9 @@ class UnassignedReason(enum.StrEnum):
     NO_MATCHING_SKILL = "no_matching_skill"
     NO_MATCHING_VEHICLE = "no_matching_vehicle"
     NO_TIME_SLOT = "no_time_slot"
+    NO_ROUTE = "no_route"
     NO_AVAILABLE_ENGINEER = "no_available_engineer"
+    MANUAL_DECISION = "manual_decision"
 
 
 class Region(enum.StrEnum):
@@ -138,3 +140,19 @@ class Region(enum.StrEnum):
     VOSTOK = "vostok"
     YUGO_VOSTOK = "yugo_vostok"
     YUGOTSENTR = "yugotsentr"
+
+
+class DistributionMode(enum.StrEnum):
+    """Режим распределения плана: вторичная цель после приоритета и покрытия заявок."""
+
+    MIN_ENGINEERS = "min_engineers"
+    BALANCED = "balanced"
+
+
+class PlanStrategy(enum.StrEnum):
+    """Стратегия алгоритма, которой рассчитан план; baseline планом не бывает."""
+
+    LAYERED_GRAPH = "layered_graph"
+    LNS = "lns"
+    GREEDY = "greedy"
+    MANUAL = "manual"

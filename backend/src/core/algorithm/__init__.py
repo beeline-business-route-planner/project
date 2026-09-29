@@ -18,6 +18,7 @@ from src.core.algorithm.dto import (
     PlanMetrics,
     PlanningLayer,
     ReplanDraft,
+    ReplanEvent,
     ReplanInput,
     ReplanResult,
     ReplanSnapshot,
@@ -30,7 +31,7 @@ from src.core.algorithm.dto import (
     TravelMatrix,
     UnassignedJob,
 )
-from src.core.algorithm.enums import AlgorithmVariant, DistributionMode
+from src.core.algorithm.enums import AlgorithmVariant
 from src.core.algorithm.exc import (
     AlgorithmAuditError,
     AlgorithmError,
@@ -46,13 +47,13 @@ __all__ = [
     "ReplanResult",
     "ReplanInput",
     "ReplanDraft",
+    "ReplanEvent",
     "BasePlanStop",
     "AlgorithmAuditError",
     "AlgorithmError",
     "AlgorithmInputError",
     "AlgorithmService",
     "AlgorithmVariant",
-    "DistributionMode",
     "DiagnosedPlanningResult",
     "Engineer",
     "EngineerSnapshot",

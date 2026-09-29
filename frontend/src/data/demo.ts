@@ -37,80 +37,96 @@ export const demoScenarios: Scenario[] = [
   },
 ];
 
-export const demoEngineers: Engineer[] = [
+// Demo engineers spend roughly a fifth of their busy time on the road.
+const withWork = (engineers: Array<Omit<Engineer, "work_percent">>): Engineer[] =>
+  engineers.map((engineer) => ({ ...engineer, work_percent: Math.round(engineer.load_percent * 0.78) }));
+
+export const demoEngineers: Engineer[] = withWork([
   {
     id: "eng-01",
-    external_code: "ENG-014",
     name: "Антон Волков",
     transport: "car",
     skills: ["emergency", "connection", "local"],
     status: "working",
     request_ids: ["req-01", "req-02", "req-03"],
-    load_minutes: 336,
+    shift_start: at("10:00"),
+    shift_end: at("22:00"),
+    start_address: "Москва, Рязанский пр-т, 26 (офис, демо)",
+    load_percent: 70,
     distance_meters: 27800,
     color: "#ffd400",
   },
   {
     id: "eng-02",
-    external_code: "ENG-027",
     name: "Мария Орлова",
     transport: "transit",
     skills: ["connection", "local"],
     status: "en_route",
     request_ids: ["req-04", "req-05"],
-    load_minutes: 290,
+    shift_start: at("10:00"),
+    shift_end: at("22:00"),
+    start_address: "Москва, Рязанский пр-т, 26 (офис, демо)",
+    load_percent: 60,
     distance_meters: 19400,
     color: "#008f8c",
   },
   {
     id: "eng-03",
-    external_code: "ENG-031",
     name: "Илья Серов",
     transport: "car",
     skills: ["emergency", "local"],
     status: "available",
     request_ids: ["req-06", "req-07"],
-    load_minutes: 254,
+    shift_start: at("10:00"),
+    shift_end: at("22:00"),
+    start_address: "Москва, Рязанский пр-т, 26 (офис, демо)",
+    load_percent: 53,
     distance_meters: 22600,
     color: "#e16c2b",
   },
   {
     id: "eng-04",
-    external_code: "ENG-042",
     name: "Елена Белова",
     transport: "walking",
     skills: ["connection", "local"],
     status: "working",
     request_ids: ["req-08", "req-09", "req-10"],
-    load_minutes: 318,
+    shift_start: at("10:00"),
+    shift_end: at("22:00"),
+    start_address: "Москва, Рязанский пр-т, 26 (офис, демо)",
+    load_percent: 66,
     distance_meters: 9800,
     color: "#2879d0",
   },
   {
     id: "eng-05",
-    external_code: "ENG-055",
     name: "Денис Ким",
     transport: "bicycle",
     skills: ["local"],
     status: "available",
     request_ids: ["req-11", "req-12"],
-    load_minutes: 214,
+    shift_start: at("10:00"),
+    shift_end: at("22:00"),
+    start_address: "Москва, Рязанский пр-т, 26 (офис, демо)",
+    load_percent: 45,
     distance_meters: 12100,
     color: "#b66b00",
   },
   {
     id: "eng-06",
-    external_code: "ENG-061",
     name: "Ольга Миронова",
     transport: "car",
     skills: ["emergency", "connection"],
     status: "unavailable",
     request_ids: [],
-    load_minutes: 0,
+    shift_start: at("10:00"),
+    shift_end: at("22:00"),
+    start_address: "Москва, Рязанский пр-т, 26 (офис, демо)",
+    load_percent: 0,
     distance_meters: 0,
     color: "#bd3d77",
   },
-];
+]);
 
 type RequestSeed = [
   string,
@@ -151,7 +167,7 @@ export const demoRequests: RequestItem[] = seeds.map(
       id,
       external_id: externalId,
       bk_type: type,
-      hd_type: index % 2 ? "Service Request" : "Incident",
+      hd_type: index % 2 ? "Низкая скорость" : "Нет линка",
       address: `${district}, ${["ул. Зеленодольская", "пр-т Рязанский", "ул. Совхозная", "ул. Люблинская"][index % 4]}, ${8 + index * 3}`,
       district,
       coordinates,
@@ -165,9 +181,15 @@ export const demoRequests: RequestItem[] = seeds.map(
       priority_rank: rank,
       required_skill: skill,
       required_transport: rank === 1 ? "car" : null,
+      connection_type: type === "Подключение" ? "FTTB" : null,
+      is_gigabit: false,
+      created_at: at("07:30"),
       engineer_id: engineerId,
       engineer_name: engineer?.name ?? null,
       arrival_at: engineer ? at(start) : null,
+      planned_start: engineer ? at(start) : null,
+      planned_finish: engineer ? new Date(new Date(at(start)).getTime() + serviceMinutes * 60_000).toISOString() : null,
+      travel_minutes: engineer ? 15 + (index % 3) * 10 : null,
       explanation: engineer
         ? `Назначен по квалификации «${skill}», допустимому временному окну и минимальному приросту маршрута.`
         : "Не назначена: у доступных инженеров нет совместимого окна до конца смены.",
@@ -197,6 +219,7 @@ export const demoRoutes: OverviewRoutesResponse = {
     geometry: engineer.request_ids.length
       ? { type: "LineString" as const, coordinates: routeCoordinates(engineer.id) }
       : null,
+    start_coordinates: office,
     distance_meters: engineer.distance_meters,
     duration_seconds: Math.round(engineer.distance_meters / 7.2),
   })),
@@ -244,10 +267,10 @@ export function getDemoDetailedRoute(engineerId: string): DetailedRoute {
 }
 
 export const demoPlans: PlanSummary[] = [
-  { id: "plan-draft", code: "PLN-1708-04", status: "draft", parent_plan_id: "plan-approved", base_plan_id: "plan-approved", input_version: "sha256:84a7", created_at: at("14:18"), requests_count: 14, assigned_count: 13 },
-  { id: "plan-approved", code: "PLN-1708-03", status: "approved", parent_plan_id: "plan-old", base_plan_id: "plan-old", input_version: "sha256:2cd1", created_at: at("08:12"), approved_at: at("08:19"), requests_count: 14, assigned_count: 12 },
-  { id: "plan-old", code: "PLN-1708-02", status: "superseded", parent_plan_id: "plan-first", base_plan_id: "plan-first", input_version: "sha256:c938", created_at: at("07:56"), approved_at: at("08:03"), requests_count: 13, assigned_count: 11 },
-  { id: "plan-first", code: "PLN-1708-01", status: "superseded", parent_plan_id: null, base_plan_id: null, input_version: "sha256:092b", created_at: at("07:42"), approved_at: at("07:48"), requests_count: 13, assigned_count: 10 },
+  { id: "plan-draft", title: "Пересчёт по событию · 14:18", status: "draft", parent_plan_id: "plan-approved", base_plan_id: "plan-approved", input_version: "sha256:84a7", created_at: at("14:18"), requests_count: 14, assigned_count: 13 },
+  { id: "plan-approved", title: "Пересчёт · 08:12", status: "approved", parent_plan_id: "plan-old", base_plan_id: "plan-old", input_version: "sha256:2cd1", created_at: at("08:12"), approved_at: at("08:19"), requests_count: 14, assigned_count: 12 },
+  { id: "plan-old", title: "Пересчёт · 07:56", status: "superseded", parent_plan_id: "plan-first", base_plan_id: "plan-first", input_version: "sha256:c938", created_at: at("07:56"), approved_at: at("08:03"), requests_count: 13, assigned_count: 11 },
+  { id: "plan-first", title: "Первичный план · 07:42", status: "superseded", parent_plan_id: null, base_plan_id: null, input_version: "sha256:092b", created_at: at("07:42"), approved_at: at("07:48"), requests_count: 13, assigned_count: 10 },
 ];
 
 export const demoDiff: PlanDiffItem[] = [
@@ -281,7 +304,7 @@ export const demoWorkspace: WorkspaceData = {
     engineers_used: 5,
     distance_meters: 91700,
     avg_load_percent: 71,
-    on_time_percent: 92,
+    coverage_percent: 86,
   },
   audit: demoAudit,
   diff: demoDiff,

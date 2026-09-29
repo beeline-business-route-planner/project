@@ -3,7 +3,13 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 
-from src.core.db.enums import PlanKind, Region, UnassignedReason
+from src.core.db.enums import (
+    DistributionMode,
+    PlanKind,
+    PlanStrategy,
+    Region,
+    UnassignedReason,
+)
 
 
 @dataclass(frozen=True)
@@ -15,11 +21,14 @@ class PlanCreateDTO:
     based_on_plan_id: uuid.UUID | None
     triggered_by_event_id: uuid.UUID | None
     calculation_cutoff_at: datetime
+    mode: DistributionMode
+    strategy: PlanStrategy
     total_mileage_km: Decimal
     engineers_used_count: int
     assigned_requests_count: int
     unassigned_requests_count: int
     created_at: datetime | None = None
+    edited_from_plan_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)

@@ -88,6 +88,7 @@ class PlanSnapshotAssembler:
             calculation_cutoff_at=plan.calculation_cutoff_at,
             based_on_plan_id=plan.based_on_plan_id,
             triggered_by_event_id=plan.triggered_by_event_id,
+            edited_from_plan_id=plan.edited_from_plan_id,
             metrics=metrics,
             requests=snapshot_requests,
             engineers=snapshot_engineers,

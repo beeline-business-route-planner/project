@@ -21,8 +21,9 @@ WORKDIR /app
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --from=builder --chown=app:app /app/src /app/src
-COPY --chown=app:app config.toml ./config.toml
-COPY --chown=app:app alembic.ini ./alembic.ini
+# config.toml is optional (git-ignored): without it every setting comes from
+# defaults and environment variables (e.g. GEOCODING__API_KEY).
+COPY --chown=app:app alembic.ini config.toml* ./
 COPY --chown=app:app alembic ./alembic
 
 USER app

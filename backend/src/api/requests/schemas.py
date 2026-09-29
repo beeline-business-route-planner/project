@@ -38,3 +38,7 @@ class RequestDetailResponse(BaseModel):
     required_vehicle_type: VehicleType | None
     status: RequestStatus
     created_at: datetime
+
+
+class RequestStatusUpdateRequest(BaseModel):
+    status: RequestStatus

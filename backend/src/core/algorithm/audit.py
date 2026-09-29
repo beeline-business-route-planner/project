@@ -9,6 +9,7 @@ from src.core.algorithm.dto import (
     InitialPlanningInput,
     InitialPlanningResult,
     Job,
+    PlanMetrics,
     PlanningLayer,
     ReplanInput,
     ReplanResult,
@@ -17,6 +18,7 @@ from src.core.algorithm.dto import (
 )
 from src.core.algorithm.exc import AlgorithmAuditError
 from src.core.algorithm.rules import PlanningRules
+from src.core.db.enums import ReplanningEventType
 
 
 class ResultAuditor:
@@ -61,6 +63,9 @@ class ResultAuditor:
 
         engineers_by_id = {engineer.id: engineer for engineer in replan_input.snapshot.engineers}
         expected_locked = {stop.request_id: stop for stop in replan_input.locked_stops}
+        service_minutes = {
+            request.id: request.service_minutes for request in replan_input.snapshot.requests
+        }
         assigned_ids: list[uuid.UUID] = []
         seen_locked: set[uuid.UUID] = set()
         for route in result.routes:
@@ -74,11 +79,47 @@ class ResultAuditor:
                     expected_locked,
                     seen_locked,
                     replan_input.snapshot.calculation_cutoff_at,
+                    service_minutes,
                 )
             )
         if seen_locked != set(expected_locked):
             raise AlgorithmAuditError("Не все зафиксированные остановки перенесены в план")
         self._audit_replan_coverage(replan_input, result, assigned_ids)
+        if replan_input.event is not None:
+            self._audit_event(replan_input, result)
+
+    @staticmethod
+    def _audit_event(replan_input: ReplanInput, result: ReplanResult) -> None:
+        """Проверяет, что событие применено ровно один раз и только к будущей части дня.
+
+        Общие проверки replan уже гарантируют неизменную историю, полное покрытие и
+        отсутствие будущих остановок у недоступных инженеров.
+        """
+
+        event = replan_input.event
+        if event is None:
+            return
+        requests_by_id = {request.id: request for request in replan_input.snapshot.requests}
+        engineers_by_id = {engineer.id: engineer for engineer in replan_input.snapshot.engineers}
+        future_ids = {
+            stop.request_id for route in result.routes for stop in route.stops if not stop.is_locked
+        }
+        locked_ids = {stop.request_id for stop in replan_input.locked_stops}
+        match event.event_type:
+            case ReplanningEventType.URGENT_REQUEST:
+                if event.urgent_request is None or event.urgent_request.id not in requests_by_id:
+                    raise AlgorithmAuditError("Срочная заявка не попала в snapshot события")
+            case ReplanningEventType.REQUEST_CANCELLED:
+                if event.request_id in future_ids or (
+                    event.request_id not in result.cancelled_request_ids
+                    and event.request_id not in locked_ids
+                ):
+                    raise AlgorithmAuditError("Отменённая заявка осталась в будущем плана")
+            case ReplanningEventType.ENGINEER_UNAVAILABLE | ReplanningEventType.ENGINEER_AVAILABLE:
+                engineer = engineers_by_id.get(event.engineer_id) if event.engineer_id else None
+                expected = event.event_type == ReplanningEventType.ENGINEER_AVAILABLE
+                if engineer is None or engineer.is_available != expected:
+                    raise AlgorithmAuditError("Доступность инженера не соответствует событию")
 
     def _audit_replan_route(
         self,
@@ -87,6 +128,7 @@ class ResultAuditor:
         expected_locked: dict[uuid.UUID, BasePlanStop],
         seen_locked: set[uuid.UUID],
         cutoff_at: datetime,
+        service_minutes: dict[uuid.UUID, int],
     ) -> list[uuid.UUID]:
         future_started = False
         for expected_sequence, stop in enumerate(route.stops, start=1):
@@ -105,6 +147,13 @@ class ResultAuditor:
                 raise AlgorithmAuditError("Недоступный инженер получил будущую остановку")
             if stop.start < cutoff_at:
                 raise AlgorithmAuditError("Будущая остановка начинается раньше cutoff")
+        self._audit_route_metrics(
+            route,
+            engineer,
+            sum(service_minutes[stop.request_id] for stop in route.stops),
+            sum(stop.travel_minutes for stop in route.stops),
+            sum((stop.distance_km for stop in route.stops), start=Decimal("0")),
+        )
         return [stop.request_id for stop in route.stops]
 
     @staticmethod
@@ -119,18 +168,13 @@ class ResultAuditor:
             raise AlgorithmAuditError("Заявка встретилась в плане больше одного раза")
         if set(all_ids) != {request.id for request in replan_input.snapshot.requests}:
             raise AlgorithmAuditError("План не покрывает полный набор заявок дня")
-        if (
-            result.metrics.assigned_requests_count,
-            result.metrics.unassigned_requests_count,
-            result.metrics.engineers_used_count,
-            result.metrics.total_travel_minutes,
-        ) != (
+        ResultAuditor._audit_aggregates(
+            {engineer.id: engineer.is_available for engineer in replan_input.tail.engineers},
+            result.routes,
+            result.metrics,
             len(assigned_ids),
             len(unassigned_ids),
-            len(result.routes),
-            sum(route.travel_minutes for route in result.routes),
-        ):
-            raise AlgorithmAuditError("Агрегаты replan не совпадают с маршрутами")
+        )
 
     @staticmethod
     def _same_as_base(engineer_id: uuid.UUID, stop: Stop, base: BasePlanStop) -> bool:
@@ -220,12 +264,14 @@ class ResultAuditor:
             raise AlgorithmAuditError("Для маршрута отсутствует транспортная матрица")
         expected_travel = matching_matrices[0].minutes(previous_id, job.id)
         expected_distance = matching_matrices[0].kilometers(previous_id, job.id)
+        if expected_travel is None or expected_distance is None:
+            raise AlgorithmAuditError("Маршрут проходит через недостижимый переход")
         expected_arrival = previous_finish + timedelta(minutes=expected_travel)
         expected_start = max(expected_arrival, job.release_at, cutoff_at)
         expected_finish = expected_start + timedelta(minutes=job.service_minutes)
         expected_values = (
             expected_travel,
-            expected_distance,
+            PlanningRules.stop_distance(expected_distance),
             expected_arrival,
             expected_start,
             expected_finish,
@@ -246,7 +292,7 @@ class ResultAuditor:
     @staticmethod
     def _audit_route_metrics(
         route: Route,
-        engineer: Engineer,
+        engineer: Engineer | EngineerSnapshot,
         service_minutes: int,
         travel_minutes: int,
         distance_km: Decimal,
@@ -294,21 +340,54 @@ class ResultAuditor:
         result: InitialPlanningResult,
         assigned_ids: list[uuid.UUID],
     ) -> None:
-        expected_values = (
+        ResultAuditor._audit_aggregates(
+            {engineer.id: engineer.is_available for engineer in planning_input.engineers},
+            result.routes,
+            result.metrics,
             len(assigned_ids),
-            sum(engineer.is_available for engineer in planning_input.engineers),
-            len(result.routes),
-            sum(route.service_minutes for route in result.routes),
-            sum(route.travel_minutes for route in result.routes),
-            sum((route.distance_km for route in result.routes), start=Decimal("0")),
+            len(result.unassigned),
+        )
+
+    @staticmethod
+    def _audit_aggregates(
+        availability: dict[uuid.UUID, bool],
+        routes: tuple[Route, ...],
+        metrics: PlanMetrics,
+        assigned_count: int,
+        unassigned_count: int,
+    ) -> None:
+        """Сверяет агрегаты плана с маршрутами; одно определение для initial и replan."""
+
+        routed_ids = {route.engineer_id for route in routes}
+        if len(routed_ids) != len(routes):
+            raise AlgorithmAuditError("У инженера больше одного маршрута в плане")
+        counted = sum(
+            available or engineer_id in routed_ids
+            for engineer_id, available in availability.items()
+        )
+        divisor = Decimal(counted) if counted else Decimal("1")
+        expected_values = (
+            assigned_count,
+            unassigned_count,
+            sum(availability.values()),
+            len(routes),
+            sum(route.service_minutes for route in routes),
+            sum(route.travel_minutes for route in routes),
+            sum((route.distance_km for route in routes), start=Decimal("0")),
+            sum((route.utilization_without_travel for route in routes), start=Decimal("0"))
+            / divisor,
+            sum((route.utilization_with_travel for route in routes), start=Decimal("0")) / divisor,
         )
         actual_values = (
-            result.metrics.assigned_requests_count,
-            result.metrics.engineers_available_count,
-            result.metrics.engineers_used_count,
-            result.metrics.total_service_minutes,
-            result.metrics.total_travel_minutes,
-            result.metrics.total_mileage_km,
+            metrics.assigned_requests_count,
+            metrics.unassigned_requests_count,
+            metrics.engineers_available_count,
+            metrics.engineers_used_count,
+            metrics.total_service_minutes,
+            metrics.total_travel_minutes,
+            metrics.total_mileage_km,
+            metrics.average_utilization_without_travel,
+            metrics.average_utilization_with_travel,
         )
         if actual_values != expected_values:
             raise AlgorithmAuditError("Агрегаты плана не совпадают с маршрутами")
