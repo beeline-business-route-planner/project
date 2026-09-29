@@ -5,10 +5,12 @@
 геокодирует адреса, OSRM/2ГИС дают дорожные матрицы, S3/MinIO хранит исходные
 книги и экспорты. Алгоритм — локальный пакет backend, не отдельный сервис.
 
-Действующие маршруты и реальные цепочки действий —
-[`../docs/BACKEND.md`](../docs/BACKEND.md); интерактивная схема запущенного API —
-<http://localhost:8000/docs>. Обзор всего репозитория —
-[`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
+Интерактивная схема действующего API — <http://localhost:8000/docs>. Первичный
+сценарий: загрузить XLSX-пару через `/api/planning/initial`, проверить созданный
+pending-план через `/api/plans/{id}`, затем утвердить или отклонить. Для
+перепланирования есть `/api/planning/replan`, для внештатных событий —
+`/api/planning/events`; карточки, выгрузки и дневной отчёт — в доменных маршрутах.
+Все маршруты и формы ответа доступны в `/openapi.json`.
 
 ## Запуск
 
@@ -16,9 +18,8 @@
 
 ```bash
 cd backend
-cp .env.example .env
-cp config.toml.example config.toml
-# Настройте локальные пароли, DaData и выбранный поставщик матриц.
+cp -n .env.example .env
+# Настройте локальные пароли и ключ DaData; провайдер матриц — в .env.
 make up
 ```
 
@@ -36,18 +37,22 @@ make upgrade
 make run
 ```
 
-Значения и структура `config.toml` — в `config.toml.example`, секреты Compose —
-в `.env.example`. Рабочие `.env` и `config.toml` не добавляйте в Git и не
+Для локального `make run` можно создать `config.toml` из `config.toml.example`;
+Docker берёт секреты и ключи из `.env` (образ не включает рабочий TOML).
+Рабочие `.env` и `config.toml` не добавляйте в Git и не
 публикуйте ключи в логах. `make help` перечисляет команды.
 
 ## Разработка
 
 ```bash
 make check                                      # ruff format --check, ruff check, mypy
-uv run python -m unittest discover -s tests -v # тесты backend
+make test                                       # unit-тесты без Docker/сети
+make test-matrix                                # каталог тестовых сценариев
 ```
 
-Миграции: `make upgrade`; новые ревизии — `make migrate MSG=...`. HTTP-роутеры,
+`make test-integration` и `make test-e2e` создают одноразовый PostgreSQL через
+Docker; подробности — в [`tests/README.md`](tests/README.md). Миграции:
+`make upgrade`; новые ревизии — `make migrate MSG=...`. HTTP-роутеры,
 схемы и доменные сценарии — `src/api/`; БД и транзакции — `src/core/db/`;
 алгоритм — `src/core/algorithm/`; внешние API — отдельные клиенты и сервисы в
 `src/core/`; сборка зависимостей — `src/core/di/`; конфиг — `src/config/`.
@@ -55,5 +60,6 @@ uv run python -m unittest discover -s tests -v # тесты backend
 и локальный [`AGENTS.md`](AGENTS.md).
 
 Первоначальный импорт требует пару XLSX на округ с окнами **сегодняшнего дня по
-Москве**. Файл контрольного распределения не заменяет книгу инженеров. Для
+Москве**, по умолчанию использует `balanced` + `lns`; CSV не принимает.
+Файл контрольного распределения не заменяет книгу инженеров. Для
 проверки реальной интеграции frontend отключите его автоматический demo-fallback.
