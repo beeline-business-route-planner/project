@@ -9,28 +9,39 @@
 пути, PostgreSQL хранит версии планов, S3/MinIO — исходные файлы и временные экспорты.
 Это не набор развёртываемых микросервисов.
 
-## Быстрый запуск
+## Быстрый запуск (всё в Docker)
 
-Нужны Docker Compose, Node.js/npm и ключ DaData. Для карт во frontend нужен
-браузерный ключ 2ГИС; для матриц 2ГИС — отдельная настройка backend. Значения
-секретов хранятся только в локальных файлах, не в Git.
+Нужен только Docker с Compose v2.24+, а также ключи DaData и 2ГИС.
 
 ```bash
-cd backend
 cp .env.example .env
-cp config.toml.example config.toml
-# Заполните локальные настройки и ключи, затем:
-make up
+# Впишите DADATA_API_KEY и VITE_2GIS_KEY (остальное можно не трогать), затем:
+docker compose up -d --build
+```
 
-cd ../frontend
-npm ci
-cp .env.example .env
-# Укажите VITE_2GIS_KEY и при необходимости VITE_2GIS_DIRECTIONS_KEY.
-npm run dev
+Откройте <http://localhost:8088>. Это единственный адрес, нужный пользователю:
+nginx отдаёт приложение и сам проксирует `/api` на backend и `/dgis-routing` на 2ГИС,
+добавляя ключ маршрутов на сервере. Поэтому в браузере не видно ни адреса backend,
+ни ключа маршрутизации; виден только ключ карты MapGL — он публичный по своей
+природе, ограничьте его по домену в кабинете 2ГИС. Postgres, MinIO, backend и
+мониторинг слушают только `127.0.0.1`. Чтобы открыть приложение в локальной сети,
+задайте `FRONTEND_HOST=0.0.0.0`. Остановить: `docker compose down`.
+После правок во фронте достаточно `docker compose up -d --build --no-deps frontend` —
+без `--no-deps` Compose пересоздаст и backend.
+
+Сервисы бэкенда описаны в `backend/docker-compose.yml` и подключаются корневым
+`docker-compose.yml`; `backend/config.toml` необязателен — все ключи берутся из `.env`.
+
+## Разработка
+
+```bash
+cd backend && cp .env.example .env && cp config.toml.example config.toml && make up
+cd ../frontend && npm ci && cp .env.example .env && npm run dev
 ```
 
 Frontend: <http://localhost:5173>, backend: <http://localhost:8000>, интерактивная
-схема API: <http://localhost:8000/docs>. Vite перенаправляет `/api` на backend.
+схема API: <http://localhost:8000/docs>. Vite перенаправляет `/api` на backend и
+`/dgis-routing` на 2ГИС с ключом из `frontend/.env` (`DGIS_ROUTING_KEY`).
 Для проверки именно реальной интеграции установите `VITE_DEMO_MODE=false` в локальном
 `frontend/.env`: режим `auto` может показать демоданные при ошибке API. По умолчанию
 Compose занимает порт PostgreSQL `127.0.0.1:5432`; если он занят, настройте локальный

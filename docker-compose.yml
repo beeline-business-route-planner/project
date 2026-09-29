@@ -1,0 +1,32 @@
+# Whole project in one command:
+#   cp .env.example .env   # fill in the keys
+#   docker compose up -d --build
+#   open http://localhost:8088
+#
+# The backend stack (Postgres, MinIO, migrations, API, monitoring) lives in
+# backend/docker-compose.yml and is included as is; this file adds the frontend.
+name: project
+
+include:
+  - path: backend/docker-compose.yml
+    env_file: .env
+
+services:
+  frontend:
+    build:
+      context: frontend
+      args:
+        VITE_2GIS_KEY: ${VITE_2GIS_KEY:-}
+        VITE_DEMO_MODE: ${VITE_DEMO_MODE:-false}
+    image: project_frontend:latest
+    container_name: frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      BACKEND_URL: http://backend:8000
+      # Routing key stays in nginx; defaults to the map key.
+      DGIS_ROUTING_KEY: ${DGIS_ROUTING_KEY:-${VITE_2GIS_KEY:-}}
+    ports:
+      # The only port a user needs. Set FRONTEND_HOST=0.0.0.0 to open it to the network.
+      - "${FRONTEND_HOST:-127.0.0.1}:${FRONTEND_PORT:-8088}:80"
