@@ -22,9 +22,10 @@ export const statusLabels: Record<RequestStatus, string> = {
 };
 
 export const planStatusLabels: Record<PlanStatus, string> = {
-  draft: "Черновик",
-  approved: "Активный",
-  superseded: "Архивный",
+  // Wording of the user case: pending / approved / rejected; "Текущий" is a separate badge.
+  draft: "Ожидает решения",
+  approved: "Утверждён",
+  superseded: "Утверждён ранее",
   rejected: "Отклонён",
 };
 
@@ -89,6 +90,12 @@ export function EmptyState({ icon, title, text, action }: { icon: ReactNode; tit
 export function formatTime(value: string | null | undefined) {
   if (!value) return "—";
   return new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+export function formatShift(engineer: { shift_start: string | null; shift_end: string | null }) {
+  return engineer.shift_start && engineer.shift_end
+    ? `${formatTime(engineer.shift_start)}–${formatTime(engineer.shift_end)}`
+    : "Смена не указана";
 }
 
 export function formatDateTime(value: string) {

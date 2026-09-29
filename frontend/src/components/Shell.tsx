@@ -34,11 +34,26 @@ function russianDate(date: string) {
   return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric" }).format(new Date(`${date}T12:00:00`));
 }
 
-function ConnectionBadge({ source }: { source: DataSource }) {
+// Shown only when something is wrong: a working connection needs no badge.
+function ConnectionBadge({ source, offline, error, loading }: { source: DataSource; offline: boolean; error: string | null; loading: boolean }) {
+  // While the first connection attempts are still running the state is unknown.
+  if (loading || (source === "api" && !offline)) return null;
+  const forcedDemo = (import.meta.env.VITE_DEMO_MODE ?? "auto") === "true";
+  const title = offline ? "API недоступен" : "Демо-режим";
+  const explanation = forcedDemo
+    ? "Демо включено настройкой VITE_DEMO_MODE=true: backend не опрашивается, данные вымышленные."
+    : offline
+      ? `Фронт не видит backend (${API_BASE_URL}). Данные не загружены, действия не сработают.`
+      : `Фронт не видит backend (${API_BASE_URL}), поэтому показаны демонстрационные данные. Изменения никуда не сохраняются.`;
   return (
-    <div className={`connection-badge ${source}`} title={source === "api" ? API_BASE_URL : "Локальные демонстрационные данные"}>
+    <div className="connection-badge problem" tabIndex={0} aria-label={`${title}. ${explanation}`}>
       <span />
-      {source === "api" ? "API подключён" : "Демо-режим"}
+      {title}
+      <div className="connection-popover" role="tooltip">
+        <strong>{forcedDemo ? "Демонстрационные данные" : "Нет связи с backend"}</strong>
+        <p>{explanation}</p>
+        {error && !forcedDemo ? <code>{error.replace(/^Backend недоступен(, показаны демонстрационные данные)?: /, "")}</code> : null}
+      </div>
     </div>
   );
 }
@@ -123,15 +138,28 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
           <button className="icon-button mobile-menu" aria-label="Открыть меню" onClick={() => setMobileSidebarOpen((current) => !current)}><Menu size={20} /></button>
           <div className="context-selects">
             <div className="today-context"><span>Сегодня</span><strong>{russianDate(today)}</strong></div>
-            <label>
-              <span>Участок</span>
-              <select
-                value={data.scenarioId}
-                onChange={(event) => void planner.changeContext(event.target.value, "")}
-              >
-                {data.scenarios.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
-            </label>
+            {/* Only three districts: show them all so the switch is obvious at a glance. */}
+            <div className="district-field">
+              <span id="district-switch-label">Участок</span>
+              <div className="district-switch" role="radiogroup" aria-labelledby="district-switch-label">
+                {data.scenarios.map((item) => {
+                  const active = item.id === data.scenarioId;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      className={active ? "active" : ""}
+                      disabled={planner.loading}
+                      onClick={() => { if (!active) void planner.changeContext(item.id, ""); }}
+                    >
+                      {item.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <label>
               <span>{viewingAnotherDay ? "Просмотр плана за" : "Рабочий день"}</span>
               <div className="input-with-icon">
@@ -149,7 +177,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
             {viewingAnotherDay ? <span className="historical-date-note" title="Плана на сегодня нет среди полученных от backend дат">Архивный день</span> : null}
           </div>
           <div className="topbar-actions">
-            <ConnectionBadge source={planner.source} />
+            <ConnectionBadge source={planner.source} offline={planner.source === "api" && Boolean(planner.error?.startsWith("Backend недоступен"))} error={planner.error} loading={planner.loading} />
             <button className="icon-button" onClick={() => openUtility("help")} aria-label="Помощь" title="Помощь"><QuestionIcon size={19} /></button>
             <button className="icon-button notification" onClick={() => openUtility("notifications")} aria-label={`Уведомления: ${notificationCount}`} title="Уведомления"><BellSimpleIcon size={19} />{notificationCount > 0 && !notificationsRead ? <i /> : null}</button>
           </div>
@@ -215,7 +243,7 @@ export function Shell({ page, onPageChange, planner, children }: ShellProps) {
                 <section><span>01</span><div><strong>Выберите день</strong><p>Сверху выберите участок и дату. В списке только дни, для которых уже есть план. Для нового дня откройте «Планирование» и загрузите два XLSX: заявки и инженеры одного округа.</p></div></section>
                 <section><span>02</span><div><strong>Посмотрите заявки и карту</strong><p>На главной видны точки заявок. Нажмите заявку, чтобы прочесть адрес и ограничения. Переключитесь на «Инженеры» и нажмите человека, чтобы увидеть только его маршрут.</p></div></section>
                 <section><span>03</span><div><strong>Отметьте фактический статус</strong><p>Откройте заявку на главной и выберите её новый статус справа: «В пути», «В работе», «Выполнена» и другие. Изменение сохранится через API. Для отмены не используйте список статусов — создайте событие в планировании.</p></div></section>
-                <section><span>04</span><div><strong>Сообщите об изменении</strong><p>В «Планировании» нажмите «Новое событие»: инженер выбыл или вернулся, заявка отменена или добавилась. Для новой заявки укажите тип, адрес и окно. Окно должно относиться к выбранному дню и ещё не закончиться.</p></div></section>
+                <section><span>04</span><div><strong>Сообщите об изменении</strong><p>В «Планировании» нажмите «Событие дня»: инженер выбыл или вернулся, заявка отменена или добавилась. Для новой заявки укажите тип, адрес и окно. Окно должно относиться к выбранному дню и ещё не закончиться.</p></div></section>
                 <section><span>05</span><div><strong>Проверьте и решите</strong><p>После расчёта откройте новый черновик: посмотрите назначения, причины неназначенных и изменения. Нажмите «Утвердить» или «Отклонить». Пока событие ждёт решения, следующее событие бэкенд не принимает.</p></div></section>
                 <section><span>06</span><div><strong>Скачайте результат</strong><p>XLSX выбранного плана скачивается в «Планировании». Показатели и ZIP с PDF-отчётами — в «Аналитике». Предыдущие расчёты — в «Истории версий».</p></div></section>
               </div>

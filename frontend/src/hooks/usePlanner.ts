@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { backend } from "../api/services";
 import type {
+  BaselineComparison,
+  PlanDiffMetric,
   BackendEngineerDetail,
   BackendEngineerTile,
   BackendEventType,
@@ -84,6 +86,28 @@ const workLabels: Record<string, string> = {
   emergency_works: "Авария",
 };
 
+// Names as in the source XLSX (see backend planning parser).
+const hdTypeLabels: Record<string, string> = {
+  ip_address_169: "IP-адрес 169...",
+  tve_ent_other_errors: "TVE/ENT. Другие ошибки",
+  tve_ent_set_top_box_replacement: "TVE/ENT. Замена приставки техником",
+  emergency: "Авария",
+  equipment_additional_order: "Дозаказ оборудования",
+  connection_or_equipment_order: "Заказ подключения/Дозаказ оборудования",
+  connection_request: "Заявка на подключение",
+  information: "Информация",
+  subscriber_convergence: "Конвергенция абонента",
+  monitoring: "Мониторинг",
+  no_link: "Нет линка",
+  low_speed: "Низкая скорость",
+  gigabit_switch: "Переключение на Гбит/с",
+  cable_work: "Работа с кабелем",
+  disconnects: "Разрывы",
+  port_error_growth: "Рост ошибок на порту",
+  router_replacement_by_technician: "Роутер. Замена техническим специалистом",
+  tv_set_top_box_replacement: "ТВ. Замена приставки техником",
+};
+
 const requestTypeLabels: Record<string, string> = {
   global_problem: "Авария",
   connection: "Подключение",
@@ -114,6 +138,38 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : "Неизвестная ошибка";
 }
 
+function moscowToday(): string {
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Moscow" }).format(new Date());
+}
+
+/** Backend доступен, но по участку нет данных: показываем пустое рабочее место, а не демо. */
+function emptyWorkspace(region: BackendRegion): WorkspaceData {
+  const planningDate = moscowToday();
+  return {
+    scenarios: apiScenarios.map((scenario) => ({ ...scenario, planning_dates: [planningDate] })),
+    scenarioId: region,
+    planningDate,
+    activePlanId: "",
+    requests: [],
+    engineers: [],
+    plans: [],
+    routes: { plan_id: "", revision: "", status: "", routes: [] },
+    metrics: {
+      assigned: 0,
+      unassigned: 0,
+      completed: 0,
+      engineers_used: 0,
+      distance_meters: 0,
+      avg_load_percent: 0,
+      coverage_percent: 0,
+    },
+    audit: [],
+    diff: [],
+  };
+}
+
+class NoPlansError extends Error {}
+
 function regionOf(value?: string): BackendRegion {
   if (value === "vostok" || value === "yugotsentr" || value === "yugo_vostok") return value;
   if (value === "scenario-east") return "vostok";
@@ -127,12 +183,21 @@ function planStatus(plan: BackendPlanSummary): PlanStatus {
   return plan.is_current ? "approved" : "superseded";
 }
 
+const planKindLabels: Record<BackendPlanSummary["kind"], string> = {
+  initial: "Первичный план",
+  replan: "Пересчёт",
+  event_replan: "Пересчёт по событию",
+};
+
 function normalizePlans(plans: BackendPlanSummary[]): PlanSummary[] {
+  const time = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
   return [...plans]
     .sort((left, right) => right.created_at.localeCompare(left.created_at))
-    .map((plan, index) => ({
+    .map((plan) => ({
       id: plan.id,
-      code: `PLN-${plan.planning_date.replaceAll("-", "").slice(2)}-${String(plans.length - index).padStart(2, "0")}`,
+      title: `${planKindLabels[plan.kind] ?? "План"} · ${time.format(new Date(plan.created_at))}`,
+      kind: plan.kind,
+      is_current: plan.is_current,
       status: planStatus(plan),
       parent_plan_id: plan.based_on_plan_id,
       base_plan_id: plan.based_on_plan_id,
@@ -158,6 +223,29 @@ function normalizeMetrics(plan: BackendPlanDetail, requests: RequestItem[]): Pla
     coverage_percent: raw.assigned_requests_count + raw.unassigned_requests_count
       ? Math.round(raw.assigned_requests_count / (raw.assigned_requests_count + raw.unassigned_requests_count) * 100)
       : 0,
+    work_minutes: number(raw.total_work_minutes),
+    travel_minutes: number(raw.total_travel_minutes),
+    available_engineers: number(raw.available_engineers_count),
+    min_load_percent: Math.round(number(raw.min_workload_with_travel)),
+    max_load_percent: Math.round(number(raw.max_workload_with_travel)),
+  };
+}
+
+/** The spec compares the initial plan with the baseline algorithm (п. 2.3, §7). */
+export function baselineFromPlan(plan: BackendPlanDetail): BaselineComparison | null {
+  const baseline = plan.baseline_metrics;
+  if (!baseline) return null;
+  return {
+    plan: {
+      engineers_used: plan.metrics.engineers_used_count,
+      distance_km: number(plan.metrics.total_mileage_km),
+      assigned: plan.metrics.assigned_requests_count,
+    },
+    baseline: {
+      engineers_used: baseline.engineers_used_count,
+      distance_km: number(baseline.total_mileage_km),
+      assigned: baseline.assigned_requests_count,
+    },
   };
 }
 
@@ -177,7 +265,7 @@ function requestFromBackend(
     bk_type: detail?.type_bk
       ? requestTypeLabels[detail.type_bk] ?? detail.type_bk
       : workLabels[requiredSkill] ?? requiredSkill,
-    hd_type: detail?.type_hd ?? "Service request",
+    hd_type: detail?.type_hd ? hdTypeLabels[detail.type_hd] ?? detail.type_hd : "",
     address: detail?.address ?? tile.address,
     district: detail?.district ?? tile.district,
     coordinates: coordinates ?? [0, 0],
@@ -195,9 +283,16 @@ function requestFromBackend(
     required_transport: detail?.required_vehicle_type
       ? vehicleMap[detail.required_vehicle_type] ?? null
       : null,
+    connection_type: detail?.connection_type ? detail.connection_type.toUpperCase() : null,
+    is_gigabit: detail?.is_gigabit ?? false,
+    // The card stores created_at as naive UTC (Postgres now()); mark it as UTC.
+    created_at: detail?.created_at ? (/[zZ]|[+-]\d\d:?\d\d$/.test(detail.created_at) ? detail.created_at : `${detail.created_at}Z`) : null,
     engineer_id: tile.assigned_engineer?.engineer_id ?? null,
     engineer_name: tile.assigned_engineer?.name ?? null,
     arrival_at: tile.planned_arrival,
+    planned_start: tile.planned_start,
+    planned_finish: tile.planned_finish,
+    travel_minutes: tile.travel_minutes,
     explanation: tile.assigned_engineer
       ? "Назначение рассчитано актуальным backend с учётом квалификации, окна и загрузки."
       : reason ?? "Заявка пока не назначена.",
@@ -210,16 +305,19 @@ function engineerFromBackend(
   detail: BackendEngineerDetail | null,
   index: number,
 ): Engineer {
-  const load = number(tile.workload_with_travel);
   return {
     id: tile.engineer_id,
-    external_code: `ENG-${tile.engineer_id.slice(0, 4).toUpperCase()}`,
     name: tile.name,
     transport: vehicleMap[detail?.vehicle_type ?? tile.vehicle_type] ?? "car",
     skills: (detail?.skills ?? []).map((skill) => skillMap[skill] ?? "local"),
     status: detail?.is_available === false ? "unavailable" : tile.assigned_requests_count ? "working" : "available",
     request_ids: orderedStops(tile).map((stop) => stop.request_id),
-    load_minutes: Math.round(load <= 1 ? load * 480 : load * 4.8),
+    shift_start: detail?.shift_start ?? tile.shift_start ?? null,
+    shift_end: detail?.shift_end ?? tile.shift_end ?? null,
+    start_address: detail?.start_point_address ?? null,
+    // The plan reports workload already as a percentage of the shift.
+    load_percent: number(tile.workload_with_travel),
+    work_percent: number(tile.workload_without_travel),
     distance_meters: number(tile.route_distance_km) * 1000,
     color: colors[index % colors.length],
   };
@@ -231,8 +329,9 @@ function routesFromPlan(plan: BackendPlanDetail): OverviewRoutesResponse {
     revision: plan.created_at,
     status: plan.approval_status,
     routes: plan.engineers.map((engineer) => {
+      const start = validPoint(engineer.start_longitude, engineer.start_latitude);
       const routePoints = [
-        validPoint(engineer.start_longitude, engineer.start_latitude),
+        start,
         ...orderedStops(engineer).map((stop) => validPoint(stop.longitude, stop.latitude)),
       ].filter((point): point is [number, number] => point !== null);
       const coordinates = routePoints.filter((point, index) =>
@@ -244,11 +343,30 @@ function routesFromPlan(plan: BackendPlanDetail): OverviewRoutesResponse {
         provider: "backend-plan",
         graph_fingerprint: plan.id,
         geometry: coordinates.length > 1 ? { type: "LineString" as const, coordinates } : null,
+        start_coordinates: start,
         distance_meters: number(engineer.route_distance_km) * 1000,
         duration_seconds: engineer.stops.reduce((sum, stop) => sum + (stop.travel_minutes ?? 0) * 60, 0),
       };
     }),
   };
+}
+
+const diffMetricMeta: Array<Pick<PlanDiffMetric, "key" | "label" | "unit" | "better">> = [
+  { key: "assigned_requests", label: "Назначено", unit: "", better: "up" },
+  { key: "unassigned_requests", label: "Без назначения", unit: "", better: "down" },
+  { key: "engineers_used", label: "Бригад в работе", unit: "", better: "down" },
+  { key: "total_mileage_km", label: "Пробег", unit: " км", better: "down" },
+  { key: "total_travel_minutes", label: "В дороге", unit: " мин", better: "down" },
+  { key: "average_workload_with_travel", label: "Средняя загрузка", unit: "%", better: "up" },
+];
+
+function diffSummaryFromPlan(plan: BackendPlanDetail): PlanDiffMetric[] | undefined {
+  const summary = plan.diff?.summary;
+  if (!summary) return undefined;
+  return diffMetricMeta.flatMap((meta) => {
+    const item = summary[meta.key];
+    return item ? [{ ...meta, before: number(item.before), after: number(item.after), delta: number(item.delta) }] : [];
+  });
 }
 
 function diffFromPlan(plan: BackendPlanDetail, engineers: Engineer[]): PlanDiffItem[] {
@@ -287,10 +405,12 @@ export function usePlanner() {
   const loadApi = useCallback(async (scenarioOverride?: string, dateOverride?: string, planId?: string, strict = false) => {
     setLoading(true);
     setError(null);
+    const region = regionOf(scenarioOverride);
     try {
-      const region = regionOf(scenarioOverride);
       const summaries = await backend.plans(region);
-      if (!summaries.length) throw new Error("Для выбранного участка пока нет рассчитанных планов");
+      if (!summaries.length) {
+        throw new NoPlansError("Для выбранного участка пока нет рассчитанных планов. Загрузите исходные XLSX в «Планировании».");
+      }
       const availableDates = [...new Set(summaries.map((plan) => plan.planning_date))].sort().reverse();
       if (dateOverride && !availableDates.includes(dateOverride)) {
         throw new Error(`На ${dateOverride} для выбранного участка нет плана. Загрузите исходные XLSX в «Планировании».`);
@@ -337,34 +457,62 @@ export function usePlanner() {
           actor: "Система",
           action: item.status === "approved" ? "План утверждён" : "Версия плана создана",
           entity: "plan",
-          entity_id: item.code,
+          entity_id: item.title,
           details: "Запись восстановлена из истории версий плана; отдельный журнал действий backend не предоставляет.",
         })),
         diff: diffFromPlan(plan, engineers),
+        diffSummary: diffSummaryFromPlan(plan),
+        diffCompared: plan.diff?.requests.length,
       });
       setSource("api");
     } catch (requestError) {
-      const demoMode = import.meta.env.VITE_DEMO_MODE ?? "auto";
-      if (strict || demoMode === "false") {
-        const message = errorText(requestError);
-        setError(message);
-        if (strict) throw requestError;
-      } else {
-        setError(`Показаны демонстрационные данные: ${errorText(requestError)}`);
-        setData(demoWorkspace);
-        setSource("demo");
-      }
+      // Backend ответил (доступность проверяет ping при старте), поэтому остаёмся в режиме API.
+      setError(errorText(requestError));
+      if (strict) throw requestError;
+      setData((current) =>
+        requestError instanceof NoPlansError || current === demoWorkspace ? emptyWorkspace(region) : current,
+      );
+      setSource("api");
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if ((import.meta.env.VITE_DEMO_MODE ?? "auto") === "true") {
+    const demoMode = import.meta.env.VITE_DEMO_MODE ?? "auto";
+    if (demoMode === "true") {
       setLoading(false);
       return;
     }
-    void loadApi();
+    void (async () => {
+      try {
+        // The backend container may still be starting (docker compose up):
+        // retry for ~10 s before falling back.
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            await backend.ping();
+            break;
+          } catch (retryError) {
+            if (attempt >= 5) throw retryError;
+            await new Promise((resolve) => window.setTimeout(resolve, attempt * 1000));
+          }
+        }
+      } catch (pingError) {
+        if (demoMode === "false") {
+          // Strict mode never shows demo data as if it were real.
+          setData(emptyWorkspace(regionOf()));
+          setSource("api");
+          setError(`Backend недоступен: ${errorText(pingError)}`);
+        } else {
+          setError(`Backend недоступен, показаны демонстрационные данные: ${errorText(pingError)}`);
+          setData(demoWorkspace);
+          setSource("demo");
+        }
+        setLoading(false);
+        return;
+      }
+      await loadApi();
+    })();
   }, [loadApi]);
 
   const apiUnavailable = useCallback((feature: string) => {
@@ -415,6 +563,7 @@ export function usePlanner() {
         provider: route?.provider ?? "backend-plan",
         graph_fingerprint: route?.graph_fingerprint ?? data.activePlanId,
         geometry: route?.geometry ?? null,
+        start_coordinates: route?.start_coordinates ?? null,
         distance_meters: route?.distance_meters ?? 0,
         duration_seconds: route?.duration_seconds ?? 0,
         stops,
@@ -427,7 +576,7 @@ export function usePlanner() {
 
   const updateRequestStatus = useCallback(async (requestId: string, status: RequestStatus) => {
     if (source === "api") {
-      if (status === "CANCELLED") throw new Error("Отмена заявки выполняется через «Новое событие» в планировании");
+      if (status === "CANCELLED") throw new Error("Отмена заявки выполняется через «Событие дня» в планировании");
       await backend.updateRequestStatus(requestId, backendStatus[status]);
       await loadApi(data.scenarioId, data.planningDate, data.activePlanId, true);
       showNotice("Статус заявки обновлён");
@@ -473,7 +622,7 @@ export function usePlanner() {
     if (source === "api") {
       await backend.approvePlan(plan.id);
       await loadApi(data.scenarioId, data.planningDate, plan.id, true);
-      showNotice(`План ${plan.code} утверждён`);
+      showNotice(`«${plan.title}» утверждён`);
       return;
     }
     if ((import.meta.env.VITE_DEMO_MODE ?? "auto") !== "true") throw new Error("Утверждение плана требует подключения backend");
@@ -485,14 +634,14 @@ export function usePlanner() {
         status: item.id === plan.id ? "approved" : item.status === "approved" ? "superseded" : item.status,
       })),
     }));
-    showNotice(`План ${plan.code} утверждён`);
+    showNotice(`«${plan.title}» утверждён`);
   }, [data.planningDate, data.scenarioId, loadApi, showNotice, source]);
 
   const rejectPlan = useCallback(async (plan: PlanSummary) => {
     if (source !== "api") throw new Error("Отклонение плана требует подключения backend");
     await backend.rejectPlan(plan.id);
     await loadApi(data.scenarioId, data.planningDate, undefined, true);
-    showNotice(`План ${plan.code} отклонён`);
+    showNotice(`«${plan.title}» отклонён`);
   }, [data.planningDate, data.scenarioId, loadApi, showNotice, source]);
 
   const createUrgentRequest = useCallback(async (payload: Record<string, unknown>) => {
@@ -524,7 +673,7 @@ export function usePlanner() {
       id: `req-${Date.now()}`,
       external_id: `BK-${Date.now()}`,
       bk_type: payload.type_bk === "connection" ? "Подключение" : "Авария",
-      hd_type: "Incident",
+      hd_type: "",
       address: String(payload.address ?? "Москва"),
       district: String(payload.district ?? "ЮВАО"),
       coordinates: [37.79, 55.69],
@@ -538,9 +687,15 @@ export function usePlanner() {
       priority_rank: 1,
       required_skill: "emergency",
       required_transport: "car",
+      connection_type: null,
+      is_gigabit: false,
+      created_at: new Date().toISOString(),
       engineer_id: null,
       engineer_name: null,
       arrival_at: null,
+      planned_start: null,
+      planned_finish: null,
+      travel_minutes: null,
       explanation: "Срочная заявка ожидает подтверждения нового плана.",
     };
     setData((current) => ({ ...current, requests: [request, ...current.requests] }));

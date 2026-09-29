@@ -38,22 +38,37 @@ export interface RequestItem {
   priority_rank: 1 | 2 | 3;
   required_skill: Skill;
   required_transport: Transport | null;
+  /** Connection technology from the request card, e.g. "FTTB". */
+  connection_type: string | null;
+  is_gigabit: boolean;
+  /** When the request was loaded into the system (`created_at` of the card). */
+  created_at: string | null;
   engineer_id: string | null;
   engineer_name: string | null;
   arrival_at: string | null;
+  /** Planned work interval and travel to this stop (from the plan). */
+  planned_start: string | null;
+  planned_finish: string | null;
+  travel_minutes: number | null;
   explanation: string;
   unassigned_reason?: string;
 }
 
 export interface Engineer {
   id: string;
-  external_code: string;
   name: string;
   transport: Transport;
   skills: Skill[];
   status: "available" | "en_route" | "working" | "unavailable";
   request_ids: string[];
-  load_minutes: number;
+  shift_start: string | null;
+  shift_end: string | null;
+  /** Office or remote "home" the engineer starts the day from. */
+  start_address: string | null;
+  /** Share of the shift busy with work and travel, 0–100+ (from the plan). */
+  load_percent: number;
+  /** Share of the shift busy with work only; travel = load_percent − work_percent. */
+  work_percent: number;
   distance_meters: number;
   color: string;
 }
@@ -70,6 +85,8 @@ export interface RouteOverview {
   provider: string;
   graph_fingerprint: string;
   geometry: LineString | null;
+  /** Office the engineer starts from; the map draws it as a flag. */
+  start_coordinates?: [number, number] | null;
   distance_meters: number;
   duration_seconds: number;
 }
@@ -170,7 +187,10 @@ export interface PlanningRun {
 
 export interface PlanSummary {
   id: string;
-  code: string;
+  /** Human name: what created the version and when, e.g. "Пересчёт по событию · 17:05". */
+  title: string;
+  kind?: "initial" | "replan" | "event_replan";
+  is_current?: boolean;
   status: PlanStatus;
   parent_plan_id: string | null;
   base_plan_id: string | null;
@@ -201,6 +221,18 @@ export interface PlanMetrics {
   distance_meters: number;
   avg_load_percent: number;
   coverage_percent: number;
+  /** Totals of the plan (absent in demo data). */
+  work_minutes?: number;
+  travel_minutes?: number;
+  available_engineers?: number;
+  min_load_percent?: number;
+  max_load_percent?: number;
+}
+
+/** Metrics of the initial plan and of the baseline algorithm from the spec (п. 2.3). */
+export interface BaselineComparison {
+  plan: { engineers_used: number; distance_km: number; assigned: number };
+  baseline: { engineers_used: number; distance_km: number; assigned: number };
 }
 
 export interface AuditItem {
@@ -263,6 +295,21 @@ export interface WorkspaceData {
   metrics: PlanMetrics;
   audit: AuditItem[];
   diff: PlanDiffItem[];
+  /** "Was → became" metrics of the candidate against its base; absent for initial. */
+  diffSummary?: PlanDiffMetric[];
+  /** How many requests the diff compared (changed or not). */
+  diffCompared?: number;
+}
+
+export interface PlanDiffMetric {
+  key: string;
+  label: string;
+  before: number;
+  after: number;
+  delta: number;
+  unit: string;
+  /** Which direction is an improvement, for colouring the delta. */
+  better: "up" | "down";
 }
 
 export type BackendRegion = "vostok" | "yugo_vostok" | "yugotsentr";
@@ -379,6 +426,8 @@ export interface BackendEngineerTile {
 }
 
 export interface BackendPlanDiff {
+  /** Plan-level metrics of the base (before) and candidate (after) versions. */
+  summary?: Record<string, { before: number | string; after: number | string; delta: number | string }>;
   requests: Array<{
     request_id: string;
     changes: string[];
@@ -462,6 +511,8 @@ export interface BackendRequestDetail {
   address: string;
   latitude: number | string | null;
   longitude: number | string | null;
+  connection_type: "fmc" | "fttb" | null;
+  is_gigabit: boolean;
   window_start: string;
   window_end: string;
   norm_minutes: number;
