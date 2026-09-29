@@ -13,8 +13,9 @@ export function App() {
     <Shell page={page} onPageChange={setPage} planner={planner}>
       {page === "dashboard" ? <Dashboard planner={planner} /> : null}
       {page === "planning" ? <Planning planner={planner} /> : null}
-      {page === "journal" ? (
+      {page === "analytics" || page === "history" ? (
         <Journal
+          view={page}
           planner={planner}
           onOpenComparison={async (oldPlanId, newPlanId) => {
             await planner.comparePlans(oldPlanId, newPlanId);

@@ -7,7 +7,6 @@ import {
   ChevronDown,
   CircleDot,
   FileDown,
-  FileSpreadsheet,
   Filter,
   GitCompareArrows,
   History,
@@ -20,12 +19,13 @@ import { PlanStatusPill, formatDateTime, formatDistance } from "../components/ui
 export function Journal({
   planner,
   onOpenComparison,
+  view,
 }: {
   planner: PlannerController;
   onOpenComparison: (oldPlanId: string, newPlanId: string) => Promise<void>;
+  view: "analytics" | "history";
 }) {
   const { data } = planner;
-  const [tab, setTab] = useState<"analytics" | "audit">("analytics");
   const [query, setQuery] = useState("");
   const [actionFilter, setActionFilter] = useState("all");
   const [typesExpanded, setTypesExpanded] = useState(true);
@@ -41,9 +41,10 @@ export function Journal({
   const auditActions = useMemo(() => Array.from(new Set(data.audit.map((item) => item.action))), [data.audit]);
 
   const typeCounts = [
-    { label: "Локальные", count: data.requests.filter((item) => item.required_skill === "local").length, color: "#28c6b7" },
-    { label: "Подключения", count: data.requests.filter((item) => item.required_skill === "connection").length, color: "#ffdb00" },
-    { label: "Аварии", count: data.requests.filter((item) => item.required_skill === "emergency").length, color: "#ef6b4a" },
+    { label: "Локальные", count: data.requests.filter((item) => item.bk_type === "Локальная" || item.bk_type === "Локальные работы").length, color: "#1964dc" },
+    { label: "Подключения", count: data.requests.filter((item) => item.bk_type === "Подключение").length, color: "#ffdb00" },
+    { label: "Дозаказы", count: data.requests.filter((item) => item.bk_type === "Дозаказ").length, color: "#bf6400" },
+    { label: "Аварии", count: data.requests.filter((item) => item.bk_type === "Авария").length, color: "#ef6b4a" },
   ];
   const maxType = Math.max(1, ...typeCounts.map((item) => item.count));
   const total = data.metrics.assigned + data.metrics.unassigned;
@@ -85,13 +86,10 @@ export function Journal({
   return (
     <div className="journal-page">
       <div className="page-heading">
-        <div><span className="eyebrow">Результаты и трассировка</span><h1>Журнал и отчёты</h1><p>История решений, метрики качества и выгрузки по рабочему дню.</p></div>
-        <div className="heading-actions"><button className="button secondary" disabled={planner.source !== "api"} title={planner.source !== "api" ? "Доступно после подключения backend" : "Скачать текущий план"} onClick={() => void planner.downloadReport("xlsx")}><FileSpreadsheet size={17} /> План XLSX</button><button className="button primary dark" disabled={planner.source !== "api"} title={planner.source !== "api" ? "Доступно после подключения backend" : "Архив PDF-отчётов"} onClick={() => void planner.downloadReport("pdf")}><FileDown size={17} /> Отчёт ZIP</button></div>
+        <div><span className="eyebrow">Результаты и трассировка</span><h1>{view === "analytics" ? "Аналитика" : "История версий"}</h1><p>{view === "analytics" ? "Показатели качества и отчёт по рабочему дню." : "Сохранённые планы, сравнение и журнал решений."}</p></div>
+        {view === "analytics" ? <div className="heading-actions"><button className="button primary dark" disabled={planner.source !== "api"} title={planner.source !== "api" ? "Доступно после подключения backend" : "Архив PDF-отчётов"} onClick={() => void planner.downloadReport("pdf")}><FileDown size={17} /> Отчёт ZIP</button></div> : null}
       </div>
-
-      <div className="journal-tabs"><button className={tab === "analytics" ? "active" : ""} onClick={() => setTab("analytics")}><BarChart3 size={16} /> Аналитика</button><button className={tab === "audit" ? "active" : ""} onClick={() => setTab("audit")}><History size={16} /> История версий <span>{data.audit.length}</span></button></div>
-
-      {tab === "analytics" ? (
+      {view === "analytics" ? (
         <>
           <section className="analytics-kpis">
             <article><span className="metric-icon violet"><CheckCircle2 size={19} /></span><div><small>Охват заявок</small><b>{coverage}%</b><em>{data.metrics.assigned} из {total} распределены</em></div></article>
@@ -111,7 +109,7 @@ export function Journal({
             <section className={`chart-card request-types ${typesExpanded ? "" : "is-collapsed"}`}>
               <div className="card-head"><div><h2>Типы работ</h2><p>{data.requests.length} заявок за день</p></div><button className="icon-button" onClick={() => setTypesExpanded((current) => !current)} aria-expanded={typesExpanded} aria-label={typesExpanded ? "Свернуть типы работ" : "Развернуть типы работ"} title={typesExpanded ? "Свернуть" : "Развернуть"}><ChevronDown size={16} /></button></div>
               {typesExpanded ? <><div className="type-bars">{typeCounts.map((item) => <div key={item.label}><span>{item.label}</span><div><i style={{ width: `${item.count / maxType * 100}%`, background: item.color }} /></div><b>{item.count}</b></div>)}</div>
-              <div className="priority-note"><span className="priority-medal">!</span><p><strong>Аварийные работы</strong><small>{typeCounts[2].count} заявок в текущем плане</small></p></div></> : <button className="collapsed-summary" onClick={() => setTypesExpanded(true)}>{typeCounts.map((item) => <span key={item.label}><i style={{ background: item.color }} />{item.label}<b>{item.count}</b></span>)}</button>}
+              <div className="priority-note"><span className="priority-medal">!</span><p><strong>Аварийные работы</strong><small>{typeCounts[3].count} заявок в текущем плане</small></p></div></> : <button className="collapsed-summary" onClick={() => setTypesExpanded(true)}>{typeCounts.map((item) => <span key={item.label}><i style={{ background: item.color }} />{item.label}<b>{item.count}</b></span>)}</button>}
             </section>
 
             <section className="chart-card coverage-card">
@@ -119,24 +117,26 @@ export function Journal({
               <div className="coverage-summary"><div className="coverage-number"><b>{coverage}%</b><span>заявок распределено</span></div><div className="coverage-track" role="img" aria-label={`${data.metrics.assigned} назначено, ${data.metrics.unassigned} без назначения`}><i style={{ width: `${coverage}%` }} /></div><div className="coverage-breakdown"><div><span className="coverage-dot assigned" /><span>Назначено</span><strong>{data.metrics.assigned}</strong></div><div><span className="coverage-dot unassigned" /><span>Без назначения</span><strong>{data.metrics.unassigned}</strong></div></div></div>
             </section>
 
-            <section className="chart-card compare-card">
-              <div className="card-head"><div><h2>Сравнить планы</h2><p>Изменения маршрутов и назначений</p></div><GitCompareArrows size={18} /></div>
-              <div className="compare-selects"><label><span>Базовый</span><select value={oldPlanId} onChange={(event) => setOldPlanId(event.target.value)}>{data.plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.code}</option>)}</select></label><span className="compare-arrow">→</span><label><span>Новый</span><select value={newPlanId} onChange={(event) => setNewPlanId(event.target.value)}>{data.plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.code}</option>)}</select></label></div>
-              <div className="compare-stats"><div><b>{assignmentDelta == null ? "—" : `${assignmentDelta > 0 ? "+" : ""}${assignmentDelta}`}</b><span>назначения</span></div><div><b>{mileageDelta == null ? "—" : `${mileageDelta > 0 ? "+" : ""}${formatDistance(mileageDelta)}`}</b><span>пробег</span></div><div><b>{baseCoverage == null || nextCoverage == null ? "—" : `${nextCoverage - baseCoverage > 0 ? "+" : ""}${nextCoverage - baseCoverage} п.п.`}</b><span>охват</span></div></div>
-              <button className="button secondary wide" disabled={planner.source !== "api" || !base || !compared || oldPlanId === newPlanId || compared.base_plan_id !== oldPlanId} title={planner.source !== "api" ? "Детальное сравнение требует backend" : compared?.base_plan_id !== oldPlanId ? "Детальные изменения доступны для связанных версий" : undefined} onClick={() => void onOpenComparison(oldPlanId, newPlanId)}><GitCompareArrows size={16} /> Открыть изменения</button>
-            </section>
           </div>
 
+        </>
+      ) : (
+        <div className="history-sections">
+          <section className="chart-card compare-card">
+            <div className="card-head"><div><h2>Сравнить планы</h2><p>Изменения маршрутов и назначений</p></div><GitCompareArrows size={18} /></div>
+            <div className="compare-selects"><label><span>Базовый</span><select value={oldPlanId} onChange={(event) => setOldPlanId(event.target.value)}>{data.plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.code}</option>)}</select></label><span className="compare-arrow">→</span><label><span>Новый</span><select value={newPlanId} onChange={(event) => setNewPlanId(event.target.value)}>{data.plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.code}</option>)}</select></label></div>
+            <div className="compare-stats"><div><b>{assignmentDelta == null ? "—" : `${assignmentDelta > 0 ? "+" : ""}${assignmentDelta}`}</b><span>назначения</span></div><div><b>{mileageDelta == null ? "—" : `${mileageDelta > 0 ? "+" : ""}${formatDistance(mileageDelta)}`}</b><span>пробег</span></div><div><b>{baseCoverage == null || nextCoverage == null ? "—" : `${nextCoverage - baseCoverage > 0 ? "+" : ""}${nextCoverage - baseCoverage} п.п.`}</b><span>охват</span></div></div>
+            <button className="button secondary wide" disabled={planner.source !== "api" || !base || !compared || oldPlanId === newPlanId || compared.base_plan_id !== oldPlanId} onClick={() => void onOpenComparison(oldPlanId, newPlanId)}><GitCompareArrows size={16} /> Открыть изменения</button>
+          </section>
           <section className="plans-table-card">
             <div className="card-head"><div><h2>Версии плана</h2><p>Каждый расчёт сохранён и доступен для проверки</p></div><button className="button ghost" onClick={exportPlansCsv}><ArrowDownToLine size={16} /> Экспорт списка</button></div>
             <div className="plans-table"><div className="table-head"><span>Версия</span><span>Создан</span><span>Статус</span><span>Заявки</span><span>Пробег</span><span>Источник</span></div>{data.plans.map((plan) => <div className="table-row" key={plan.id}><span><CircleDot size={14} className={`plan-dot ${plan.status}`} /><strong>{plan.code}</strong></span><span>{formatDateTime(plan.created_at)}</span><span><PlanStatusPill status={plan.status} /></span><span>{plan.assigned_count}/{plan.requests_count}</span><span>{plan.distance_meters == null ? "—" : formatDistance(plan.distance_meters)}</span><span>{planner.source === "api" ? "Backend" : "Демо"}</span></div>)}</div>
           </section>
-        </>
-      ) : (
         <section className="audit-card">
           <div className="audit-tools"><label className="search-field"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Действие, объект или автор" /></label><span className="filter-button filter-chip"><CalendarDays size={15} /> {dateLabel}</span><label className="filter-button audit-select"><Filter size={15} /><select value={actionFilter} onChange={(event) => setActionFilter(event.target.value)} aria-label="Фильтр действий"><option value="all">Все действия</option>{auditActions.map((action) => <option key={action} value={action}>{action}</option>)}</select></label></div>
           <div className="audit-list">{filteredAudit.length ? filteredAudit.map((item, index) => <article key={item.id}><span className={`audit-node audit-${index % 4}`}><History size={15} /></span><div className="audit-main"><div><strong>{item.action}</strong><span>{item.entity} · {item.entity_id}</span></div><p>{item.details}</p></div><div className="audit-meta"><strong>{item.actor}</strong><span>{formatDateTime(item.timestamp)}</span></div></article>) : <div className="empty-filter">По выбранным условиям действий не найдено.</div>}</div>
         </section>
+        </div>
       )}
     </div>
   );

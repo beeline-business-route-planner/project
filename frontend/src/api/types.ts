@@ -270,7 +270,7 @@ export type BackendEventType = "urgent_request" | "request_cancelled" | "enginee
 export interface BackendUrgentRequest {
   external_id: number;
   type_bk: "global_problem" | "additional_order" | "local_request" | "connection";
-  type_hd: "emergency";
+  type_hd: "emergency" | "connection_request";
   district: string;
   address: string;
   connection_type: null;

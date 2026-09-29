@@ -61,6 +61,15 @@ const statusMap: Record<string, RequestStatus> = {
   overdue: "OVERDUE",
 };
 
+const backendStatus: Record<Exclude<RequestStatus, "CANCELLED">, string> = {
+  NOT_SENT: "not_sent",
+  SENT: "sent",
+  EN_ROUTE: "on_the_way",
+  IN_PROGRESS: "in_progress",
+  COMPLETED: "done",
+  OVERDUE: "overdue",
+};
+
 const unassignedLabels: Record<string, string> = {
   no_matching_skill: "Нет инженера с нужной квалификацией",
   no_matching_vehicle: "Нет подходящего транспорта",
@@ -73,6 +82,13 @@ const workLabels: Record<string, string> = {
   local_works: "Локальные работы",
   connection_and_orders: "Подключение",
   emergency_works: "Авария",
+};
+
+const requestTypeLabels: Record<string, string> = {
+  global_problem: "Авария",
+  connection: "Подключение",
+  additional_order: "Дозаказ",
+  local_request: "Локальная",
 };
 
 function number(value: number | string | null | undefined) {
@@ -144,7 +160,9 @@ function requestFromBackend(
   return {
     id: tile.request_id,
     external_id: `BK-${detail?.external_id ?? tile.external_id}`,
-    bk_type: workLabels[requiredSkill] ?? detail?.type_bk ?? requiredSkill,
+    bk_type: detail?.type_bk
+      ? requestTypeLabels[detail.type_bk] ?? detail.type_bk
+      : workLabels[requiredSkill] ?? requiredSkill,
     hd_type: detail?.type_hd ?? "Service request",
     address: detail?.address ?? tile.address,
     district: detail?.district ?? tile.district,
@@ -153,7 +171,9 @@ function requestFromBackend(
     window_end: detail?.window_end ?? tile.window_end,
     service_minutes: detail?.norm_minutes_without_travel ?? 90,
     full_normative_minutes: detail?.norm_minutes ?? 90,
-    status: detail ? statusMap[detail.status] ?? "NOT_SENT" : tile.assigned_engineer ? "SENT" : "NOT_SENT",
+    status: detail?.status && detail.status !== "not_sent"
+      ? statusMap[detail.status] ?? "NOT_SENT"
+      : tile.assigned_engineer ? "SENT" : "NOT_SENT",
     mapping_state: tile.latitude != null && tile.longitude != null ? "mapped" : "unmapped",
     priority: rank === 1 ? "urgent" : "normal",
     priority_rank: rank,
@@ -262,9 +282,10 @@ export function usePlanner() {
       const summaries = await backend.plans(region);
       if (!summaries.length) throw new Error("Для выбранного участка пока нет рассчитанных планов");
       const availableDates = [...new Set(summaries.map((plan) => plan.planning_date))].sort().reverse();
-      const planningDate = dateOverride && availableDates.includes(dateOverride)
-        ? dateOverride
-        : summaries.find((plan) => plan.is_current)?.planning_date ?? availableDates[0];
+      if (dateOverride && !availableDates.includes(dateOverride)) {
+        throw new Error(`На ${dateOverride} для выбранного участка нет плана. Загрузите исходные XLSX в «Планировании».`);
+      }
+      const planningDate = dateOverride || summaries.find((plan) => plan.is_current)?.planning_date || availableDates[0];
       const selectedSummary =
         summaries.find((plan) => plan.id === planId) ??
         summaries.find((plan) => plan.is_current && plan.planning_date === planningDate) ??
@@ -340,7 +361,10 @@ export function usePlanner() {
 
   const changeContext = useCallback(async (scenarioId: string, planningDate: string) => {
     setDetailedRoute(null);
-    if (source === "api") await loadApi(scenarioId, planningDate);
+    if (source === "api") {
+      try { await loadApi(scenarioId, planningDate, undefined, true); }
+      catch (error) { showNotice(errorText(error)); }
+    }
     else {
       setData((current) => ({ ...current, scenarioId, planningDate }));
       showNotice("Демонстрационный сценарий обновлён");
@@ -391,7 +415,10 @@ export function usePlanner() {
 
   const updateRequestStatus = useCallback(async (requestId: string, status: RequestStatus) => {
     if (source === "api") {
-      apiUnavailable("Изменение статуса");
+      if (status === "CANCELLED") throw new Error("Отмена заявки выполняется через «Новое событие» в планировании");
+      await backend.updateRequestStatus(requestId, backendStatus[status]);
+      await loadApi(data.scenarioId, data.planningDate, data.activePlanId, true);
+      showNotice("Статус заявки обновлён");
       return;
     }
     if ((import.meta.env.VITE_DEMO_MODE ?? "auto") !== "true") throw new Error("Изменение статуса требует backend endpoint");
@@ -400,7 +427,7 @@ export function usePlanner() {
       requests: current.requests.map((request) => request.id === requestId ? { ...request, status } : request),
     }));
     showNotice("Статус заявки обновлён");
-  }, [apiUnavailable, showNotice, source]);
+  }, [data.activePlanId, data.planningDate, data.scenarioId, loadApi, showNotice, source]);
 
   const importDataset = useCallback(async (files: File[]) => {
     if ((import.meta.env.VITE_DEMO_MODE ?? "auto") === "true") throw new Error("Импорт требует подключения backend");
@@ -449,22 +476,30 @@ export function usePlanner() {
     showNotice(`План ${plan.code} утверждён`);
   }, [data.planningDate, data.scenarioId, loadApi, showNotice, source]);
 
+  const rejectPlan = useCallback(async (plan: PlanSummary) => {
+    if (source !== "api") throw new Error("Отклонение плана требует подключения backend");
+    await backend.rejectPlan(plan.id);
+    await loadApi(data.scenarioId, data.planningDate, undefined, true);
+    showNotice(`План ${plan.code} отклонён`);
+  }, [data.planningDate, data.scenarioId, loadApi, showNotice, source]);
+
   const createUrgentRequest = useCallback(async (payload: Record<string, unknown>) => {
     if (source === "api") {
+      const isConnection = payload.type_bk === "connection";
       const urgent: BackendUrgentRequest = {
-        external_id: Number(payload.external_id),
-        type_bk: "global_problem",
-        type_hd: "emergency",
+        external_id: Date.now(),
+        type_bk: isConnection ? "connection" : "global_problem",
+        type_hd: isConnection ? "connection_request" : "emergency",
         district: String(payload.district ?? ""),
         address: String(payload.address ?? ""),
         connection_type: null,
         is_gigabit: false,
         window_start: String(payload.window_start),
         window_end: String(payload.window_end),
-        norm_minutes: 100,
-        norm_minutes_without_travel: 80,
-        priority: 1,
-        required_skill: "emergency_works",
+        norm_minutes: isConnection ? 90 : 100,
+        norm_minutes_without_travel: isConnection ? 70 : 80,
+        priority: isConnection ? 2 : 1,
+        required_skill: isConnection ? "connection_and_orders" : "emergency_works",
         required_vehicle_type: "car",
       };
       const result = await backend.event({ region: regionOf(data.scenarioId), event_type: "urgent_request", urgent_request: urgent });
@@ -475,8 +510,8 @@ export function usePlanner() {
     if ((import.meta.env.VITE_DEMO_MODE ?? "auto") !== "true") throw new Error("Создание заявки требует подключения backend");
     const request: RequestItem = {
       id: `req-${Date.now()}`,
-      external_id: String(payload.external_id ?? "URGENT-DEMO"),
-      bk_type: "Авария",
+      external_id: `BK-${Date.now()}`,
+      bk_type: payload.type_bk === "connection" ? "Подключение" : "Авария",
       hd_type: "Incident",
       address: String(payload.address ?? "Москва"),
       district: String(payload.district ?? "ЮВАО"),
@@ -526,13 +561,13 @@ export function usePlanner() {
     else throw new Error("Ручное изменение требует backend endpoint");
   }, [apiUnavailable, showNotice, source]);
 
-  const downloadReport = useCallback(async (format: "xlsx" | "pdf") => {
+  const downloadReport = useCallback(async (format: "xlsx" | "pdf", planId?: string) => {
     if (source !== "api") {
       showNotice("В демо-режиме выгрузка недоступна");
       return;
     }
     const exportResult = format === "xlsx"
-      ? await backend.exportPlan(data.activePlanId)
+      ? await backend.exportPlan(planId ?? data.activePlanId)
       : await backend.exportDailyReport(data.planningDate);
     window.location.assign(exportResult.url);
     showNotice(`Загрузка ${exportResult.filename} началась`);
@@ -552,6 +587,7 @@ export function usePlanner() {
     importDataset,
     runPlanning,
     approvePlan,
+    rejectPlan,
     createUrgentRequest,
     createDayEvent,
     manualChange,

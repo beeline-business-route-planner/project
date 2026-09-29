@@ -36,6 +36,8 @@ export const backend = {
     apiRequest<BackendEngineerDetail>(`/engineers/${engineerId}`),
   request: (requestId: string) =>
     apiRequest<BackendRequestDetail>(`/requests/${requestId}`),
+  updateRequestStatus: (requestId: string, status: string) =>
+    apiRequest<BackendRequestDetail>(`/requests/${requestId}/status`, { method: "PATCH", body: { status } }),
   importInitial: (files: File[]) => {
     const form = new FormData();
     files.forEach((file) => form.append("files", file));

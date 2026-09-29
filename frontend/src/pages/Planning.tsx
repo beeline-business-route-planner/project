@@ -45,12 +45,14 @@ export function Planning({ planner }: { planner: PlannerController }) {
   const [manualOpen, setManualOpen] = useState(false);
   const [manualRequestId, setManualRequestId] = useState<string | undefined>();
   const [eventOpen, setEventOpen] = useState(false);
+  const [eventInitialAction, setEventInitialAction] = useState<"engineer_unavailable" | "urgent_request">("engineer_unavailable");
   const inputRef = useRef<HTMLInputElement>(null);
   const selectedPlan = data.plans.find((plan) => plan.id === selectedPlanId) ?? data.plans[0];
   const isDraft = selectedPlan?.status === "draft";
   const explicitDemo = (import.meta.env.VITE_DEMO_MODE ?? "auto") === "true";
   const canEditManually = false;
   const canOperate = planner.source === "api";
+  const canPlanToday = canOperate && data.planningDate === moscowNow().date;
   const actionError = (error: unknown) => planner.showNotice(error instanceof Error ? error.message : "Действие не удалось");
 
   useEffect(() => {
@@ -96,8 +98,9 @@ export function Planning({ planner }: { planner: PlannerController }) {
     <div className="planning-page">
       <div className="page-heading">
         <div><span className="eyebrow">Сценарии и назначения</span><h1>Планирование</h1><p>Загрузите данные, проверьте ограничения и утвердите лучший вариант.</p></div>
-        <div className="heading-actions"><button className="button secondary" disabled={!canOperate} title={!canOperate ? "Подключите backend или включите явный демо-режим" : undefined} onClick={() => setEventOpen(true)}><CalendarClock size={17} /> Событие дня</button><button className="button primary" disabled={busy || !canOperate} title={!canOperate ? "Подключите backend или включите явный демо-режим" : undefined} onClick={() => void calculate(Boolean(data.activePlanId))}><Sparkles size={17} /> {data.activePlanId ? "Перепланировать" : "Сформировать план"}</button></div>
+        <div className="heading-actions"><button className="button secondary" disabled={!canPlanToday} title={!canPlanToday ? "События доступны только для сегодняшнего плана при подключённом API" : undefined} onClick={() => { setEventInitialAction("engineer_unavailable"); setEventOpen(true); }}><CalendarClock size={17} /> Новое событие</button><button className="button primary" disabled={!canPlanToday} title={!canPlanToday ? "Новая заявка доступна только для сегодняшнего плана при подключённом API" : undefined} onClick={() => { setEventInitialAction("urgent_request"); setEventOpen(true); }}><Sparkles size={17} /> Новая заявка</button></div>
       </div>
+      {canOperate && !canPlanToday ? <p className="planning-day-notice">Выбран архивный день {data.planningDate}. Его можно просмотреть и скачать, но события и пересчёт API принимает только для сегодняшнего плана. Для нового дня загрузите пару актуальных XLSX.</p> : null}
 
       <div className="planning-layout">
         <aside className="plans-rail">
@@ -132,8 +135,9 @@ export function Planning({ planner }: { planner: PlannerController }) {
               </div>
               <div className="plan-actions">
                 <button className="button ghost" disabled={!canEditManually} title={!canEditManually ? "Backend не предоставляет ручное редактирование назначений" : undefined} onClick={() => openManual()}><PencilLine size={16} /> Изменить вручную</button>
-                <button className="button ghost" disabled={busy || !canOperate} onClick={() => void calculate(true)}><RotateCcw size={16} /> Пересчитать</button>
-                {isDraft ? <button className="button primary" disabled={busy || !canOperate} onClick={() => { void planner.approvePlan(selectedPlan).catch(actionError); }}><Check size={16} /> Утвердить план</button> : null}
+                <button className="button ghost" disabled={busy || !canPlanToday || !data.activePlanId} title={!canPlanToday ? "Пересчёт доступен только для сегодняшнего плана" : undefined} onClick={() => void calculate(true)}><RotateCcw size={16} /> Пересчитать</button>
+                <button className="button ghost" disabled={!canOperate || !selectedPlan} onClick={() => { void planner.downloadReport("xlsx", selectedPlan?.id).catch(actionError); }}><Download size={16} /> Скачать XLSX</button>
+                {isDraft ? <><button className="button secondary" disabled={busy || !canOperate} onClick={() => { setBusy(true); void planner.rejectPlan(selectedPlan).catch(actionError).finally(() => setBusy(false)); }}><X size={16} /> Отклонить</button><button className="button primary" disabled={busy || !canPlanToday} title={!canPlanToday ? "Утвердить можно только сегодняшний план" : undefined} onClick={() => { setBusy(true); void planner.approvePlan(selectedPlan).catch(actionError).finally(() => setBusy(false)); }}><Check size={16} /> Утвердить план</button></> : null}
               </div>
             </div>
 
@@ -159,7 +163,7 @@ export function Planning({ planner }: { planner: PlannerController }) {
       </div>
 
       {manualOpen ? <ManualChangeModal planner={planner} initialRequestId={manualRequestId} onClose={() => setManualOpen(false)} /> : null}
-      {eventOpen ? <DayEventModal planner={planner} onClose={() => setEventOpen(false)} /> : null}
+      {eventOpen ? <DayEventModal planner={planner} initialAction={eventInitialAction} onClose={() => setEventOpen(false)} /> : null}
     </div>
   );
 }
@@ -215,14 +219,85 @@ function ManualChangeModal({ planner, initialRequestId, onClose }: { planner: Pl
   );
 }
 
-function DayEventModal({ planner, onClose }: { planner: PlannerController; onClose: () => void }) {
-  const [eventType, setEventType] = useState("engineer_unavailable");
+type EventAction = "engineer_unavailable" | "engineer_available" | "request_cancelled" | "urgent_request";
+
+function moscowNow() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date()).map((part) => [part.type, part.value]));
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, minutes: Number(parts.hour) * 60 + Number(parts.minute) };
+}
+
+function eventWindow(date: string) {
+  const now = moscowNow();
+  if (date !== now.date) return { start: "09:00", end: "11:00" };
+  const start = Math.min(23 * 60, Math.ceil((now.minutes + 10) / 15) * 15);
+  const end = Math.min(23 * 60 + 59, start + 120);
+  const format = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  return { start: format(start), end: format(end) };
+}
+
+function DayEventModal({ planner, initialAction, onClose }: { planner: PlannerController; initialAction: EventAction; onClose: () => void }) {
+  const [eventType, setEventType] = useState<EventAction>(initialAction);
   const [engineerId, setEngineerId] = useState(planner.data.engineers[0]?.id ?? "");
   const [requestId, setRequestId] = useState(planner.data.requests.find((request) => request.status !== "CANCELLED")?.id ?? "");
+  const [requestType, setRequestType] = useState<"global_problem" | "connection">("global_problem");
+  const [district, setDistrict] = useState(planner.data.scenarioId === "vostok" ? "ВАО" : planner.data.scenarioId === "yugotsentr" ? "ЮАО" : "ЮВАО");
+  const [address, setAddress] = useState("Москва, ");
+  const [window, setWindow] = useState(() => eventWindow(planner.data.planningDate));
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const isRequestEvent = eventType === "request_cancelled";
+  const isRequestEvent = eventType === "request_cancelled" || eventType === "urgent_request";
+  const eligibleEngineers = planner.data.engineers.filter((engineer) => eventType === "engineer_available" ? engineer.status === "unavailable" : engineer.status !== "unavailable");
+  const eventEngineerId = eligibleEngineers.find((engineer) => engineer.id === engineerId)?.id ?? eligibleEngineers[0]?.id ?? "";
+  const cancellableRequests = planner.data.requests.filter((request) => !["CANCELLED", "IN_PROGRESS", "COMPLETED"].includes(request.status));
+  const eventRequestId = cancellableRequests.find((request) => request.id === requestId)?.id ?? cancellableRequests[0]?.id ?? "";
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setFormError(null);
+    if (eventType === "urgent_request") {
+      const now = moscowNow();
+      if (window.end <= window.start) { setFormError("Конец окна должен быть позже начала."); return; }
+      if (planner.data.planningDate < now.date || (planner.data.planningDate === now.date && Number(window.end.slice(0, 2)) * 60 + Number(window.end.slice(3)) <= now.minutes)) {
+        setFormError("Окно заявки уже закончилось. Выберите день с действующим планом и будущее время."); return;
+      }
+    }
+    setSaving(true);
+    try {
+      if (eventType === "urgent_request") {
+        await planner.createUrgentRequest({ type_bk: requestType, district, address: address.trim(), window_start: `${planner.data.planningDate}T${window.start}:00`, window_end: `${planner.data.planningDate}T${window.end}:00` });
+      } else {
+        await planner.createDayEvent(eventType, isRequestEvent ? { request_id: eventRequestId } : { engineer_id: eventEngineerId });
+      }
+      onClose();
+    } catch (error) { setFormError(error instanceof Error ? error.message : "Не удалось сохранить событие"); }
+    finally { setSaving(false); }
+  };
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}><form className="modal-card" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => { event.preventDefault(); setSaving(true); setFormError(null); try { await planner.createDayEvent(eventType as "engineer_unavailable" | "engineer_available" | "request_cancelled", isRequestEvent ? { request_id: requestId } : { engineer_id: engineerId }); onClose(); } catch (error) { setFormError(error instanceof Error ? error.message : "Не удалось сохранить событие"); } finally { setSaving(false); } }}><div className="modal-head"><span className="modal-icon coral"><CalendarClock size={20} /></span><div><h2>Событие рабочего дня</h2><p>Backend пересчитает план после изменения.</p></div><button type="button" className="icon-button" onClick={onClose}><X size={18} /></button></div><div className="form-grid"><label><span>Тип события</span><select value={eventType} onChange={(event) => setEventType(event.target.value)}><option value="engineer_unavailable">Инженер недоступен</option><option value="engineer_available">Инженер снова доступен</option><option value="request_cancelled">Заявка отменена</option></select></label>{isRequestEvent ? <label><span>Заявка</span><select value={requestId} onChange={(event) => setRequestId(event.target.value)}>{planner.data.requests.filter((request) => request.status !== "CANCELLED").map((request) => <option key={request.id} value={request.id}>{request.external_id} · {request.address}</option>)}</select></label> : <label><span>Инженер</span><select value={engineerId} onChange={(event) => setEngineerId(event.target.value)}>{planner.data.engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.name}</option>)}</select></label>}</div>{formError ? <p className="form-error" role="alert">{formError}</p> : null}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>Отмена</button><button className="button primary" disabled={saving || (isRequestEvent ? !requestId : !engineerId)}><Play size={16} />{saving ? "Пересчитываем…" : "Зафиксировать и пересчитать"}</button></div></form></div>
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <form className="modal-card event-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => void submit(event)}>
+        <div className="modal-head"><span className="modal-icon coral"><CalendarClock size={20} /></span><div><h2>Новое событие</h2><p>После сохранения бэкенд создаст новый вариант плана.</p></div><button type="button" className="icon-button" onClick={onClose} aria-label="Закрыть"><X size={18} /></button></div>
+        <div className="event-categories" role="group" aria-label="Кого касается событие">
+          <button type="button" className={!isRequestEvent ? "active" : ""} onClick={() => setEventType("engineer_unavailable")}>Инженер</button>
+          <button type="button" className={isRequestEvent ? "active" : ""} onClick={() => setEventType("urgent_request")}>Заявка</button>
+        </div>
+        <div className="form-grid">
+          <label className="wide"><span>Что произошло</span><select value={eventType} onChange={(event) => setEventType(event.target.value as EventAction)}>
+            {isRequestEvent ? <><option value="urgent_request">Добавилась заявка</option><option value="request_cancelled">Заявка отменена</option></> : <><option value="engineer_unavailable">Инженер выбыл</option><option value="engineer_available">Инженер вернулся</option></>}
+          </select></label>
+          {eventType === "urgent_request" ? <>
+            <label><span>Тип заявки</span><select value={requestType} onChange={(event) => setRequestType(event.target.value as "global_problem" | "connection")}><option value="global_problem">Авария</option><option value="connection">Подключение</option></select></label>
+            <label><span>Район</span><input required value={district} onChange={(event) => setDistrict(event.target.value)} /></label>
+            <label className="wide"><span>Адрес</span><input required value={address} onChange={(event) => setAddress(event.target.value)} /></label>
+            <label><span>Начало окна</span><input required type="time" value={window.start} onChange={(event) => setWindow({ ...window, start: event.target.value })} /></label>
+            <label><span>Конец окна</span><input required type="time" value={window.end} onChange={(event) => setWindow({ ...window, end: event.target.value })} /></label>
+            <p className="event-form-note">День: {planner.data.planningDate}. Номер заявки создаст система. Текущий API принимает здесь аварию и подключение.</p>
+          </> : eventType === "request_cancelled" ? <label className="wide"><span>Какую заявку отменить</span><select value={eventRequestId} onChange={(event) => setRequestId(event.target.value)}>{cancellableRequests.map((request) => <option key={request.id} value={request.id}>{request.external_id} · {request.address}</option>)}</select>{!cancellableRequests.length ? <small>Нет заявок, которые можно отменить.</small> : null}</label> : <label className="wide"><span>Инженер</span><select value={eventEngineerId} onChange={(event) => setEngineerId(event.target.value)}>{eligibleEngineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.name}</option>)}</select>{!eligibleEngineers.length ? <small>Нет инженеров для выбранного события.</small> : null}</label>}
+        </div>
+        {formError ? <p className="form-error" role="alert">{formError}</p> : null}
+        <div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>Отмена</button><button className="button primary" disabled={saving || (eventType === "request_cancelled" ? !eventRequestId : eventType === "urgent_request" ? !address.trim() || !district.trim() : !eventEngineerId)}><Play size={16} />{saving ? "Пересчитываем…" : "Создать и пересчитать"}</button></div>
+      </form>
+    </div>
   );
 }

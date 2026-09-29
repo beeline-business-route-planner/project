@@ -1086,3 +1086,30 @@ body { background: #181818; color: var(--ink); }
 .chart-card, .analytics-kpis article { animation: none; }
 .timeline-job:disabled:hover { filter: none; transform: none; }
 @media (prefers-reduced-motion: reduce) { .coverage-track i { transition: none; } }
+
+/* Dispatcher workflow: distinct events, a home affordance and type-coded points. */
+.brand-home { width: 100%; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.brand-home:focus-visible { outline: 2px solid var(--yellow); outline-offset: 2px; border-radius: 10px; }
+.event-modal { max-width: 560px; }
+.event-categories { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 16px 0 20px; }
+.event-categories button { min-height: 42px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: #24262b; font-weight: 700; }
+.event-categories button.active { color: #181818; border-color: var(--yellow); background: var(--yellow); }
+.event-form-note { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.planning-day-notice { margin: 0 0 16px; padding: 12px 16px; border: 1px solid #695b22; border-radius: 10px; background: #2a2619; color: #f4dfa0; font-size: 13px; line-height: 1.45; }
+.history-sections { display: flex; flex-direction: column; gap: 16px; }
+.history-sections > .compare-card { min-height: 0; }
+.mapgl-request-marker { width: 30px; height: 30px; border-color: #fff; box-shadow: 0 0 0 2px #171719, 0 5px 15px rgba(0,0,0,.55); }
+.mapgl-request-marker svg { display: block; width: 16px; height: 16px; }
+.mapgl-request-marker.type-emergency { background: #ed553b; color: #fff; }
+.mapgl-request-marker.type-connection { background: #ffd400; color: #171717; }
+.mapgl-request-marker.type-additional { background: #bf6400; color: #fff; }
+.mapgl-request-marker.type-local { background: #1964dc; color: #fff; }
+.mapgl-request-marker.is-completed { border-color: #26b580; }
+.mapgl-request-marker.is-cluster { background: #18191d; color: #fff; border-color: #ffd400; }
+.mapgl-request-marker.is-selected { width: 34px; height: 34px; border-color: #fff; box-shadow: 0 0 0 4px rgba(255,212,0,.8), 0 7px 20px rgba(0,0,0,.42); }
+.map-dot { width: 11px; height: 11px; border: 2px solid #fff; box-shadow: 0 0 0 1px #202125; }
+.map-dot.connection { background: #ffd400; }
+.map-dot.additional { background: #bf6400; }
+.map-dot.local { background: #1964dc; }
+.map-route-caption em { max-width: 155px; text-align: right; line-height: 1.3; }
+.map-route-caption em.route-error { color: #ff8876; }

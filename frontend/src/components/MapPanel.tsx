@@ -21,6 +21,7 @@ type Destructible = { destroy: () => void };
 type PointCluster = { key: string; center: [number, number]; requests: RequestItem[] };
 
 const MAP_KEY = import.meta.env.VITE_2GIS_KEY?.trim() ?? "";
+const DIRECTIONS_KEY = import.meta.env.VITE_2GIS_DIRECTIONS_KEY?.trim() || MAP_KEY;
 // Start fetching the MapGL runtime as soon as this module is evaluated instead
 // of waiting for the map component effect. The loader caches this promise.
 const mapApiPromise = MAP_KEY ? load() : null;
@@ -44,12 +45,6 @@ function boundsFromRequests(requests: RequestItem[]) {
     southWest: [Math.min(...longitudes), Math.min(...latitudes)],
     northEast: [Math.max(...longitudes), Math.max(...latitudes)],
   };
-}
-
-function colorWithAlpha(color: string, opacity: number) {
-  const normalized = color.startsWith("#") ? color.slice(1) : color;
-  if (!/^[0-9a-f]{6}$/i.test(normalized)) return color;
-  return `#${normalized}${Math.round(Math.max(0, Math.min(1, opacity)) * 255).toString(16).padStart(2, "0")}`;
 }
 
 function createClusters(requests: RequestItem[], zoom: number): PointCluster[] {
@@ -76,17 +71,44 @@ function createMarkerContent(cluster: PointCluster, selectedRequestId: string | 
   const request = cluster.requests[0];
   const selected = cluster.requests.some((item) => item.id === selectedRequestId);
   const urgent = cluster.requests.some((item) => item.priority_rank === 1);
+  const typeClass = request.bk_type === "Авария" ? "emergency" : request.bk_type === "Подключение" ? "connection" : request.bk_type === "Дозаказ" ? "additional" : "local";
   const marker = document.createElement("button");
   marker.type = "button";
   marker.className = [
     "mapgl-request-marker",
     selected ? "is-selected" : "",
     urgent ? "is-urgent" : "",
+    `type-${typeClass}`,
     request.status === "COMPLETED" ? "is-completed" : "",
     cluster.requests.length > 1 ? "is-cluster" : "",
   ].filter(Boolean).join(" ");
-  marker.setAttribute("aria-label", cluster.requests.length > 1 ? `${cluster.requests.length} заявок` : `Открыть заявку ${request.external_id}`);
+  marker.setAttribute("aria-label", cluster.requests.length > 1 ? `${cluster.requests.length} заявок` : `Открыть заявку ${request.external_id}: ${request.bk_type}`);
   if (cluster.requests.length > 1) marker.textContent = String(cluster.requests.length);
+  else {
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("width", "16");
+    icon.setAttribute("height", "16");
+    icon.setAttribute("fill", "none");
+    icon.setAttribute("stroke", "currentColor");
+    icon.setAttribute("stroke-width", "2.3");
+    icon.setAttribute("stroke-linecap", "round");
+    icon.setAttribute("stroke-linejoin", "round");
+    icon.setAttribute("aria-hidden", "true");
+    const paths = typeClass === "emergency"
+      ? ["M12 3 2 21h20L12 3Z", "M12 9v5", "M12 18h.01"]
+      : typeClass === "connection"
+        ? ["M13 2 4 13h7l-1 9 10-12h-7V2Z"]
+        : typeClass === "additional"
+          ? ["M3 7 12 3l9 4v10l-9 4-9-4V7Z", "m3 7 9 4 9-4", "M12 11v10"]
+          : ["M14.7 6.3a5 5 0 0 0-6.4 6.4L3 18l3 3 5.3-5.3a5 5 0 0 0 6.4-6.4L15 12l-3-3 2.7-2.7Z"];
+    paths.forEach((shape) => {
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", shape);
+      icon.appendChild(path);
+    });
+    marker.appendChild(icon);
+  }
 
   const tooltip = document.createElement("span");
   tooltip.className = "mapgl-request-tooltip";
@@ -115,13 +137,14 @@ export function MapPanel(props: MapPanelProps) {
   const [zoom, setZoom] = useState(11);
   const [rotation, setRotation] = useState(0);
   const [pitch, setPitch] = useState(0);
+  const [roadLoading, setRoadLoading] = useState(false);
+  const [roadError, setRoadError] = useState<string | null>(null);
+  const [roadReady, setRoadReady] = useState(false);
 
   const selectedEngineer = props.engineers.find((item) => item.id === props.selectedEngineerId);
-  const displayedRoutes = useMemo(() => {
-    if (!props.selectedEngineerId) return props.routes.routes;
-    const detail = props.detailedRoute?.engineer_id === props.selectedEngineerId ? props.detailedRoute : null;
-    return props.routes.routes.map((overview) => detail && overview.engineer_id === props.selectedEngineerId ? detail : overview);
-  }, [props.detailedRoute, props.routes.routes, props.selectedEngineerId]);
+  const selectedRoute = props.detailedRoute?.engineer_id === props.selectedEngineerId
+    ? props.detailedRoute
+    : props.routes.routes.find((route) => route.engineer_id === props.selectedEngineerId);
   const clusters = useMemo(() => createClusters(props.requests, zoom), [props.requests, zoom]);
 
   useEffect(() => {
@@ -188,31 +211,9 @@ export function MapPanel(props: MapPanelProps) {
     if (!mapApi || !map) return;
     const objects: Destructible[] = [];
 
-    displayedRoutes.forEach((route) => {
-      if (!route.geometry) return;
-      const engineer = props.engineers.find((item) => item.id === route.engineer_id);
-      const color = engineer?.color ?? "#ffd400";
-      const selected = route.engineer_id === props.selectedEngineerId;
-      const dimmed = Boolean(props.selectedEngineerId && !selected);
-      if (selected) {
-        objects.push(new mapApi.Polyline(map, {
-          coordinates: route.geometry.coordinates,
-          color: colorWithAlpha(color, .2),
-          width: 13,
-          zIndex: 9,
-        }));
-      }
-      objects.push(new mapApi.Polyline(map, {
-        coordinates: route.geometry.coordinates,
-        color: colorWithAlpha(color, dimmed ? .18 : selected ? .96 : .68),
-        width: selected ? 6 : 3,
-        zIndex: selected ? 10 : 5,
-      }));
-    });
-
     clusters.forEach((cluster) => {
       const content = createMarkerContent(cluster, props.selectedRequestId, props.onSelectRequest);
-      const size = cluster.requests.length > 1 ? 34 : cluster.requests.some((item) => item.id === props.selectedRequestId) ? 24 : 20;
+      const size = cluster.requests.length > 1 ? 34 : cluster.requests.some((item) => item.id === props.selectedRequestId) ? 34 : 30;
       const baseZIndex = cluster.requests.some((item) => item.id === props.selectedRequestId) ? 30 : 20;
       const htmlMarker = new mapApi.HtmlMarker(map, {
         coordinates: cluster.center,
@@ -231,7 +232,45 @@ export function MapPanel(props: MapPanelProps) {
     });
 
     return () => objects.forEach((object) => object.destroy());
-  }, [clusters, displayedRoutes, mapApi, props.engineers, props.onSelectRequest, props.selectedEngineerId, props.selectedRequestId]);
+  }, [clusters, mapApi, props.onSelectRequest, props.selectedRequestId]);
+
+  // The plan API stores stop coordinates, not road geometry. Ask 2GIS Directions
+  // for the selected engineer only; never present point-to-point chords as a route.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapApi || !map || !props.selectedEngineerId) {
+      setRoadLoading(false); setRoadReady(false); setRoadError(null);
+      return;
+    }
+    const points = selectedRoute?.geometry?.coordinates ?? [];
+    if (points.length < 2) {
+      setRoadReady(false); setRoadError("У инженера пока нет маршрута из двух точек.");
+      return;
+    }
+    if (selectedEngineer?.transport === "bicycle" || selectedEngineer?.transport === "transit") {
+      setRoadReady(false); setRoadError("Дорожная геометрия этого транспорта в карте пока недоступна.");
+      return;
+    }
+    let disposed = false;
+    const drawn: Array<{ clear: () => void }> = [];
+    setRoadLoading(true); setRoadReady(false); setRoadError(null);
+    void import("@2gis/mapgl-directions").then(async ({ Directions }) => {
+      // Directions accepts at most ten waypoints; overlap chunks at each boundary.
+      for (let start = 0; start < points.length - 1; start += 9) {
+        if (disposed) return;
+        const segment = points.slice(start, start + 10);
+        const directions = new Directions(map, { directionsApiKey: DIRECTIONS_KEY });
+        drawn.push(directions);
+        if (selectedEngineer?.transport === "walking") await directions.pedestrianRoute({ points: segment });
+        else await directions.carRoute({ points: segment });
+      }
+      if (!disposed) { setRoadReady(true); setRoadLoading(false); }
+    }).catch(() => {
+      drawn.forEach((directions) => directions.clear());
+      if (!disposed) { setRoadError("2ГИС не построил маршрут по дорогам. Проверьте доступ ключа к Directions API."); setRoadLoading(false); }
+    });
+    return () => { disposed = true; drawn.forEach((directions) => directions.clear()); };
+  }, [mapApi, props.selectedEngineerId, selectedEngineer?.transport, selectedRoute?.geometry]);
 
   const fitAll = () => {
     const map = mapRef.current;
@@ -276,14 +315,15 @@ export function MapPanel(props: MapPanelProps) {
       <div className="map-provider-badge"><span>2ГИС</span> MapGL</div>
       <div className="map-key">
         <span><i className="map-dot urgent" /> Авария</span>
-        <span><i className="map-dot active" /> В работе</span>
-        <span><i className="map-dot done" /> Выполнено</span>
+        <span><i className="map-dot connection" /> Подключение</span>
+        <span><i className="map-dot additional" /> Дозаказ</span>
+        <span><i className="map-dot local" /> Локальная</span>
       </div>
       {selectedEngineer ? (
         <div className="map-route-caption">
           <i className="route-live-signal" style={{ "--route-color": selectedEngineer.color } as React.CSSProperties} />
           <div><strong>{selectedEngineer.name}</strong><span>{selectedEngineer.request_ids.length} заявки в маршруте</span></div>
-          {props.routeLoading ? <span className="mini-spinner" /> : <em>точный маршрут</em>}
+          {props.routeLoading || roadLoading ? <span className="mini-spinner" /> : <em className={roadReady ? "" : "route-error"}>{roadReady ? "по дорогам 2ГИС" : roadError ?? "Маршрут не построен"}</em>}
         </div>
       ) : null}
     </div>

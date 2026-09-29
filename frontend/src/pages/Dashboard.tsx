@@ -5,11 +5,8 @@ import {
   Clock3,
   Filter,
   MapPin,
-  Plus,
   Search,
-  Siren,
   SlidersHorizontal,
-  UserRoundCheck,
   X,
 } from "lucide-react";
 import { ArrowUpRightIcon } from "@phosphor-icons/react/dist/csr/ArrowUpRight";
@@ -34,15 +31,17 @@ import {
 
 type ListTab = "requests" | "engineers";
 
+function moscowDate() {
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
 export function Dashboard({ planner }: { planner: PlannerController }) {
   const { data } = planner;
-  const canOperate = planner.source === "api";
   const [tab, setTab] = useState<ListTab>("requests");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<RequestStatus | "all">("all");
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>("req-02");
   const [selectedEngineerId, setSelectedEngineerId] = useState<string | null>("eng-01");
-  const [urgentOpen, setUrgentOpen] = useState(false);
   const [availableOnly, setAvailableOnly] = useState(false);
 
   const selectedRequest = data.requests.find((item) => item.id === selectedRequestId) ?? null;
@@ -67,8 +66,8 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
   const selectRequest = (requestId: string) => {
     const request = data.requests.find((item) => item.id === requestId);
     setSelectedRequestId(requestId);
-    setSelectedEngineerId(request?.engineer_id ?? null);
-    void planner.loadDetailedRoute(request?.engineer_id ?? null);
+    setSelectedEngineerId(null);
+    void planner.loadDetailedRoute(null);
   };
 
   const selectEngineer = (engineerId: string) => {
@@ -92,7 +91,6 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
           <h1>Рабочий день</h1>
           <p>План <strong>{data.plans.find((plan) => plan.id === data.activePlanId)?.code ?? "—"}</strong> · создан {formatTime(data.plans.find((plan) => plan.id === data.activePlanId)?.created_at)}</p>
         </div>
-        <button className="button primary" disabled={!canOperate} title={!canOperate ? "Создание заявки требует backend; для презентации включите VITE_DEMO_MODE=true" : undefined} onClick={() => setUrgentOpen(true)}><Plus size={17} /> Новая заявка</button>
       </div>
 
       <section className="kpi-grid day-kpis">
@@ -106,8 +104,8 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
       <section className="operations-grid">
         <aside className="list-panel">
           <div className="segmented-tabs">
-            <button className={tab === "requests" ? "active" : ""} onClick={() => setTab("requests")}>Заявки <span>{data.requests.length}</span></button>
-            <button className={tab === "engineers" ? "active" : ""} onClick={() => setTab("engineers")}>Инженеры <span>{data.engineers.length}</span></button>
+            <button className={tab === "requests" ? "active" : ""} onClick={() => { setTab("requests"); setSelectedEngineerId(null); void planner.loadDetailedRoute(null); }}>Заявки <span>{data.requests.length}</span></button>
+            <button className={tab === "engineers" ? "active" : ""} onClick={() => { setTab("engineers"); setSelectedRequestId(null); setSelectedEngineerId(null); void planner.loadDetailedRoute(null); }}>Инженеры <span>{data.engineers.length}</span></button>
           </div>
           <div className="list-tools">
             <label className="search-field"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={tab === "requests" ? "ID, адрес или район" : "Имя или код"} /></label>
@@ -142,7 +140,7 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
           routes={data.routes}
           detailedRoute={planner.detailedRoute}
           selectedRequestId={selectedRequestId}
-          selectedEngineerId={selectedEngineerId}
+          selectedEngineerId={tab === "engineers" ? selectedEngineerId : null}
           routeLoading={planner.routeLoading}
           onSelectRequest={selectRequest}
         />
@@ -152,8 +150,8 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
             <RequestDetails
               request={selectedRequest}
               engineer={data.engineers.find((item) => item.id === selectedRequest.engineer_id) ?? null}
-              onStatus={(status) => void planner.updateRequestStatus(selectedRequest.id, status)}
-              canUpdateStatus={false}
+              onStatus={(status) => void planner.updateRequestStatus(selectedRequest.id, status).catch((error: unknown) => planner.showNotice(error instanceof Error ? error.message : "Не удалось изменить статус"))}
+              canUpdateStatus={planner.source === "api" && data.planningDate === moscowDate() && selectedRequest.status !== "CANCELLED"}
               onClose={() => { setSelectedRequestId(null); setSelectedEngineerId(null); void planner.loadDetailedRoute(null); }}
             />
           ) : selectedEngineer ? (
@@ -169,11 +167,9 @@ export function Dashboard({ planner }: { planner: PlannerController }) {
         </aside>
       </section>
 
-      {urgentOpen ? <UrgentRequestModal onClose={() => setUrgentOpen(false)} onSubmit={async (payload) => { await planner.createUrgentRequest(payload); setUrgentOpen(false); }} date={data.planningDate} /> : null}
     </div>
   );
 }
-
 function RequestDetails({ request, engineer, onStatus, onClose, canUpdateStatus }: {
   request: PlannerController["data"]["requests"][number];
   engineer: PlannerController["data"]["engineers"][number] | null;
@@ -192,7 +188,7 @@ function RequestDetails({ request, engineer, onStatus, onClose, canUpdateStatus 
         <div className="details-block assigned-card"><label>Исполнитель</label><div><Avatar name={engineer.name} color={engineer.color} /><p><strong>{engineer.name}</strong><span><TransportIcon transport={engineer.transport} /> {transportLabels[engineer.transport]}</span></p><em>{formatTime(request.arrival_at)}</em></div></div>
       ) : <div className="warning-card"><AlertTriangle size={17} /><div><strong>Не назначена</strong><span>{request.unassigned_reason}</span></div></div>}
       <div className="explanation-card"><span className="explanation-icon">i</span><div><strong>Почему так</strong><p>{request.explanation}</p></div></div>
-      <div className="details-block status-control"><label>Статус заявки</label><select disabled={!canUpdateStatus} title={!canUpdateStatus ? "Backend пока не предоставляет изменение фактического статуса" : undefined} value={request.status} onChange={(event) => onStatus(event.target.value as RequestStatus)}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{!canUpdateStatus ? <small>Изменение фактического статуса пока не поддерживается API.</small> : null}</div>
+      <div className="details-block status-control"><label>Статус заявки</label><select disabled={!canUpdateStatus} title={!canUpdateStatus ? "Статус меняется для заявки сегодняшнего дня при подключённом API" : undefined} value={request.status} onChange={(event) => onStatus(event.target.value as RequestStatus)}>{Object.entries(statusLabels).filter(([value]) => value !== "CANCELLED" || request.status === "CANCELLED").map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><small>{request.status === "CANCELLED" ? "Заявка отменена. Для новой заявки откройте планирование." : canUpdateStatus ? "Отмена заявки — через «Новое событие» в планировании." : "Статус можно изменить только для сегодняшней заявки при подключённом API."}</small></div>
       <div className="timeline-mini">{canUpdateStatus ? <><span className="done"><i />Заявка поступила<em>07:31</em></span><span className={request.engineer_id ? "done" : ""}><i />Назначена в план<em>08:12</em></span></> : null}<span className={request.status === "COMPLETED" ? "done" : "current"}><i />{statusLabels[request.status]}<em>{request.arrival_at ? `План ${formatTime(request.arrival_at)}` : ""}</em></span></div>
     </div>
   );
@@ -212,22 +208,6 @@ function EngineerDetails({ engineer, requests, onRequest, onClose }: {
       <div className="detail-three"><div><b>{requests.length}</b><span>заявок</span></div><div><b>{formatDistance(engineer.distance_meters)}</b><span>маршрут</span></div><div><b>{Math.round(engineer.load_minutes / 480 * 100)}%</b><span>загрузка</span></div></div>
       <div className="load-bar"><i style={{ width: `${Math.min(100, engineer.load_minutes / 4.8)}%`, background: engineer.color }} /></div>
       <div className="route-list"><label>Маршрут на день</label>{requests.map((request, index) => <button key={request.id} onClick={() => onRequest(request.id)}><span className="route-index" style={{ borderColor: engineer.color }}>{index + 1}</span><div><strong>{formatTime(request.arrival_at ?? request.window_start)} · {request.external_id}</strong><span>{request.address}</span></div><StatusPill status={request.status} /></button>)}</div>
-    </div>
-  );
-}
-
-function UrgentRequestModal({ onClose, onSubmit, date }: { onClose: () => void; onSubmit: (payload: Record<string, unknown>) => Promise<void>; date: string }) {
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ external_id: String(Date.now()).slice(-9), address: "Москва, ", district: "ЮВАО", start: "15:00", end: "17:00" });
-  const [formError, setFormError] = useState<string | null>(null);
-  return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <form className="modal-card urgent-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={async (event) => { event.preventDefault(); if (form.end <= form.start) { setFormError("Конец окна должен быть позже начала"); return; } setSaving(true); setFormError(null); try { await onSubmit({ external_id: Number(form.external_id), address: form.address, district: form.district, window_start: `${date}T${form.start}:00`, window_end: `${date}T${form.end}:00` }); } catch (error) { setFormError(error instanceof Error ? error.message : "Не удалось создать заявку"); } finally { setSaving(false); } }}>
-        <div className="modal-head"><span className="modal-icon coral"><Siren size={20} /></span><div><h2>Новая срочная заявка</h2><p>После сохранения backend пересчитает план.</p></div><button type="button" className="icon-button" onClick={onClose}><X size={18} /></button></div>
-        <div className="form-grid"><label><span>ID заявки</span><input required type="number" min="1" value={form.external_id} onChange={(event) => setForm({ ...form, external_id: event.target.value })} /></label><label><span>Район</span><select value={form.district} onChange={(event) => setForm({ ...form, district: event.target.value })}><option>ЮВАО</option><option>ВАО</option><option>ЮАО</option></select></label><label className="wide"><span>Адрес</span><input required value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label><label><span>Начало окна</span><input type="time" value={form.start} onChange={(event) => setForm({ ...form, start: event.target.value })} /></label><label><span>Конец окна</span><input type="time" value={form.end} onChange={(event) => setForm({ ...form, end: event.target.value })} /></label></div>
-        <div className="constraint-note"><UserRoundCheck size={17} /><span>Требования: навык «Авария», автомобиль, норматив 100 минут (80 минут работы и 20 минут дороги).</span></div>
-        {formError ? <p className="form-error" role="alert">{formError}</p> : null}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>Отмена</button><button className="button primary" disabled={saving}>{saving ? "Сохраняем…" : "Создать и пересчитать"}</button></div>
-      </form>
     </div>
   );
 }
