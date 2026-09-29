@@ -14,8 +14,8 @@
 Нужен только Docker с Compose v2.24+, а также ключи DaData и 2ГИС.
 
 ```bash
-cp backend/.env.example backend/.env     # впишите DADATA_API_KEY
-cp frontend/.env.example frontend/.env   # впишите VITE_2GIS_KEY
+cp -n backend/.env.example backend/.env   # если нет .env; впишите DADATA_API_KEY
+cp -n frontend/.env.example frontend/.env # если нет .env; впишите VITE_2GIS_KEY
 docker compose up -d --build
 ```
 
@@ -40,33 +40,37 @@ nginx отдаёт приложение и сам проксирует `/api` н
 ## Разработка
 
 ```bash
-cd backend && cp .env.example .env && cp config.toml.example config.toml && make up
-cd ../frontend && npm ci && cp .env.example .env && npm run dev
+cd backend && cp -n .env.example .env && cp -n config.toml.example config.toml && make up
+cd ../frontend && npm ci && cp -n .env.example .env && npm run dev
 ```
 
 Frontend: <http://localhost:5173>, backend: <http://localhost:8000>, интерактивная
 схема API: <http://localhost:8000/docs>. Vite перенаправляет `/api` на backend и
 `/dgis-routing` на 2ГИС с ключом из `frontend/.env` (`DGIS_ROUTING_KEY`).
 Для проверки именно реальной интеграции установите `VITE_DEMO_MODE=false` в локальном
-`frontend/.env`: режим `auto` может показать демоданные при ошибке API. По умолчанию
-Compose занимает порт PostgreSQL `127.0.0.1:5432`; если он занят, настройте локальный
-override, не меняя общие файлы проекта. Остановить стек: `cd backend && make down`.
+`frontend/.env`: режим `auto` может показать демоданные, если `/api/ping` недоступен.
+Если backend отвечает, но планов нет, интерфейс остаётся в API-режиме и показывает
+пустой округ. По умолчанию Compose занимает порт PostgreSQL `127.0.0.1:5432`;
+если он занят, настройте локальный override, не меняя общие файлы проекта.
+Остановить стек: `cd backend && make down`.
 
 Первичный импорт принимает **две XLSX-книги на округ** — заявки и инженеры — с датой
-текущего рабочего дня по Москве. Исторические книги без режима симуляции не подходят.
+текущего рабочего дня по Москве; по умолчанию считает `balanced` + `lns`. CSV не
+поддерживается. Исторические книги без режима симуляции не подходят.
 Контрольное распределение из исходных материалов не заменяет книгу инженеров.
 
-## Куда идти дальше
+## Ориентиры для разработчика
 
-- [Архитектура и карта репозитория](docs/ARCHITECTURE.md) — компоненты и путь запроса.
-- [Backend: реальные сценарии и HTTP-контракт](docs/BACKEND.md) — Excel, планы,
-  события, ответы и ошибки.
-- [Frontend: экраны и интеграция](docs/FRONTEND.md) — карта, режимы данных,
-  пользовательские действия и ограничения.
-- [Материалы заказчика и приоритет источников](docs/README.md) — ТЗ и уточнения.
-- [Backend README](backend/README.md) и [frontend README](frontend/README.md) — команды
-  для разработки каждого приложения.
+`backend/src/api/` содержит маршруты и сценарии, `backend/src/core/` — БД,
+алгоритм и внешние интеграции; `frontend/src/pages/` — три экрана,
+`frontend/src/hooks/usePlanner.ts` — загрузку и адаптацию планов,
+`frontend/src/api/` — HTTP и типы. Действующий контракт — в `/docs` backend;
+[backend README](backend/README.md) и [frontend README](frontend/README.md)
+дают команды каждого приложения. Исходное ТЗ и решения — в
+[проектных материалах](docs/README.md), целевые user cases — в
+[`backend/docs/user-case/`](backend/docs/user-case/README.md). При расхождении
+старой спецификации с поведением проверяйте код и OpenAPI.
 
-Код проекта находится в `backend/` и `frontend/`. Продуктовые спецификации и задачи
-исторически лежат в `backend/docs/`; `docs/` на уровне проекта содержит входные
-материалы и краткую документацию по **реализованной** системе.
+Проверки: `cd backend && make check && make test`;
+`cd frontend && npm run typecheck && npm run build`. DB/E2E-наборы требуют Docker;
+запуск описан в [backend/tests/README.md](backend/tests/README.md).
