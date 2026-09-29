@@ -139,6 +139,7 @@ class AlgorithmConfig(BaseModel):
     route_candidates_per_improvement_round: int = 4
     selection_node_budget: int = 5000
     lns_iterations: int = 95
+    lns_descent_attempt_budget: int = 2_000_000
     lns_random_seed: int = 20260925
     lns_min_removal_fraction: float = 0.08
     lns_max_removal_fraction: float = 0.3
@@ -158,6 +159,9 @@ class Config(BaseSettings):
         extra="ignore",
         toml_file=TOML_SETTINGS_PATH,
         env_nested_delimiter="__",
+        # Compose passes optional secrets as `${VAR:-}`; an empty value must not
+        # override a key set in config.toml.
+        env_ignore_empty=True,
     )
 
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)

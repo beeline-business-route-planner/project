@@ -120,6 +120,10 @@ services:
       S3__EXPORT_PREFIX: ${S3_EXPORT_PREFIX:-exports}
       S3__EXPORT_RETENTION_HOURS: ${S3_EXPORT_RETENTION_HOURS:-24}
       S3__PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
+      # External services; empty values fall back to config.toml / defaults.
+      GEOCODING__API_KEY: ${DADATA_API_KEY:-}
+      DGIS__API_KEY: ${DGIS_API_KEY:-}
+      TRAVEL_MATRIX__PROVIDER: ${TRAVEL_MATRIX_PROVIDER:-}
     ports:
       - "127.0.0.1:8000:8000"
 
